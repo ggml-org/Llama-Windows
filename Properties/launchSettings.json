@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "LlamaApp (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "LlamaApp (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

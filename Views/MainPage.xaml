@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Page
+    x:Class="LlamaApp.Views.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:LlamaApp"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <Page.Content>
+        <StackPanel
+            HorizontalAlignment="Center"
+            Spacing="25"
+            VerticalAlignment="Center">
+            <Image Width="300" Height="300"
+                HorizontalAlignment="Center">
+                <Image.Source>
+                    <SvgImageSource RasterizePixelWidth="300" RasterizePixelHeight="300" UriSource="/Assets/llama.svg" />
+                </Image.Source>
+            </Image>
+        </StackPanel>
+    </Page.Content>
+</Page>
