@@ -8,16 +8,21 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
     <Page.Content>
-        <StackPanel
-            HorizontalAlignment="Center"
-            Spacing="25"
-            VerticalAlignment="Center">
-            <Image Width="300" Height="300"
-                HorizontalAlignment="Center">
-                <Image.Source>
-                    <SvgImageSource RasterizePixelWidth="300" RasterizePixelHeight="300" UriSource="/Assets/llama.svg" />
-                </Image.Source>
-            </Image>
-        </StackPanel>
+        <NavigationView
+            PaneDisplayMode="LeftCompact"
+            IsPaneToggleButtonVisible="False"
+            IsPaneOpen="False">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Icon="Home" Content="Home" Tag="SamplePage1" />
+                <NavigationViewItem Icon="Find" Content="Search Model" Tag="SamplePage2" />
+                <NavigationViewItem Icon="SaveLocal" Content="Manage Models" Tag="SamplePage2" />
+            </NavigationView.MenuItems>
+
+            <StackPanel HorizontalAlignment="Center"
+                Spacing="25" Margin="25">
+
+                <TextBlock x:Name="UserText" FontSize="32"></TextBlock>
+            </StackPanel>
+        </NavigationView>
     </Page.Content>
 </Page>
