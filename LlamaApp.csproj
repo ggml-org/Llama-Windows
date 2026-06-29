@@ -33,6 +33,7 @@
         <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png"/>
         <Content Include="Assets\StoreLogo.png"/>
         <Content Include="Assets\Wide310x150Logo.scale-200.png"/>
+        <Content Include="Assets\llama.ico"/>
     </ItemGroup>
 
     <ItemGroup>
@@ -42,6 +43,7 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.*"/>
         <PackageReference Include="Microsoft.Web.WebView2" Version="1.*"/>
+        <PackageReference Include="H.NotifyIcon" Version="2.*"/>
         <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.*"/>
 
         <Manifest Include="$(ApplicationManifest)"/>
