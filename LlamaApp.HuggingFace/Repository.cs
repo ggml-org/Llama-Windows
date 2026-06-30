@@ -2,11 +2,11 @@
 
 namespace LlamaApp.HuggingFace;
 
-public record Repository(string Name, string Description, string License, ulong Parameters, ulong Size) : IModel
+public record Repository : IModel
 {
-    public string Name { get; } = Name;
-    public string Description { get; } = Description;
-    public string License { get; } = License;
-    public ulong Parameters { get; } = Parameters;
-    public ulong Size { get; } = Size;
+    public required string Name { get; init; }
+    public required string Description { get; init;  }
+    public required string License { get; init;  }
+    public required ulong Parameters { get; init; }
+    public required ulong Size { get; init;  }
 }
