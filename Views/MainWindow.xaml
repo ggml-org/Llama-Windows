@@ -22,7 +22,6 @@
         <NavigationView.MenuItems>
             <NavigationViewItem Icon="Home" Content="Home" Tag="HomePage" />
             <NavigationViewItem Icon="Message" Content="Chat" Tag="ChatPage" />
-            <NavigationViewItem Icon="Find" Content="Search Model" Tag="SearchModelsPage" />
             <NavigationViewItem Icon="SaveLocal" Content="Manage Models" Tag="LocalModelsPage" />
         </NavigationView.MenuItems>
         <NavigationView.FooterMenuItems>

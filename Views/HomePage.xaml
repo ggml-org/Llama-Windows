@@ -7,16 +7,112 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
+    <Page.Resources>
+        <local:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+
+        <!-- Fixed-size container for GridView cards: no padding, fixed width/height. -->
+        <Style x:Key="FixedCardContainer" TargetType="GridViewItem">
+            <Setter Property="Width" Value="210" />
+            <Setter Property="Height" Value="190" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+
+        <!-- Shared card template used by both model grids.
+             Shows a transparent overlay with a Play icon (available models)
+             or a Download icon (Hub models) on hover. -->
+        <DataTemplate x:Key="ModelCardTemplate" x:DataType="local:ModelItem">
+            <Grid Background="{ThemeResource ControlFillColorDefaultBrush}"
+                  CornerRadius="8"
+                  Padding="12"
+                  RowSpacing="8"
+                  PointerEntered="Card_PointerEntered"
+                  PointerExited="Card_PointerExited">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- Logo -->
+                <Border Grid.Row="0"
+                        Width="56" Height="56"
+                        CornerRadius="8"
+                        HorizontalAlignment="Left"
+                        Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                    <Image Source="{x:Bind Logo}"
+                           Stretch="Uniform"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+                </Border>
+
+                <!-- Name -->
+                <TextBlock Grid.Row="1"
+                           Text="{x:Bind Name}"
+                           FontSize="14" FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis" />
+
+                <!-- Description -->
+                <TextBlock Grid.Row="2"
+                           Text="{x:Bind Description}"
+                           FontSize="11" Opacity="0.7"
+                           TextWrapping="NoWrap"
+                           TextTrimming="CharacterEllipsis" />
+
+                <!-- Params / Size / License -->
+                <StackPanel Grid.Row="3" VerticalAlignment="Bottom" Spacing="2">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Params:" FontSize="11" Opacity="0.6" />
+                        <TextBlock Text="{x:Bind Parameters}" FontSize="11" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="Size:" FontSize="11" Opacity="0.6" />
+                        <TextBlock Text="{x:Bind Size}" FontSize="11" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <TextBlock Text="License:" FontSize="11" Opacity="0.6" />
+                        <TextBlock Text="{x:Bind License}" FontSize="11" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Hover overlay: transparent scrim + centered icon -->
+                <Border x:Name="HoverOverlay"
+                        Grid.RowSpan="4"
+                        Background="#80000000"
+                        CornerRadius="8"
+                        Opacity="0"
+                        IsHitTestVisible="False">
+                    <Grid>
+                        <!-- Play icon (available / downloaded models) -->
+                        <FontIcon Glyph="&#xE768;"
+                                  FontSize="34"
+                                  Foreground="White"
+                                  Visibility="{x:Bind Downloadable, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert, Mode=OneWay}" />
+                        <!-- Download icon (Hub models) -->
+                        <FontIcon Glyph="&#xE896;"
+                                  FontSize="34"
+                                  Foreground="White"
+                                  Visibility="{x:Bind Downloadable, Converter={StaticResource BoolToVisibility}, Mode=OneWay}" />
+                    </Grid>
+                </Border>
+            </Grid>
+        </DataTemplate>
+    </Page.Resources>
+
     <Grid Margin="20" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="2*" />
         </Grid.RowDefinitions>
 
         <!-- ============ Section 1: Brand Header ============ -->
-
-        <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" HorizontalAlignment="Center">
+        <StackPanel Grid.Row="0"
+                    Orientation="Horizontal" Spacing="16"
+                    VerticalAlignment="Center" HorizontalAlignment="Center">
             <Image Source="ms-appx:///Assets/llama-white.svg"
                    Width="50" Height="50"
                    Stretch="Uniform" />
@@ -31,148 +127,96 @@
                        VerticalAlignment="Center" />
         </StackPanel>
 
-        <!-- ============ Section 2: Downloaded Models Carousel ============ -->
+        <!-- ============ Section 2: Available Models ============ -->
         <Border Grid.Row="1"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="8"
-                Padding="16"
-                Margin="0,10,0,0">
-            <StackPanel Spacing="10">
-                <Grid>
+                Padding="16">
+            <Grid RowSpacing="12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- Available models header -->
+                <Grid Grid.Row="0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Available Models"
                                FontSize="16" FontWeight="SemiBold" />
-                    <TextBlock Grid.Column="1" x:Name="DownloadedCount"
-                               Text="0 models" FontSize="12" Opacity="0.6"
+                    <TextBlock Grid.Column="1"
+                               Text="{x:Bind DownloadedModels.Count, Mode=OneWay}"
+                               FontSize="12" Opacity="0.6"
                                VerticalAlignment="Center" />
                 </Grid>
 
-                <FlipView x:Name="DownloadedCarousel"
-                          Height="120"
-                          Background="Transparent"
-                          BorderThickness="0"
-                          ItemsSource="{x:Bind DownloadedModels}">
-                    <FlipView.ItemTemplate>
-                        <DataTemplate x:DataType="local:ModelItem">
-                            <Grid Padding="8" ColumnSpacing="16">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-
-                                <Border Grid.Column="0"
-                                        Width="80" Height="80"
-                                        CornerRadius="8"
-                                        Background="{ThemeResource ControlFillColorDefaultBrush}">
-                                    <Image Source="{x:Bind Logo}"
-                                           Stretch="UniformToFill"
-                                           VerticalAlignment="Center"
-                                           HorizontalAlignment="Center" />
-                                </Border>
-
-                                <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
-                                    <TextBlock Text="{x:Bind Name}"
-                                               FontSize="16" FontWeight="SemiBold"
-                                               TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{x:Bind Description}"
-                                               FontSize="12" Opacity="0.7"
-                                               TextTrimming="CharacterEllipsis" />
-                                    <StackPanel Orientation="Horizontal" Spacing="16">
-                                        <StackPanel Orientation="Horizontal" Spacing="4">
-                                            <TextBlock Text="Params:" FontSize="12" Opacity="0.6" />
-                                            <TextBlock Text="{x:Bind Parameters}" FontSize="12" />
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Spacing="4">
-                                            <TextBlock Text="Size:" FontSize="12" Opacity="0.6" />
-                                            <TextBlock Text="{x:Bind Size}" FontSize="12" />
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Spacing="4">
-                                            <TextBlock Text="License:" FontSize="12" Opacity="0.6" />
-                                            <TextBlock Text="{x:Bind License}" FontSize="12" />
-                                        </StackPanel>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Grid>
-                        </DataTemplate>
-                    </FlipView.ItemTemplate>
-                </FlipView>
-            </StackPanel>
+                <!-- Available models grid (run/play on hover) -->
+                <GridView Grid.Row="1"
+                          x:Name="AvailableGrid"
+                          ItemsSource="{x:Bind DownloadedModels}"
+                          ItemTemplate="{StaticResource ModelCardTemplate}"
+                          ItemContainerStyle="{StaticResource FixedCardContainer}"
+                          SelectionMode="None"
+                          IsItemClickEnabled="True">
+                    <GridView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal"
+                                           ItemWidth="210"
+                                           ItemHeight="190" />
+                        </ItemsPanelTemplate>
+                    </GridView.ItemsPanel>
+                </GridView>
+            </Grid>
         </Border>
 
-        <!-- ============ Section 3: Hugging Face Hub - Available Models ============ -->
+        <!-- ============ Section 3: Downloadable Models ============ -->
         <Border Grid.Row="2"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="8"
                 Padding="16">
-            <Grid RowSpacing="8">
+            <Grid RowSpacing="12">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
+                <!-- Downloadable models header + search (top-right aligned) -->
                 <Grid Grid.Row="0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Hugging Face Hub"
-                               FontSize="16" FontWeight="SemiBold" />
-                    <TextBox Grid.Column="1"
-                             x:Name="HubSearchBox"
-                             PlaceholderText="Search models..."
-                             Width="240" />
+                    <TextBlock Grid.Column="0" Text="Downloadable Models"
+                               FontSize="16" FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                    <AutoSuggestBox Grid.Column="1"
+                                    x:Name="HubSearchBox"
+                                    PlaceholderText="Search models..."
+                                    Width="240" />
                 </Grid>
 
-                <ListView Grid.Row="1"
-                          x:Name="HubList"
+                <!-- Downloadable models grid (download on hover) -->
+                <GridView Grid.Row="1"
+                          x:Name="HubGrid"
                           ItemsSource="{x:Bind HubModels}"
+                          ItemTemplate="{StaticResource ModelCardTemplate}"
+                          ItemContainerStyle="{StaticResource FixedCardContainer}"
                           SelectionMode="None"
                           IsItemClickEnabled="True">
-                    <ListView.ItemTemplate>
-                        <DataTemplate x:DataType="local:ModelItem">
-                            <Grid Padding="4,8" ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-
-                                <StackPanel Grid.Column="0" Spacing="2">
-                                    <TextBlock Text="{x:Bind Name}"
-                                               FontWeight="SemiBold"
-                                               TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{x:Bind Description}"
-                                               FontSize="12" Opacity="0.7"
-                                               TextTrimming="CharacterEllipsis" />
-                                </StackPanel>
-                                <TextBlock Grid.Column="1"
-                                           Text="{x:Bind Parameters}"
-                                           VerticalAlignment="Center"
-                                           FontSize="12" Opacity="0.8" />
-                                <TextBlock Grid.Column="2"
-                                           Text="{x:Bind License}"
-                                           VerticalAlignment="Center"
-                                           FontSize="12" Opacity="0.8" />
-                                <TextBlock Grid.Column="3"
-                                           Text="{x:Bind Size}"
-                                           VerticalAlignment="Center"
-                                           FontSize="12" Opacity="0.8" />
-                                <Button Grid.Column="4"
-                                        Style="{StaticResource Action}"
-                                        Content="Download" />
-                            </Grid>
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
+                    <GridView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsWrapGrid Orientation="Horizontal"
+                                           ItemWidth="210"
+                                           ItemHeight="190" />
+                        </ItemsPanelTemplate>
+                    </GridView.ItemsPanel>
+                </GridView>
             </Grid>
         </Border>
     </Grid>
