@@ -10,19 +10,18 @@
     <Page.Content>
         <NavigationView
             PaneDisplayMode="LeftCompact"
+            IsBackEnabled="False"
+            IsBackButtonVisible="Collapsed"
             IsPaneToggleButtonVisible="False"
             IsPaneOpen="False">
             <NavigationView.MenuItems>
-                <NavigationViewItem Icon="Home" Content="Home" Tag="SamplePage1" />
-                <NavigationViewItem Icon="Find" Content="Search Model" Tag="SamplePage2" />
-                <NavigationViewItem Icon="SaveLocal" Content="Manage Models" Tag="SamplePage2" />
+                <NavigationViewItem Icon="Home" Content="Home" Tag="HomePage" />
+                <NavigationViewItem Icon="Find" Content="Search Model" Tag="SearchModelsPage" />
+                <NavigationViewItem Icon="SaveLocal" Content="Manage Models" Tag="LocalModelsPage" />
             </NavigationView.MenuItems>
-
-            <StackPanel HorizontalAlignment="Center"
-                Spacing="25" Margin="25">
-
-                <TextBlock x:Name="UserText" FontSize="32"></TextBlock>
-            </StackPanel>
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem Content="Account" Tag="HuggingFaceAccountPage" Icon="Contact" />
+            </NavigationView.FooterMenuItems>
         </NavigationView>
     </Page.Content>
 </Page>

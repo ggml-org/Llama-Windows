@@ -1,7 +1,3 @@
-using System.IO;
-using LlamaApp;
-using Microsoft.UI.Xaml.Media.Imaging;
-
 namespace LlamaApp.Views
 {
     
@@ -14,8 +10,6 @@ namespace LlamaApp.Views
         public MainPage()
         {
             InitializeComponent();
-
-            UserText.Text = $"Hello, {UserHelper.DisplayName}!";
         }
     }
 }
