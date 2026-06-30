@@ -14,61 +14,22 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- ============ Section 1: System Usage (CPU / Memory / GPU) ============ -->
-        <Border Grid.Row="0"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="16">
-            
-            <Grid ColumnSpacing="24">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
+        <!-- ============ Section 1: Brand Header ============ -->
 
-                <!-- CPU -->
-                <StackPanel Grid.Column="0" Spacing="6">
-                    <TextBlock Text="CPU" FontSize="12" Opacity="0.7" />
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <ProgressBar Grid.Column="0" Value="34" Maximum="100" />
-                        <TextBlock Grid.Column="1" Text="34%" FontSize="13" VerticalAlignment="Center" />
-                    </Grid>
-                </StackPanel>
-
-                <!-- Memory -->
-                <StackPanel Grid.Column="1" Spacing="6">
-                    <TextBlock Text="Memory" FontSize="12" Opacity="0.7" />
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <ProgressBar Grid.Column="0" Value="58" Maximum="100" />
-                        <TextBlock Grid.Column="1" Text="9.3 / 16 GB" FontSize="13" VerticalAlignment="Center" />
-                    </Grid>
-                </StackPanel>
-
-                <!-- GPU -->
-                <StackPanel Grid.Column="2" Spacing="6">
-                    <TextBlock Text="GPU" FontSize="12" Opacity="0.7" />
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <ProgressBar Grid.Column="0" Value="12" Maximum="100" />
-                        <TextBlock Grid.Column="1" Text="12%" FontSize="13" VerticalAlignment="Center" />
-                    </Grid>
-                </StackPanel>
-            </Grid>
-        </Border>
+        <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" HorizontalAlignment="Center">
+            <Image Source="ms-appx:///Assets/llama-white.svg"
+                   Width="50" Height="50"
+                   Stretch="Uniform" />
+            <TextBlock Text="llama"
+                       FontSize="32" FontWeight="SemiBold"
+                       Foreground="White"
+                       VerticalAlignment="Center" />
+            <TextBlock Text=".app"
+                       FontSize="32" FontWeight="SemiBold"
+                       Foreground="#FF8A3D"
+                       Margin="-15,0,0,0"
+                       VerticalAlignment="Center" />
+        </StackPanel>
 
         <!-- ============ Section 2: Downloaded Models Carousel ============ -->
         <Border Grid.Row="1"
@@ -76,7 +37,8 @@
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 CornerRadius="8"
-                Padding="16">
+                Padding="16"
+                Margin="0,10,0,0">
             <StackPanel Spacing="10">
                 <Grid>
                     <Grid.ColumnDefinitions>
