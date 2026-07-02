@@ -18,7 +18,7 @@
 
         <!-- Exclude nested sub-project directories from the default item globs.
              They are compiled by their own .csproj files, not by this one. -->
-        <DefaultItemExcludes>$(DefaultItemExcludes);LlamaApp.Common\**;LlamaApp.HuggingFace\**</DefaultItemExcludes>
+        <DefaultItemExcludes>$(DefaultItemExcludes);LlamaApp.Common\**;LlamaApp.HuggingFace\**;LlamaApp.Llama\**</DefaultItemExcludes>
 
         <!-- App Options -->
         <UseRidGraph>true</UseRidGraph>
@@ -27,6 +27,17 @@
         <PublishProfile>win-$(Platform).pubxml</PublishProfile>
         <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)')) >= 8">win-x86;win-x64;win-arm64</RuntimeIdentifiers>
         <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)')) &lt; 8">win10-x86;win10-x64;win10-arm64</RuntimeIdentifiers>
+
+        <!-- WinUI 3 unpackaged apps must run with a concrete native platform so the
+             apphost and native dependencies (WebView2 runtime, WinAppSDK projections)
+             match an installed runtime. When a solution drives an "Any CPU" build
+             (e.g. the .slnx), the SDK emits an ARM64 apphost on ARM64 Windows; an
+             ARM64-native process cannot load the x64/ARM64EC WebView2 runtime that is
+             installed there, so WebView2 initialization hangs forever and the page
+             renders blank. Coerce Any CPU to x64: the x64 apphost runs natively on
+             x64 Windows and via emulation on ARM64 Windows (matching the installed
+             x64/ARM64EC WebView2 runtime), so WebView2 initializes correctly. -->
+        <PlatformTarget Condition="'$(Platform)' == 'AnyCPU'">x64</PlatformTarget>
     </PropertyGroup>
 
     <ItemGroup>
@@ -52,6 +63,16 @@
         <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.*"/>
 
         <Manifest Include="$(ApplicationManifest)"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- The app consumes all three helper libraries. They are pure managed
+             (net10.0) assemblies, so they build as Any CPU even when this WinUI
+             app is built for a specific platform (x64/x86/ARM64). The solution
+             files map them to Any CPU for platform-specific builds. -->
+        <ProjectReference Include="LlamaApp.Common\LlamaApp.Common.csproj" />
+        <ProjectReference Include="LlamaApp.HuggingFace\LlamaApp.HuggingFace.csproj" />
+        <ProjectReference Include="LlamaApp.Llama\LlamaApp.Llama.csproj" />
     </ItemGroup>
 
     <!-- 

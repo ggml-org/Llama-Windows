@@ -10,14 +10,14 @@
     <Page.Resources>
         <local:BoolToVisibilityConverter x:Key="BoolToVisibility" />
 
-        <!-- Fixed-size container for GridView cards: no padding, fixed width/height. -->
+        <!-- Container for GridView cards: stretch to fill the adaptive slot. -->
         <Style x:Key="FixedCardContainer" TargetType="GridViewItem">
-            <Setter Property="Width" Value="210" />
-            <Setter Property="Height" Value="190" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="Margin" Value="0" />
             <Setter Property="MinWidth" Value="0" />
             <Setter Property="MinHeight" Value="0" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
         </Style>
 
         <!-- Shared card template used by both model grids.
@@ -26,22 +26,25 @@
         <DataTemplate x:Key="ModelCardTemplate" x:DataType="local:ModelItem">
             <Grid Background="{ThemeResource ControlFillColorDefaultBrush}"
                   CornerRadius="8"
-                  Padding="12"
-                  RowSpacing="8"
+                  Padding="4"
+                  Margin="4"
+                  RowSpacing="4"
+                  HorizontalAlignment="Stretch"
+                  VerticalAlignment="Stretch"
                   PointerEntered="Card_PointerEntered"
                   PointerExited="Card_PointerExited">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <!-- Logo -->
+                <!-- Logo (centered horizontally in the card) -->
                 <Border Grid.Row="0"
                         Width="56" Height="56"
                         CornerRadius="8"
-                        HorizontalAlignment="Left"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
                         Background="{ThemeResource ControlFillColorSecondaryBrush}">
                     <Image Source="{x:Bind Logo}"
                            Stretch="Uniform"
@@ -49,21 +52,15 @@
                            VerticalAlignment="Center" />
                 </Border>
 
-                <!-- Name -->
+                <!-- Name (short form: last path segment after '/'), under the image -->
                 <TextBlock Grid.Row="1"
-                           Text="{x:Bind Name}"
+                           Text="{x:Bind DisplayName}"
                            FontSize="14" FontWeight="SemiBold"
-                           TextTrimming="CharacterEllipsis" />
-
-                <!-- Description -->
-                <TextBlock Grid.Row="2"
-                           Text="{x:Bind Description}"
-                           FontSize="11" Opacity="0.7"
-                           TextWrapping="NoWrap"
+                           HorizontalAlignment="Center"
                            TextTrimming="CharacterEllipsis" />
 
                 <!-- Params / Size / License -->
-                <StackPanel Grid.Row="3" VerticalAlignment="Bottom" Spacing="2">
+                <StackPanel Grid.Row="2" VerticalAlignment="Bottom" Spacing="2" Margin="0,8,0,0">
                     <StackPanel Orientation="Horizontal" Spacing="4">
                         <TextBlock Text="Params:" FontSize="11" Opacity="0.6" />
                         <TextBlock Text="{x:Bind Parameters}" FontSize="11" />
@@ -80,7 +77,7 @@
 
                 <!-- Hover overlay: transparent scrim + centered icon -->
                 <Border x:Name="HoverOverlay"
-                        Grid.RowSpan="4"
+                        Grid.Row="0" Grid.RowSpan="3"
                         Background="#80000000"
                         CornerRadius="8"
                         Opacity="0"
@@ -102,17 +99,18 @@
         </DataTemplate>
     </Page.Resources>
 
-    <Grid Margin="20" RowSpacing="12">
+    <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
             <RowDefinition Height="2*" />
+            <RowDefinition Height="8*" />
         </Grid.RowDefinitions>
 
-        <!-- ============ Section 1: Brand Header ============ -->
+        <!-- ============ Section 1: Brand Header (30%, full width, centered) ============ -->
         <StackPanel Grid.Row="0"
                     Orientation="Horizontal" Spacing="16"
-                    VerticalAlignment="Center" HorizontalAlignment="Center">
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Margin="20,20,20,6">
             <Image Source="ms-appx:///Assets/llama-white.svg"
                    Width="50" Height="50"
                    Stretch="Uniform" />
@@ -127,97 +125,92 @@
                        VerticalAlignment="Center" />
         </StackPanel>
 
-        <!-- ============ Section 2: Available Models ============ -->
-        <Border Grid.Row="1"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="16">
-            <Grid RowSpacing="12">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
+        <!-- ============ Section 2: Models (70%, split into two equal halves) ============ -->
+        <Grid Grid.Row="1" Margin="20,6,20,20" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
 
-                <!-- Available models header -->
-                <Grid Grid.Row="0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Available Models"
-                               FontSize="16" FontWeight="SemiBold" />
-                    <TextBlock Grid.Column="1"
-                               Text="{x:Bind DownloadedModels.Count, Mode=OneWay}"
-                               FontSize="12" Opacity="0.6"
-                               VerticalAlignment="Center" />
+            <!-- Available Models -->
+            <Border Grid.Column="0"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16">
+                <Grid RowSpacing="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- Available models header + divider -->
+                    <StackPanel Grid.Row="0" Spacing="8">
+                        <TextBlock Text="Available Models"
+                                   FontSize="16" FontWeight="SemiBold" />
+                        <Rectangle Height="1" HorizontalAlignment="Stretch"
+                                   Fill="{ThemeResource ControlStrokeColorDefaultBrush}" />
+                    </StackPanel>
+                    
+                    <!-- Available models grid (run/play on hover) -->
+                    <GridView Grid.Row="1"
+                              x:Name="AvailableGrid"
+                              ItemsSource="{x:Bind DownloadedModels}"
+                              ItemTemplate="{StaticResource ModelCardTemplate}"
+                              ItemContainerStyle="{StaticResource FixedCardContainer}"
+                              SelectionMode="None"
+                              IsItemClickEnabled="True"
+                              SizeChanged="ModelGrid_SizeChanged">
+                        <GridView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsWrapGrid Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </GridView.ItemsPanel>
+                    </GridView>
                 </Grid>
+            </Border>
 
-                <!-- Available models grid (run/play on hover) -->
-                <GridView Grid.Row="1"
-                          x:Name="AvailableGrid"
-                          ItemsSource="{x:Bind DownloadedModels}"
-                          ItemTemplate="{StaticResource ModelCardTemplate}"
-                          ItemContainerStyle="{StaticResource FixedCardContainer}"
-                          SelectionMode="None"
-                          IsItemClickEnabled="True">
-                    <GridView.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <ItemsWrapGrid Orientation="Horizontal"
-                                           ItemWidth="210"
-                                           ItemHeight="190" />
-                        </ItemsPanelTemplate>
-                    </GridView.ItemsPanel>
-                </GridView>
-            </Grid>
-        </Border>
+            <!-- Downloadable Models -->
+            <Border Grid.Column="1"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="16">
+                <Grid RowSpacing="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
 
-        <!-- ============ Section 3: Downloadable Models ============ -->
-        <Border Grid.Row="2"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="16">
-            <Grid RowSpacing="12">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
+                    <!-- Downloadable models header + divider -->
+                    <StackPanel Grid.Row="0" Spacing="8">
+                        <TextBlock Text="Trending Models"
+                                   FontSize="16" FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                        <Rectangle Height="1" HorizontalAlignment="Stretch"
+                                   Fill="{ThemeResource ControlStrokeColorDefaultBrush}" />
+                    </StackPanel>
 
-                <!-- Downloadable models header + search (top-right aligned) -->
-                <Grid Grid.Row="0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Downloadable Models"
-                               FontSize="16" FontWeight="SemiBold"
-                               VerticalAlignment="Center" />
-                    <AutoSuggestBox Grid.Column="1"
-                                    x:Name="HubSearchBox"
-                                    PlaceholderText="Search models..."
-                                    Width="240" />
+                    <!-- Downloadable models grid (download on hover) -->
+                    <GridView Grid.Row="1"
+                              x:Name="HubGrid"
+                              ItemsSource="{x:Bind HubModels}"
+                              ItemTemplate="{StaticResource ModelCardTemplate}"
+                              ItemContainerStyle="{StaticResource FixedCardContainer}"
+                              SelectionMode="None"
+                              IsItemClickEnabled="True"
+                              SizeChanged="ModelGrid_SizeChanged">
+                        <GridView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsWrapGrid Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </GridView.ItemsPanel>
+                    </GridView>
                 </Grid>
-
-                <!-- Downloadable models grid (download on hover) -->
-                <GridView Grid.Row="1"
-                          x:Name="HubGrid"
-                          ItemsSource="{x:Bind HubModels}"
-                          ItemTemplate="{StaticResource ModelCardTemplate}"
-                          ItemContainerStyle="{StaticResource FixedCardContainer}"
-                          SelectionMode="None"
-                          IsItemClickEnabled="True">
-                    <GridView.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <ItemsWrapGrid Orientation="Horizontal"
-                                           ItemWidth="210"
-                                           ItemHeight="190" />
-                        </ItemsPanelTemplate>
-                    </GridView.ItemsPanel>
-                </GridView>
-            </Grid>
-        </Border>
+            </Border>
+        </Grid>
     </Grid>
 </Page>

@@ -7,26 +7,53 @@
     xmlns:local="using:LlamaApp"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    
+
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="Base" />
     </Window.SystemBackdrop>
-    
-    <NavigationView
-        x:Name="MenuControl"
-        PaneDisplayMode="LeftCompact"
-        IsBackEnabled="False"
-        IsBackButtonVisible="Collapsed"
-        IsPaneToggleButtonVisible="False"
-        IsPaneOpen="False">
-        <NavigationView.MenuItems>
-            <NavigationViewItem Icon="Home" Content="Home" Tag="HomePage" />
-            <NavigationViewItem Icon="Message" Content="Chat" Tag="ChatPage" />
-            <NavigationViewItem Icon="SaveLocal" Content="Manage Models" Tag="LocalModelsPage" />
-        </NavigationView.MenuItems>
-        <NavigationView.FooterMenuItems>
-            <NavigationViewItem Content="Account" Tag="HuggingFaceAccountPage" Icon="Contact" />
-        </NavigationView.FooterMenuItems>
-        <Frame x:Name="ContentFrame" Navigated="ContentFrame_OnNavigated"/>
-    </NavigationView>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Custom title bar: draggable region with centered search box -->
+        <Grid x:Name="AppTitleBar"
+              Grid.Row="0"
+              Height="48"
+              VerticalAlignment="Stretch"
+              HorizontalAlignment="Stretch">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <AutoSuggestBox Grid.Column="1"
+                            x:Name="HubSearchBox"
+                            PlaceholderText="Search models.."
+                            Width="320"
+                            VerticalAlignment="Center" />
+        </Grid>
+
+        <NavigationView
+            x:Name="MenuControl"
+            Grid.Row="1"
+            PaneDisplayMode="LeftCompact"
+            IsBackEnabled="False"
+            IsBackButtonVisible="Collapsed"
+            IsPaneToggleButtonVisible="False"
+            IsPaneOpen="False"
+            SelectionChanged="NavigationView_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Icon="Home" Content="Home" Tag="HomePage" />
+                <NavigationViewItem Icon="Message" Content="Chat" Tag="ChatPage" />
+                <NavigationViewItem Icon="SaveLocal" Content="Manage Models" Tag="LocalModelsPage" />
+            </NavigationView.MenuItems>
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem Content="Account" Tag="HuggingFaceAccountPage" Icon="Contact" />
+            </NavigationView.FooterMenuItems>
+            <Frame x:Name="ContentFrame" Navigated="ContentFrame_OnNavigated" />
+        </NavigationView>
+    </Grid>
 </Window>

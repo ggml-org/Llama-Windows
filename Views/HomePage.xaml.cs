@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
@@ -14,6 +15,8 @@ public sealed class ModelItem
 {
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";
+    /// <summary>Short display name: the part of <see cref="Name"/> after the last '/'.</summary>
+    public string DisplayName => Name.Split('/', StringSplitOptions.RemoveEmptyEntries).Last().Trim();
     public string Parameters { get; set; } = "";
     public string Size { get; set; } = "";
     public string License { get; set; } = "";
@@ -94,6 +97,7 @@ public sealed partial class HomePage : Page
             Parameters = "70B",
             Size = "—",
             License = "Llama 3.3 Community",
+            Logo = logo,
             Downloadable = true
         });
         HubModels.Add(new ModelItem
@@ -103,6 +107,7 @@ public sealed partial class HomePage : Page
             Parameters = "671B",
             Size = "—",
             License = "MIT",
+            Logo = logo,
             Downloadable = true
         });
         HubModels.Add(new ModelItem
@@ -112,6 +117,7 @@ public sealed partial class HomePage : Page
             Parameters = "32B",
             Size = "—",
             License = "Apache 2.0",
+            Logo = logo,
             Downloadable = true
         });
         HubModels.Add(new ModelItem
@@ -121,6 +127,7 @@ public sealed partial class HomePage : Page
             Parameters = "14B",
             Size = "—",
             License = "MIT",
+            Logo = logo,
             Downloadable = true
         });
     }
@@ -137,5 +144,26 @@ public sealed partial class HomePage : Page
     {
         if (sender is FrameworkElement fe && fe.FindName("HoverOverlay") is Border overlay)
             overlay.Opacity = 0;
+    }
+
+    /// <summary>
+    /// Adaptively sizes the GridView's items so each row is fully filled with
+    /// equal-sized square cards. Columns are chosen from a desired minimum card
+    /// width, then the available width is divided evenly across them.
+    /// </summary>
+    private void ModelGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (sender is GridView gv && gv.ItemsPanelRoot is Microsoft.UI.Xaml.Controls.ItemsWrapGrid panel)
+        {
+            const double minItemWidth = 170;
+            double available = e.NewSize.Width;
+            if (available <= 0) return;
+
+            int columns = Math.Max(1, (int)Math.Floor(available / minItemWidth));
+            double slot = available / columns;
+
+            panel.ItemWidth = slot;
+            panel.ItemHeight = slot; // keep cards square
+        }
     }
 }

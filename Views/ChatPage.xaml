@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Page
+    x:Class="LlamaApp.Views.ChatPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+        Source is set intentionally and is the ONLY initialization path.
+
+        Do NOT call EnsureCoreWebView2Async(customEnvironment) from code-behind.
+        In an unpackaged WinUI 3 app the WebView2 control's own auto-init (fired
+        by setting Source) waits for the underlying HWND to be realized, whereas a
+        manual EnsureCoreWebView2Async call from the Loaded event can run before
+        the HWND is ready and throws "Element not found" (0x80070490). Setting
+        Source lets the control initialize itself on its own (reliable) path, then
+        it navigates straight to the local chat server.
+
+        If custom browser arguments are needed later, they require
+        EnsureCoreWebView2Async(CoreWebView2Environment) and must be wired with an
+        HWND-readiness wait (e.g. SizeChanged / ActualWidth > 0).
+    -->
+    <Grid>
+        <WebView2 x:Name="ChatWebView"
+                  Source="http://127.0.0.1:8080"
+                  HorizontalAlignment="Stretch"
+                  VerticalAlignment="Stretch"
+                  MinHeight="200"
+                  MinWidth="200"/>
+    </Grid>
+</Page>
