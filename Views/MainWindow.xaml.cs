@@ -207,7 +207,13 @@ namespace LlamaApp.Views
 
         private void Settings_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
-            // No settings view yet — placeholder until a settings page is added.
+            // Hide the flyout first so the settings dialog isn't drawn behind it
+            // (the flyout would otherwise immediately deactivate and hide on its
+            // own, but doing it explicitly avoids a flash).
+            HideFlyout();
+
+            var w = new SettingsWindow();
+            w.Activate();
         }
 
         private void Quit_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
@@ -279,7 +285,7 @@ namespace LlamaApp.Views
             if (!_activated)
             {
                 _activated = true;
-                Activate(); // first-time activation shows the window at its set position
+                // first-time activation shows the window at its set position
             }
             else
             {
@@ -292,12 +298,13 @@ namespace LlamaApp.Views
                 AppWindow.Show();
                 ShowWindow(_hwnd, SW_SHOW);
                 SetForegroundWindow(_hwnd);
-                Activate();
             }
+
+            Activate(); // first-time activation shows the window at its set position
         }
 
         /// <summary>Hides the flyout without closing it.</summary>
-        public void HideFlyout()
+        void HideFlyout()
         {
             AppWindow.Hide();
             ShowWindow(_hwnd, SW_HIDE);
@@ -326,8 +333,8 @@ namespace LlamaApp.Views
             // nearest the click — i.e. just above the taskbar, next to the tray.
             var work = GetWorkArea(anchor);
 
-            int x = work.Right - FlyoutWidth;
-            int y = work.Bottom - FlyoutHeight;
+            var x = work.Right - FlyoutWidth;
+            var y = work.Bottom - FlyoutHeight;
 
             AppWindow.Move(new PointInt32(x, y));
         }
@@ -344,13 +351,11 @@ namespace LlamaApp.Views
                 //     that hits a reshow when foreground lock denies us foreground
                 //     (see ShowAsFlyout) — without it the reshow hides itself and
                 //     looks like it never reopened.
-                if (_allowHideOnDeactivate &&
-                    Environment.TickCount64 - _lastShownMs > ShownDeactivationGraceMs)
-                {
-                    _allowHideOnDeactivate = false;
-                    _lastDeactivateHideMs = Environment.TickCount64;
-                    HideFlyout();
-                }
+                if (!_allowHideOnDeactivate ||
+                    Environment.TickCount64 - _lastShownMs <= ShownDeactivationGraceMs) return;
+                _allowHideOnDeactivate = false;
+                _lastDeactivateHideMs = Environment.TickCount64;
+                HideFlyout();
             }
             else
             {
@@ -362,11 +367,9 @@ namespace LlamaApp.Views
         {
             // The app lives in the tray: a "close" (e.g. Alt+F4) just hides the
             // flyout unless the tray manager is shutting us down (AllowClose).
-            if (!AllowClose)
-            {
-                args.Handled = true;
-                HideFlyout();
-            }
+            if (AllowClose) return;
+            args.Handled = true;
+            HideFlyout();
         }
 
         // ---- Win32 interop: work-area lookup + extended window style ----
@@ -436,7 +439,7 @@ namespace LlamaApp.Views
         /// Returns the work area (excluding the taskbar) of the monitor nearest
         /// <paramref name="anchor"/>, in physical screen coordinates.
         /// </summary>
-        private RECT GetWorkArea(Point anchor)
+        private static RECT GetWorkArea(Point anchor)
         {
             var hmon = MonitorFromPoint(new POINT { X = anchor.X, Y = anchor.Y }, MONITOR_DEFAULTTONEAREST);
             var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
