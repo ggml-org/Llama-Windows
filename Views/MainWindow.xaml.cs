@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Microsoft.UI.Windowing;
 using Windows.Graphics;
+using LlamaApp.HuggingFace;
 using WinRT.Interop;
 
 namespace LlamaApp.Views
@@ -110,23 +111,47 @@ namespace LlamaApp.Views
                 Logo = logo,
             });
 
-            // Placeholder recommended models (would come from the catalog).
-            RecommendedModels.Add(new ModelItem
+            // Recommended models are fetched from the llama.app catalog.
+            _ = LoadRecommendedModelsAsync();
+        }
+
+        /// <summary>
+        /// Fetches the remote catalog and populates <see cref="RecommendedModels"/>.
+        /// Fire-and-forget from the constructor; the ObservableCollection updates
+        /// the UI incrementally as entries arrive.
+        /// </summary>
+        private async Task LoadRecommendedModelsAsync()
+        {
+            try
             {
-                Name = "Qwen/Qwen2.5-Coder-32B-Instruct",
-                Parameters = "32B",
-                License = "Apache 2.0",
-                Logo = logo,
-                Downloadable = true,
-            });
-            RecommendedModels.Add(new ModelItem
+                var catalog = new LlamaApp.HuggingFace.Catalog();
+                var repos = await Catalog.FetchAsync();
+
+                // Build a display name that disambiguates quants: "GPT-OSS 20B (mxfp4)".
+                foreach (var repo in repos)
+                {
+                    var label = !string.IsNullOrEmpty(repo.DisplayName)
+                        ? !string.IsNullOrEmpty(repo.Quant)
+                            ? $"{repo.DisplayName} ({repo.Quant})"
+                            : repo.DisplayName
+                        : repo.Name;
+
+                    RecommendedModels.Add(new ModelItem
+                    {
+                        Name = label,
+                        Parameters = repo.Parameters,
+                        Size = repo.Size,
+                        License = repo.License,
+                        Downloadable = true,
+                    });
+                }
+            }
+            catch
             {
-                Name = "microsoft/Phi-4",
-                Parameters = "14B",
-                License = "MIT",
-                Logo = logo,
-                Downloadable = true,
-            });
+                // Network failure or parse error — leave the list empty; the
+                // section still renders with its header. Could show an error
+                // state here later.
+            }
         }
 
         /// <summary>
@@ -202,8 +227,7 @@ namespace LlamaApp.Views
             // H.NotifyIcon's borderless tray flyout uses. The compositor still
             // draws the rounded corners + drop shadow on Win11.
             const int GWL_STYLE = -16;
-            const uint WS_POPUP = 0x80000000;
-            SetWindowLongCompat(_hwnd, GWL_STYLE, (IntPtr)WS_POPUP);
+            SetWindowLongCompat(_hwnd, GWL_STYLE, new IntPtr(0x80000000L));
             const uint SWP_NOMOVE = 0x0002, SWP_NOSIZE = 0x0001,
                        SWP_NOZORDER = 0x0004, SWP_NOOWNERZORDER = 0x0200,
                        SWP_FRAMECHANGED = 0x0020;

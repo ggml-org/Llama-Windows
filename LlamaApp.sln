@@ -8,6 +8,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LlamaApp.Common", "LlamaApp
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LlamaApp.Llama", "LlamaApp.Llama\LlamaApp.Llama.csproj", "{EBFF3E52-CC0D-4A86-A917-AC6F48A128F5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LlamaApp.Catalog", "LlamaApp.Catalog\LlamaApp.Catalog.csproj", "{85B64DF7-37F2-4AAD-A246-4E963D443A1A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|ARM64 = Debug|ARM64
@@ -72,5 +74,17 @@ Global
 		{EBFF3E52-CC0D-4A86-A917-AC6F48A128F5}.Release|x64.Build.0 = Release|Any CPU
 		{EBFF3E52-CC0D-4A86-A917-AC6F48A128F5}.Release|x86.ActiveCfg = Release|Any CPU
 		{EBFF3E52-CC0D-4A86-A917-AC6F48A128F5}.Release|x86.Build.0 = Release|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Debug|ARM64.ActiveCfg = Debug|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Debug|ARM64.Build.0 = Debug|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Debug|x64.Build.0 = Debug|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Debug|x86.Build.0 = Debug|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Release|ARM64.ActiveCfg = Release|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Release|ARM64.Build.0 = Release|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Release|x64.ActiveCfg = Release|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Release|x64.Build.0 = Release|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Release|x86.ActiveCfg = Release|Any CPU
+		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

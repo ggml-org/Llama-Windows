@@ -193,16 +193,22 @@
                    Margin="16,0"
                    Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
 
-        <!-- ============ Section 3: Recommended Models (stretches) ============ -->
-        <StackPanel Grid.Row="4"
-                    Margin="16,12,16,12" Spacing="8">
-            <TextBlock Text="Recommended Models"
+        <!-- ============ Section 3: Recommended Models (stretches, scrolls) ============ -->
+        <Grid Grid.Row="4" Margin="16,12,16,12" RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" /> <!-- Header (fixed) -->
+                <RowDefinition Height="*" />    <!-- List (fills + scrolls) -->
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0"
+                       Text="Recommended Models"
                        FontSize="13"
                        FontWeight="SemiBold"
                        Opacity="0.7" />
 
-            <!-- Scrolls internally if the list outgrows the stretched row. -->
-            <ScrollViewer VerticalScrollBarVisibility="Auto"
+            <!-- Scrolls internally when the list outgrows the stretched row. -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Hidden"
                           HorizontalScrollMode="Disabled">
                 <ItemsRepeater x:Name="RecommendedModelsList"
@@ -213,7 +219,7 @@
                     </ItemsRepeater.Layout>
                 </ItemsRepeater>
             </ScrollViewer>
-        </StackPanel>
+        </Grid>
 
         <Rectangle Grid.Row="5"
                    Height="1"
