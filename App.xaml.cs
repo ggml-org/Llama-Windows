@@ -38,10 +38,12 @@ namespace LlamaApp
             _trayIcon = new TrayIconManager(_window);
 
             // Ensure a llama.cpp binary is present, installing it on demand via
-            // install.ps1 when none is found. Fire-and-forget: it runs on the UI
-            // thread so LlamaManager.StateChanged (and thus the footer version
-            // line) updates land on the UI thread. The flyout footer shows the
-            // resolved version (or "not installed" / the install state).
+            // install.ps1 when none is found — then launch the server on port
+            // 2276. Fire-and-forget: it runs on the UI thread so
+            // LlamaManager.StateChanged (and thus the footer version line)
+            // updates land on the UI thread. The flyout footer shows the resolved
+            // version (or "not installed" / the install state).
+            Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
             _ = Llama.LlamaManager.Shared.EnsureReadyAsync();
         }
     }

@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using System.IO;
+using System.Text.Json;
 
 namespace LlamaApp.Llama;
 
@@ -63,11 +63,38 @@ public sealed class LlamaManager
         Failed,
     }
 
+    /// <summary>Server lifecycle state, surfaced in the UI.</summary>
+    public enum ServerState
+    {
+        /// <summary>Not started (no binary yet, or stopped).</summary>
+        Stopped,
+        /// <summary>Launched; waiting for the port to respond.</summary>
+        Starting,
+        /// <summary>Listening and serving requests.</summary>
+        Running,
+        /// <summary>The process exited unexpectedly or failed to bind.</summary>
+        Failed,
+    }
+
+    /// <summary>Port the local llama server listens on (matches the flyout link).</summary>
+    public const int ServerPort = 2276;
+
+    /// <summary>
+    /// Hugging Face cache directory passed to the server via
+    /// <c>HF_HUB_CACHE</c> so it resolves downloaded models from the same
+    /// location the app scans. Set by the caller (App.OnLaunched reads it from
+    /// <c>Settings.Current.CacheDirectory</c>) — kept here rather than reading
+    /// <c>Settings</c> directly to avoid a circular project dependency.
+    /// </summary>
+    public string? CacheDirectory { get; set; }
+
     private InstallState _state = InstallState.Idle;
     private string? _failureMessage;
     private string? _binaryPath;
     private string? _version;
     private Origin _origin = Origin.Unknown;
+    private ServerState _serverState = ServerState.Stopped;
+    private Process? _serverProcess;
 
     /// <summary>Current installation state.</summary>
     public InstallState State
@@ -115,6 +142,18 @@ public sealed class LlamaManager
         private set { _origin = value; StateChanged?.Invoke(this, EventArgs.Empty); }
     }
 
+    /// <summary>Current server state.</summary>
+    public ServerState ServerStatus
+    {
+        get => _serverState;
+        private set
+        {
+            if (_serverState == value) return;
+            _serverState = value;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
     /// <summary>Raised whenever any observable property changes.</summary>
     public event EventHandler? StateChanged;
 
@@ -138,6 +177,7 @@ public sealed class LlamaManager
                 CurrentOrigin = Origin.Managed;
                 Version = await ReadVersionAsync(resolved.Path, cancel);
                 State = InstallState.Idle;
+                await StartServerAsync(cancel);
                 return true;
 
             case ResolutionKind.External:
@@ -145,10 +185,14 @@ public sealed class LlamaManager
                 CurrentOrigin = Origin.External;
                 Version = await ReadVersionAsync(resolved.Path, cancel);
                 State = InstallState.Idle;
+                await StartServerAsync(cancel);
                 return true;
 
             default: // Missing
-                return await InstallAsync(cancel);
+                var installed = await InstallAsync(cancel);
+                if (installed)
+                    await StartServerAsync(cancel);
+                return installed;
         }
     }
 
@@ -181,6 +225,370 @@ public sealed class LlamaManager
             FailureMessage = ex.Message;
             State = InstallState.Failed;
             return false;
+        }
+    }
+
+    // ---- Server ----
+
+    /// <summary>
+    /// Launches <c>llama serve --port 2276</c> as a background process and polls
+    /// the port until it responds (or times out). Called automatically by
+    /// <see cref="EnsureReadyAsync"/> once a binary is available. No-op (returns
+    /// true) if the server is already running.
+    /// </summary>
+    public async Task<bool> StartServerAsync(CancellationToken cancel = default)
+    {
+        if (ServerStatus == ServerState.Running) return true;
+        if (BinaryPath is null || !File.Exists(BinaryPath))
+        {
+            ServerStatus = ServerState.Failed;
+            return false;
+        }
+
+        StopServer(); // reclaim any prior instance / port
+
+        ServerStatus = ServerState.Starting;
+
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = BinaryPath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            // `serve` is the unified subcommand (replaces the old llama-server).
+            // Router mode hosts the webui and serves requests even with no model
+            // loaded — models load on demand. --jinja enables chat templates.
+            psi.ArgumentList.Add("serve");
+            psi.ArgumentList.Add("--port");
+            psi.ArgumentList.Add(ServerPort.ToString());
+            psi.ArgumentList.Add("--jinja");
+
+            // Point the HF cache at the user-configured directory so the server
+            // resolves downloaded models from the same place the app scans.
+            if (!string.IsNullOrEmpty(CacheDirectory) && Directory.Exists(CacheDirectory))
+                psi.EnvironmentVariables["HF_HUB_CACHE"] = CacheDirectory;
+
+            var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
+            proc.Exited += (_, _) =>
+            {
+                // Fires on a thread-pool thread; marshal to UI thread via the
+                // continuation below is unnecessary since ServerStatus is a
+                // simple set — but keep it thread-safe by not touching the
+                // process field here. Only flip state if this wasn't an
+                // intentional stop (StopServer sets Stopped before killing).
+                if (ServerStatus != ServerState.Stopped)
+                    ServerStatus = ServerState.Failed;
+            };
+
+            if (!proc.Start())
+            {
+                ServerStatus = ServerState.Failed;
+                return false;
+            }
+            _serverProcess = proc;
+
+            // Wait for the port to respond — the server takes a moment to bind.
+            if (await WaitForPortAsync(TimeSpan.FromSeconds(15), cancel))
+            {
+                ServerStatus = ServerState.Running;
+                return true;
+            }
+
+            // Timed out waiting for the port — the process may have exited.
+            ServerStatus = ServerState.Failed;
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            ServerStatus = ServerState.Failed;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Stops the running server process (if any). Safe to call repeatedly.
+    /// Sets state to Stopped before killing so the Exited handler doesn't flip
+    /// to Failed.
+    /// </summary>
+    public void StopServer()
+    {
+        ServerStatus = ServerState.Stopped;
+        var proc = _serverProcess;
+        _serverProcess = null;
+        if (proc != null && !proc.HasExited)
+        {
+            try { proc.Kill(entireProcessTree: true); }
+            catch { /* best-effort */ }
+        }
+    }
+
+    /// <summary>
+    /// Polls <c>http://localhost:2276/health</c> until it responds or the timeout
+    /// elapses. The llama server exposes a health endpoint once it's bound and
+    /// ready; this confirms the port is actually serving rather than just
+    /// waiting a fixed delay.
+    /// </summary>
+    private static async Task<bool> WaitForPortAsync(TimeSpan timeout, CancellationToken cancel)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+        var deadline = DateTime.UtcNow + timeout;
+        var url = $"http://localhost:{ServerPort}/health";
+
+        while (DateTime.UtcNow < deadline)
+        {
+            cancel.ThrowIfCancellationRequested();
+            try
+            {
+                // Any HTTP response (even an error code) means the server is
+                // up and listening — a connection-refused means it's not yet.
+                var resp = await client.GetAsync(url, cancel);
+                return true;
+            }
+            catch
+            {
+                await Task.Delay(250, cancel);
+            }
+        }
+        return false;
+    }
+
+    // ---- Model download ----
+
+    /// <summary>
+    /// Downloads a model by asking the running llama server to fetch it. The
+    /// server (router mode) handles the actual Hugging Face transfer; this
+    /// method just <b>POST</b>s <c>{"model": "&lt;name&gt;"}</c> to
+    /// <c>/models</c> and tracks progress via the <c>/models/sse</c> stream.
+    /// </summary>
+    /// <para>Flow:
+    /// <list type="number">
+    /// <item>Open an SSE connection to <c>/models/sse</c> and start parsing
+    /// events.</item>
+    /// <item>POST the model name to <c>/models</c> — the server kicks off the
+    /// download and emits <c>download_progress</c> SSE events.</item>
+    /// <item>Sum the per-URL <c>done</c>/<c>total</c> bytes from each progress
+    /// event and report them via <paramref name="progress"/>.</item>
+    /// <item>Complete (return) when a <c>download_finished</c> or
+    /// <c>download_failed</c> event arrives for the model.</item>
+    /// </list></para>
+    /// </summary>
+    /// <param name="model">The model to download; <see cref="IModel.Name"/> is
+    /// the Hugging Face repo id (e.g. <c>ggml-org/gpt-oss-20b-GGUF</c>).</param>
+    /// <param name="progress">Receives <see cref="ModelDownloadProgress"/> updates
+    /// as the server streams them. May be <c>null</c>.</param>
+    /// <param name="cancel">Cancels the download (closes the SSE stream and
+    /// asks the server to stop via <c>DELETE /models/{name}</c>).</param>
+    /// <returns><c>true</c> if the download finished successfully;
+    /// <c>false</c> on failure or cancellation.</returns>
+    public async Task<bool> DownloadModelAsync(
+        Common.IModel model,
+        IProgress<Common.ModelDownloadProgress>? progress = null,
+        CancellationToken cancel = default)
+    {
+        if (ServerStatus != ServerState.Running)
+        {
+            progress?.Report(new Common.ModelDownloadProgress(
+                model.Name, 0, 0, Done: false, Failed: true, Message: "Server is not running"));
+            return false;
+        }
+
+        var baseUrl = $"http://localhost:{ServerPort}";
+        var modelName = model.Name;
+
+        using var sseClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        using var postClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+        // Open the SSE stream first so we don't miss the earliest progress events.
+        // HttpCompletionOption.ResponseHeadersRead lets us read the body as it
+        // arrives rather than buffering the whole (infinite) stream.
+        var sseResponse = await sseClient.GetAsync(
+            $"{baseUrl}/models/sse",
+            HttpCompletionOption.ResponseHeadersRead,
+            cancel);
+        sseResponse.EnsureSuccessStatusCode();
+
+        // Read the SSE stream on a background task; it feeds events into a
+        // channel we consume below. This decouples line-by-line parsing from
+        // the POST + completion logic.
+        var stream = await sseResponse.Content.ReadAsStreamAsync(cancel);
+        var reader = new StreamReader(stream);
+
+        using var sseCts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+
+        // POST the model name to /models — the server starts the download.
+        var payload = $$"""{"model":"{{modelName}}"}""";
+        using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+        try
+        {
+            using var postResp = await postClient.PostAsync($"{baseUrl}/models", content, cancel);
+            if (!postResp.IsSuccessStatusCode)
+            {
+                var body = await postResp.Content.ReadAsStringAsync(cancel);
+                sseCts.Cancel();
+                progress?.Report(new Common.ModelDownloadProgress(
+                    modelName, 0, 0, Done: false, Failed: true,
+                    Message: $"Server rejected the request ({(int)postResp.StatusCode}): {body}"));
+                return false;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            sseCts.Cancel();
+            progress?.Report(new Common.ModelDownloadProgress(
+                modelName, 0, 0, Done: false, Failed: true, Message: ex.Message));
+            return false;
+        }
+
+        // Consume SSE events until the download finishes or fails for our model.
+        // ParseSseStreamAsync is an async iterator that yields events as they
+        // arrive from the stream — no Task.Run needed since IAsyncEnumerable is
+        // inherently lazy/streaming.
+        bool success = false;
+        try
+        {
+            await foreach (var (evt, modelId, data) in ParseSseStreamAsync(reader, sseCts.Token))
+            {
+                cancel.ThrowIfCancellationRequested();
+                if (!string.Equals(modelId, modelName, StringComparison.OrdinalIgnoreCase) &&
+                    modelId != "*")
+                    continue; // another model's event
+
+                switch (evt)
+                {
+                    case "download_progress":
+                        var (downloaded, total) = SumProgress(data);
+                        progress?.Report(new Common.ModelDownloadProgress(
+                            modelName, downloaded, total, Done: false, Failed: false));
+                        break;
+
+                    case "download_finished":
+                        success = true;
+                        progress?.Report(new Common.ModelDownloadProgress(
+                            modelName, 0, 0, Done: true, Failed: false, Message: "Download complete"));
+                        await sseCts.CancelAsync();
+                        break;
+
+                    case "download_failed":
+                        progress?.Report(new Common.ModelDownloadProgress(
+                            modelName, 0, 0, Done: false, Failed: true, Message: "Download failed"));
+                        await sseCts.CancelAsync();
+                        break;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        {
+            // User cancelled — ask the server to stop the download.
+            await CancelServerDownloadAsync(postClient, baseUrl, modelName);
+            progress?.Report(new Common.ModelDownloadProgress(
+                modelName, 0, 0, Done: false, Failed: false, Message: "Cancelled"));
+            throw;
+        }
+        finally
+        {
+            await sseCts.CancelAsync();
+            try { sseResponse.Dispose(); } catch { /* best-effort */ }
+        }
+
+        return success;
+    }
+
+    /// <summary>
+    /// Parses an SSE stream line-by-line, yielding (<c>event</c>, <c>model</c>,
+    /// <c>data</c> JSON) tuples. Standard SSE framing: <c>data:</c> lines carry
+    /// the payload, a blank line dispatches the event.
+    /// </summary>
+    private static async IAsyncEnumerable<(string Event, string Model, JsonElement Data)> ParseSseStreamAsync(
+        StreamReader reader,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancel)
+    {
+        var pendingData = new System.Text.StringBuilder();
+
+        while (!cancel.IsCancellationRequested)
+        {
+            var line = await reader.ReadLineAsync(cancel);
+            if (line is null) yield break; // stream closed
+
+            if (line.Length == 0)
+            {
+                // Blank line = dispatch the accumulated event.
+                if (pendingData.Length > 0)
+                {
+                    var json = pendingData.ToString();
+                    pendingData.Clear();
+
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    var evt = root.TryGetProperty("event", out var e) ? e.GetString() ?? "" : "";
+                    var mdl = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
+                    var data = root.TryGetProperty("data", out var d) ? d : default;
+
+                    if (evt.Length > 0)
+                        yield return (evt, mdl, data);
+                }
+                continue;
+            }
+
+            // Accumulate data: lines (may span multiple for a single event).
+            if (line.StartsWith("data:", StringComparison.Ordinal))
+            {
+                var value = line[5..].TrimStart();
+                if (pendingData.Length > 0) pendingData.Append('\n');
+                pendingData.Append(value);
+            }
+            // Ignore event:/id:/retry: lines — the server bundles the event
+            // type inside the JSON data payload ("event" field).
+        }
+    }
+
+    /// <summary>
+    /// Sums <c>done</c>/<c>total</c> bytes across all URLs in a
+    /// <c>download_progress</c> data payload (a repo can have multiple files).
+    /// </summary>
+    private static (long downloaded, long total) SumProgress(JsonElement data)
+    {
+        long downloaded = 0, total = 0;
+        if (data.ValueKind != JsonValueKind.Object) return (0, 0);
+
+        if (data.TryGetProperty("progress", out var progress) &&
+            progress.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var url in progress.EnumerateObject())
+            {
+                if (url.Value.ValueKind != JsonValueKind.Object) continue;
+                if (url.Value.TryGetProperty("done", out var done))
+                    downloaded += done.TryGetInt64(out var d) ? d : 0;
+                if (url.Value.TryGetProperty("total", out var tot))
+                    total += tot.TryGetInt64(out var t) ? t : 0;
+            }
+        }
+
+        return (downloaded, total);
+    }
+
+    /// <summary>
+    /// Asks the server to cancel an in-flight download via
+    /// <c>DELETE /models/{name}</c>. Best-effort — the server may have already
+    /// finished or the request may fail; either way the SSE stream is closed
+    /// by the caller's cancellation.
+    /// </summary>
+    private static async Task CancelServerDownloadAsync(HttpClient client, string baseUrl, string modelName)
+    {
+        try
+        {
+            using var resp = await client.DeleteAsync($"{baseUrl}/models/{Uri.EscapeDataString(modelName)}");
+        }
+        catch
+        {
+            // Best-effort — don't surface cancel cleanup failures.
         }
     }
 

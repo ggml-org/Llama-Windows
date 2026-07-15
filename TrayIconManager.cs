@@ -105,6 +105,11 @@ internal sealed class TrayIconManager : IDisposable
     /// </summary>
     public void RequestExit()
     {
+        // Stop the llama server first so it doesn't outlive the app (and leave
+        // the port bound). Best-effort — if it hangs, Environment.Exit reaps it.
+        try { Llama.LlamaManager.Shared.StopServer(); }
+        catch { /* best-effort */ }
+
         // Removing the tray icon first avoids a stray icon lingering in the
         // notification area after the process is gone. Letting the window close
         // normally (AllowClose) bypasses its "hide instead of close" guard;

@@ -173,8 +173,8 @@
                            FontWeight="SemiBold"
                            Opacity="0.7" />
                 <HyperlinkButton x:Name="ServerLink"
-                                 Content="localhost:2276/v1"
-                                 NavigateUri="http://localhost:2276/v1"
+                                 Content="WebUI"
+                                 NavigateUri="http://localhost:2276"
                                  FontSize="13"
                                  FontWeight="Normal"
                                  Opacity="0.55"
