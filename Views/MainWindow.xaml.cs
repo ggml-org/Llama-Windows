@@ -379,6 +379,13 @@ namespace LlamaApp.Views
 
         // ---- Footer actions ----
 
+        private async void ServerLink_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            // Open the running llama server's WebUI in the system browser.
+            await Windows.System.Launcher.LaunchUriAsync(
+                new System.Uri($"http://localhost:{LlamaManager.ServerPort}"));
+        }
+
         private void Settings_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             // Hide the flyout first so the settings dialog isn't drawn behind it

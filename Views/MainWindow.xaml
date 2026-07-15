@@ -242,16 +242,17 @@
                            FontSize="13"
                            FontWeight="SemiBold"
                            Opacity="0.7" />
-                <HyperlinkButton x:Name="ServerLink"
-                                 Content="WebUI"
-                                 NavigateUri="http://localhost:2276"
-                                 FontSize="13"
-                                 FontWeight="Normal"
-                                 Opacity="0.55"
-                                 Padding="0"
-                                 MinWidth="0"
-                                 MinHeight="0"
-                                 VerticalAlignment="Center" />
+                <Button x:Name="ServerLink"
+                        Click="ServerLink_Click"
+                        Padding="0"
+                        MinWidth="0"
+                        MinHeight="0"
+                        Opacity="0.55"
+                        VerticalAlignment="Center"
+                        ToolTipService.ToolTip="Open WebUI">
+                    <FontIcon Glyph="&#xE8A7;"
+                              FontSize="14" />
+                </Button>
             </StackPanel>
 
             <!-- Empty state — shown when there are no local models. -->
