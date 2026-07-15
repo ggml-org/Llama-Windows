@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LlamaApp.Common;
 
 namespace LlamaApp.Llama;
 
@@ -30,6 +32,11 @@ public sealed class LlamaManager
     /// <summary>URL of the official Windows install script.</summary>
     private static readonly Uri InstallScriptUrl = new("https://llama.app/install.ps1");
 
+    private static readonly HttpClient Client = new()
+    {
+        Timeout = TimeSpan.FromSeconds(30)
+    };
+
     /// <summary>
     /// The install-script path the app manages (matches <c>install.ps1</c>'s
     /// layout). The real binary lives in <c>%USERPROFILE%\.llama-app</c>;
@@ -42,7 +49,7 @@ public sealed class LlamaManager
     private static string ManagedBinaryPath => Path.Combine(ManagedDir, "llama.exe");
 
     /// <summary>
-    /// Where the resolved binary comes from — surfaced in the flyout footer so
+    /// Where the resolved binary comes from — surfaced in the flyout footer, so
     /// an external installation isn't mistaken for the app's own (and a stale
     /// version isn't mistaken for a bug).
     /// </summary>
@@ -382,11 +389,10 @@ public sealed class LlamaManager
         ServerStatus = ServerState.Stopped;
         var proc = _serverProcess;
         _serverProcess = null;
-        if (proc != null && !proc.HasExited)
-        {
-            try { proc.Kill(entireProcessTree: true); }
-            catch { /* best-effort */ }
-        }
+        if (proc == null || proc.HasExited) return;
+        
+        try { proc.Kill(entireProcessTree: true); }
+        catch { /* best-effort */ }
     }
 
     /// <summary>
@@ -447,10 +453,7 @@ public sealed class LlamaManager
     /// asks the server to stop via <c>DELETE /models/{name}</c>).</param>
     /// <returns><c>true</c> if the download finished successfully;
     /// <c>false</c> on failure or cancellation.</returns>
-    public async Task<bool> DownloadModelAsync(
-        Common.IModel model,
-        IProgress<Common.ModelDownloadProgress>? progress = null,
-        CancellationToken cancel = default)
+    public async Task<bool> DownloadModelAsync(IModel model, IProgress<ModelDownloadProgress>? progress = null, CancellationToken cancel = default)
     {
         if (ServerStatus != ServerState.Running)
         {
@@ -463,7 +466,7 @@ public sealed class LlamaManager
         var modelName = model.Name;
 
         using var sseClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-        using var postClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        using var postClient = Client;
 
         // Open the SSE stream first so we don't miss the earliest progress events.
         // HttpCompletionOption.ResponseHeadersRead lets us read the body as it
@@ -484,14 +487,14 @@ public sealed class LlamaManager
 
         // POST the model name to /models — the server starts the download.
         var payload = $$"""{"model":"{{modelName}}"}""";
-        using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+        using var content = new StringContent(payload, Encoding.UTF8, "application/json");
         try
         {
             using var postResp = await postClient.PostAsync($"{baseUrl}/models", content, cancel);
             if (!postResp.IsSuccessStatusCode)
             {
                 var body = await postResp.Content.ReadAsStringAsync(cancel);
-                sseCts.Cancel();
+                await sseCts.CancelAsync();
                 progress?.Report(new Common.ModelDownloadProgress(
                     modelName, 0, 0, Done: false, Failed: true,
                     Message: $"Server rejected the request ({(int)postResp.StatusCode}): {body}"));
@@ -500,7 +503,7 @@ public sealed class LlamaManager
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            sseCts.Cancel();
+            await sseCts.CancelAsync();
             progress?.Report(new Common.ModelDownloadProgress(
                 modelName, 0, 0, Done: false, Failed: true, Message: ex.Message));
             return false;
@@ -511,7 +514,7 @@ public sealed class LlamaManager
         // arrive from the stream — no Task.Run needed since IAsyncEnumerable is
         // inherently lazy/streaming.
         //
-        // On completion we `break` out of the loop rather than cancelling the
+        // On completion, we `break` out of the loop rather than cancelling the
         // SSE stream in-place: cancelling sseCts mid-iteration would make the
         // next ReadLineAsync throw OperationCanceledException, and since that
         // exception comes from sseCts (not the user's `cancel` token) it would
@@ -519,15 +522,14 @@ public sealed class LlamaManager
         // propagate out of the method — masking a successful download as a
         // cancellation and skipping LaunchModelAsync. Breaking lets the finally
         // block cancel + dispose the stream cleanly with no thrown exception.
-        bool success = false;
-        bool completed = false;
+        var success = false;
+        var completed = false;
         try
         {
             await foreach (var (evt, modelId, data) in ParseSseStreamAsync(reader, sseCts.Token))
             {
                 cancel.ThrowIfCancellationRequested();
-                if (!string.Equals(modelId, modelName, StringComparison.OrdinalIgnoreCase) &&
-                    modelId != "*")
+                if (!string.Equals(modelId, modelName, StringComparison.OrdinalIgnoreCase) && modelId != "*")
                     continue; // another model's event
 
                 switch (evt)
@@ -557,7 +559,7 @@ public sealed class LlamaManager
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
-            // User cancelled — ask the server to stop the download.
+            // User canceled — ask the server to stop the download.
             await CancelServerDownloadAsync(postClient, baseUrl, modelName);
             progress?.Report(new Common.ModelDownloadProgress(
                 modelName, 0, 0, Done: false, Failed: false, Message: "Cancelled"));
@@ -577,25 +579,22 @@ public sealed class LlamaManager
     /// <c>POST /models/load</c>. In router mode, the server spawns a child
     /// process for the model; this returns once the load request is accepted.
     /// </summary>
-    /// <param name="model">The model to load; <see cref="IModel.Name"/> is the
+    /// <param name="model">The model to load; <see cref="Common.IModel.Name"/> is the
     /// repo id the server knows (must be downloaded first).</param>
     /// <param name="cancel">Cancellation token.</param>
     /// <returns><c>true</c> if the server accepted the load request.</returns>
-    public async Task<bool> LaunchModelAsync(
-        LlamaApp.Common.IModel model,
-        CancellationToken cancel = default)
+    public async Task<bool> LaunchModelAsync(IModel model, CancellationToken cancel = default)
     {
         if (ServerStatus != ServerState.Running)
             return false;
 
         var baseUrl = $"http://localhost:{ServerPort}";
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 
         try
         {
-            var payload = $$$$"""{"model":"{{model.ServerModelId}}"}""";
-            using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
-            using var resp = await client.PostAsync($"{baseUrl}/models/load", content, cancel);
+            const string payload = $$$"""{"model":"{{model.ServerModelId}}"}""";
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var resp = await Client.PostAsync($"{baseUrl}/models/load", content, cancel);
             return resp.IsSuccessStatusCode;
         }
         catch
@@ -640,7 +639,7 @@ public sealed class LlamaManager
     public async Task<IReadOnlyList<ServerModel>> GetModelsAsync(CancellationToken cancel = default)
     {
         if (ServerStatus != ServerState.Running)
-            return Array.Empty<ServerModel>();
+            return [];
 
         var baseUrl = $"http://localhost:{ServerPort}";
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
@@ -650,11 +649,11 @@ public sealed class LlamaManager
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
             var dto = await JsonSerializer.DeserializeAsync<ModelsResponseDto>(stream, cancellationToken: cancel);
-            return dto?.Data?.Select(Map).ToList() ?? new List<ServerModel>();
+            return dto?.Data?.Select(Map).ToList() ?? [];
         }
         catch
         {
-            return Array.Empty<ServerModel>();
+            return [];
         }
     }
 
@@ -665,7 +664,7 @@ public sealed class LlamaManager
         Status = d.Status?.Value ?? "",
         SupportsImage = d.Architecture?.InputModalities != null
             && d.Architecture.InputModalities.Contains("image", StringComparer.OrdinalIgnoreCase),
-        InputModalities = (IReadOnlyList<string>?)d.Architecture?.InputModalities ?? Array.Empty<string>(),
+        InputModalities = (IReadOnlyList<string>?)d.Architecture?.InputModalities ?? [],
         Source = d.Source,
         CanRemove = d.CanRemove,
     };
@@ -674,7 +673,7 @@ public sealed class LlamaManager
 
     private sealed class ModelsResponseDto
     {
-        [JsonPropertyName("data")] public List<ServerModelDto>? Data { get; set; }
+        [JsonPropertyName("data")] public List<ServerModelDto>? Data { get; init; }
     }
 
     private sealed class ServerModelDto
@@ -735,12 +734,11 @@ public sealed class LlamaManager
             }
 
             // Accumulate data: lines (may span multiple for a single event).
-            if (line.StartsWith("data:", StringComparison.Ordinal))
-            {
-                var value = line[5..].TrimStart();
-                if (pendingData.Length > 0) pendingData.Append('\n');
-                pendingData.Append(value);
-            }
+            if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
+            
+            var value = line[5..].TrimStart();
+            if (pendingData.Length > 0) pendingData.Append('\n');
+            pendingData.Append(value);
             // Ignore event:/id:/retry: lines — the server bundles the event
             // type inside the JSON data payload ("event" field).
         }
@@ -755,17 +753,15 @@ public sealed class LlamaManager
         long downloaded = 0, total = 0;
         if (data.ValueKind != JsonValueKind.Object) return (0, 0);
 
-        if (data.TryGetProperty("progress", out var progress) &&
-            progress.ValueKind == JsonValueKind.Object)
+        if (!data.TryGetProperty("progress", out var progress) ||
+            progress.ValueKind != JsonValueKind.Object) return (downloaded, total);
+        
+        foreach (var url in progress.EnumerateObject().Where(url => url.Value.ValueKind == JsonValueKind.Object))
         {
-            foreach (var url in progress.EnumerateObject())
-            {
-                if (url.Value.ValueKind != JsonValueKind.Object) continue;
-                if (url.Value.TryGetProperty("done", out var done))
-                    downloaded += done.TryGetInt64(out var d) ? d : 0;
-                if (url.Value.TryGetProperty("total", out var tot))
-                    total += tot.TryGetInt64(out var t) ? t : 0;
-            }
+            if (url.Value.TryGetProperty("done", out var done))
+                downloaded += done.TryGetInt64(out var d) ? d : 0;
+            if (url.Value.TryGetProperty("total", out var tot))
+                total += tot.TryGetInt64(out var t) ? t : 0;
         }
 
         return (downloaded, total);
@@ -923,7 +919,7 @@ public sealed class LlamaManager
             var stdout = await stdoutTask;
 
             // llama.cpp prints e.g. "llama-server (llama) b9553 (...)
-            // version header (build: 9553)". First non-empty line is the tag line.
+            // version header (build: 9553)". The first non-empty line is the tag line.
             return stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(
                 line => line.Trim()).FirstOrDefault(trimmed => trimmed.Length > 0
             );

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Drawing;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using LlamaApp.Common;
 using LlamaApp.HuggingFace;
@@ -87,7 +88,14 @@ namespace LlamaApp.Views
             Activated += MainWindow_Activated;
 
             LoadModels();
+            LoadVersionInfo();
             UpdateEmptyState();
+
+            // Refresh the footer's llama.cpp version as the binary is
+            // detected/installed. LlamaManager.EnsureLlamaOrDownloadAsync runs
+            // in parallel from App.OnLaunched; its StateChanged fires on the UI
+            // thread, so we can touch the TextBlock directly.
+            LlamaManager.Shared.StateChanged += LlamaManager_StateChanged;
         }
 
         // ---- Data ----
@@ -342,6 +350,31 @@ namespace LlamaApp.Views
                 else
                     queue.TryEnqueue(Fail);
             }
+        }
+
+        // ---- Version footer ----
+
+        /// <summary>
+        /// Fills the footer version line: the app's assembly version (no name)
+        /// and the resolved llama.cpp version, separated by " - ". Only the
+        /// version strings are shown, centered and bold white.
+        /// </summary>
+        private void LoadVersionInfo()
+        {
+            var appVer = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "";
+            VersionText.Text = LlamaRunner.Version is { } v
+                ? $"{appVer} - {v}"
+                : appVer;
+        }
+
+        /// <summary>
+        /// Handler for <see cref="LlamaManager.StateChanged"/>: re-renders the
+        /// footer's llama.cpp half as the binary is detected/installed so the
+        /// running llama.cpp version appears live.
+        /// </summary>
+        private void LlamaManager_StateChanged(object? sender, EventArgs e)
+        {
+            LoadVersionInfo();
         }
 
         // ---- Footer actions ----

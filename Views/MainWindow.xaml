@@ -20,8 +20,10 @@
           1. Brand header (logo + llama.app left, action icons right) — Auto, compact
           2. Available (local models, or "No model yet") — Auto
           3. Recommended Models                        — * (stretches)
-        The old footer (version lines + Settings/Quit buttons) is gone; those
-        actions live as icons in the header now.
+          4. Version footer (app version - llama.cpp version) — Auto, compact
+        The old footer's Settings/Quit buttons are gone; those actions live as
+        icons in the header now. The version caption is re-added as the last
+        section.
     -->
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="Base" />
@@ -160,6 +162,8 @@
             <RowDefinition Height="Auto" /> <!-- Section 2: Available -->
             <RowDefinition Height="Auto" /> <!-- Divider -->
             <RowDefinition Height="*" />    <!-- Section 3: Recommended (stretches) -->
+            <RowDefinition Height="Auto" /> <!-- Divider -->
+            <RowDefinition Height="Auto" /> <!-- Section 4: version footer -->
         </Grid.RowDefinitions>
 
         <!-- ============ Section 1: Brand header (compact) ============
@@ -300,6 +304,23 @@
                 </ItemsRepeater>
             </ScrollViewer>
         </Grid>
+
+        <Rectangle Grid.Row="5"
+                   Height="1"
+                   Margin="16,0"
+                   Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+        <!-- ============ Section 4: Version footer (compact) ============
+             A single centered line: the app's version (no name) and the
+             resolved llama.cpp version, separated by " - ". Bold white so it
+             reads as a clear caption under the Recommended list. -->
+        <TextBlock x:Name="VersionText"
+                   Grid.Row="6"
+                   Margin="16,8,16,10"
+                   HorizontalAlignment="Center"
+                   FontSize="11"
+                   FontWeight="Bold"
+                   Foreground="White" />
 
     </Grid>
 </Window>
