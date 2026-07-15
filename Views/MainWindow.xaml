@@ -54,10 +54,21 @@
                     <StackPanel Grid.Column="1"
                                 VerticalAlignment="Center"
                                 Spacing="1">
-                        <TextBlock Text="{x:Bind DisplayName}"
-                                   FontSize="13"
-                                   FontWeight="SemiBold"
-                                   TextTrimming="CharacterEllipsis" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="{x:Bind DisplayName}"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+                            <!-- Vision marker: shown when the server reports
+                                 image input (architecture.input_modalities).
+                                 A small “glass” glyph, dimmed so it reads as a
+                                 capability hint rather than part of the name. -->
+                            <FontIcon Glyph="&#xEB25;"
+                                      FontSize="11"
+                                      Opacity="0.55"
+                                      VerticalAlignment="Center"
+                                      Visibility="{x:Bind Vision, Mode=OneWay}" />
+                        </StackPanel>
                         <TextBlock FontSize="11"
                                    Opacity="0.6"
                                    TextTrimming="CharacterEllipsis">
@@ -113,10 +124,18 @@
                     <StackPanel Grid.Column="1"
                                 VerticalAlignment="Center"
                                 Spacing="1">
-                        <TextBlock Text="{x:Bind DisplayName}"
-                                   FontSize="13"
-                                   FontWeight="SemiBold"
-                                   TextTrimming="CharacterEllipsis" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="{x:Bind DisplayName}"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+                            <!-- Vision marker (same as the Available rows). -->
+                            <FontIcon Glyph="&#xE7B3;"
+                                      FontSize="11"
+                                      Opacity="0.55"
+                                      VerticalAlignment="Center"
+                                      Visibility="{x:Bind Vision, Mode=OneWay}" />
+                        </StackPanel>
                         <TextBlock FontSize="11"
                                    Opacity="0.6"
                                    TextTrimming="CharacterEllipsis">
@@ -198,7 +217,7 @@
                         MinWidth="0" MinHeight="0"
                         VerticalAlignment="Center"
                         ToolTipService.ToolTip="Quit">
-                    <FontIcon Glyph="&#x23FB;"
+                    <FontIcon Glyph="&#xE7E8;"
                               FontSize="14" />
                 </Button>
             </StackPanel>

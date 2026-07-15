@@ -37,14 +37,12 @@ namespace LlamaApp
             // Add the system-tray icon with its right-click context menu.
             _trayIcon = new TrayIconManager(_window);
 
-            // Ensure a llama.cpp binary is present, installing it on demand via
-            // install.ps1 when none is found — then launch the server on port
-            // 2276. Fire-and-forget: it runs on the UI thread so
-            // LlamaManager.StateChanged (and thus the footer version line)
-            // updates land on the UI thread. The flyout footer shows the resolved
-            // version (or "not installed" / the install state).
+            // Ensure a llama.cpp server is reachable at localhost:2276: adopt an
+            // already-running one, launch one from a found binary, or download the
+            // binary via install.ps1 then launch. Fire-and-forget; once reachable the
+            // MainWindow fetches the Available model list via GET /models.
             Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
-            _ = Llama.LlamaManager.Shared.EnsureReadyAsync();
+            _ = Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
         }
     }
 }

@@ -71,6 +71,14 @@ namespace LlamaApp.Views
         /// <summary>Recommended Hub models — shown with a download glyph.</summary>
         public ObservableCollection<ModelItem> RecommendedModels { get; } = new();
 
+        /// <summary>
+        /// The remote catalog, fetched once and shared by both sections: the
+        /// Recommended section lists it directly, the Available section uses it
+        /// to enrich server-reported models (display name, params, size, brand
+        /// logo). Resolved before the per-section loaders run.
+        /// </summary>
+        private Task<List<Repository>> _catalogTask = null!;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -85,102 +93,155 @@ namespace LlamaApp.Views
         // ---- Data ----
 
         /// <summary>
-        /// Populates the model lists. Placeholder data for now — will be
-        /// replaced by a scan of the local Hugging Face cache and a catalog
-        /// fetch once those integrations land.
+        /// Populates the model lists. The Recommended section comes straight from
+        /// the remote catalog; the Available section is fetched from the running
+        /// llama server's <c>GET /models</c> once it's reachable. Both share a
+        /// single catalog fetch (the Available rows are enriched from it).
         /// </summary>
         private void LoadModels()
         {
-            // Local (Available) and Recommended models are both fetched async.
-            _ = LoadLocalModelsAsync();
+            _catalogTask = FetchCatalogAsync();
             _ = LoadRecommendedModelsAsync();
+            _ = LoadLocalModelsAsync();
         }
 
         /// <summary>
-        /// Scans the local Hugging Face cache (per <see cref="Settings.CacheDirectory"/>)
-        /// for downloaded GGUF models and populates <see cref="LocalModels"/>. Fire-
-        /// and-forget from the constructor; updates the UI incrementally.
+        /// Fetches the remote catalog once into <see cref="_catalogRepos"/> for
+        /// both sections. Never throws — a network failure just yields an empty
+        /// list (the Recommended section stays empty, Available rows aren't
+        /// enriched).
+        /// </summary>
+        private async Task<List<Repository>> FetchCatalogAsync()
+        {
+            try { return (await Catalog.FetchAsync()).ToList(); }
+            catch { return new List<Repository>(); }
+        }
+
+        /// <summary>
+        /// Lists the locally available (cached) models from the running llama
+        /// server's <c>GET /models</c> endpoint — the authoritative source now
+        /// that <see cref="LlamaManager"/> is a server client. Waits for the
+        /// server to come up (<see cref="LlamaManager.EnsureLlamaOrDownloadAsync"/>
+        /// runs in parallel from <c>App.OnLaunched</c>), then fetches. Each row is
+        /// enriched with catalog metadata (display name, params, size, brand
+        /// logo); the vision flag comes from the server's
+        /// <c>architecture.input_modalities</c>.
         /// </summary>
         private async Task LoadLocalModelsAsync()
         {
-            try
-            {
-                var cacheDir = Settings.Current.CacheDirectory;
-                var repos = await LlamaApp.HuggingFace.Catalog.FetchLocalAsync(cacheDir);
+            var mgr = LlamaManager.Shared;
 
-                foreach (var repo in repos)
+            // Wait for the server to be reachable; bail if setup fails. The
+            // server can take a while to download/install on first run.
+            var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(5);
+            while (mgr.ServerStatus != LlamaManager.ServerState.Running)
+            {
+                if (mgr.State == LlamaManager.InstallState.Failed ||
+                    mgr.ServerStatus == LlamaManager.ServerState.Failed ||
+                    DateTime.UtcNow >= deadline)
                 {
-                    var label = !string.IsNullOrEmpty(repo.DisplayName)
-                        ? !string.IsNullOrEmpty(repo.Quant)
-                            ? $"{repo.DisplayName} ({repo.Quant})"
-                            : repo.DisplayName
-                        : repo.Name;
-
-                    LocalModels.Add(new ModelItem
-                    {
-                        Name = label,
-                        RepoName = repo.Name,
-                        Parameters = repo.Parameters,
-                        Size = repo.Size,
-                        License = repo.License,
-                        Vision = repo.Vision,
-                        Quant = repo.Quant,
-                        Downloadable = false,
-                        Brand = repo.Brand,
-                        Logo = ModelItem.ResolveLogo(repo.Brand),
-                    });
+                    UpdateEmptyState();
+                    return;
                 }
+                try { await Task.Delay(500); }
+                catch { UpdateEmptyState(); return; }
+            }
 
-                UpdateEmptyState();
-            }
-            catch
+            IReadOnlyList<LlamaManager.ServerModel> serverModels;
+            try { serverModels = await mgr.GetModelsAsync(); }
+            catch { UpdateEmptyState(); return; }
+
+            // Enrich with the catalog (display name, params, size, brand/logo).
+            // Keyed by the bare repo id, which is the server id without the
+            // ":quant" suffix.
+            var catalog = await _catalogTask;
+            var byRepo = catalog.ToDictionary(r => r.Name, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var sm in serverModels)
             {
-                // Cache scan failure — leave the list empty ("No model yet").
-                UpdateEmptyState();
+                // Server id is "repo:quant" (or just "repo"). Split it so
+                // IModel.ServerModelId reconstructs the exact id the server uses.
+                var (repo, quant) = SplitServerId(sm.Id);
+
+                var label = DeriveDisplayName(repo, quant, byRepo);
+                byRepo.TryGetValue(repo, out var matched);
+
+                LocalModels.Add(new ModelItem
+                {
+                    Name = label,
+                    RepoName = repo,
+                    Quant = quant,
+                    Parameters = matched?.Parameters ?? "",
+                    Size = matched?.Size ?? "",
+                    License = matched?.License ?? "",
+                    Vision = sm.SupportsImage, // authoritative — from the server
+                    Downloadable = false,
+                    Brand = matched?.Brand,
+                    Logo = ModelItem.ResolveLogo(matched?.Brand),
+                });
             }
+
+            UpdateEmptyState();
+        }
+
+        /// <summary>
+        /// Splits a server model id (<c>repo</c> or <c>repo:quant</c>) into the
+        /// bare HF repo id and the quant label (empty when absent).
+        /// </summary>
+        private static (string repo, string quant) SplitServerId(string id)
+        {
+            var idx = id.IndexOf(':');
+            if (idx < 0) return (id, "");
+            return (id[..idx], id[(idx + 1)..]);
+        }
+
+        /// <summary>
+        /// Builds a display name for a server-reported model: the catalog's
+        /// <c>DisplayName</c> with the quant in parens when known, else the last
+        /// path segment of the repo id (with quant in parens).
+        /// </summary>
+        private static string DeriveDisplayName(
+            string repo, string quant, Dictionary<string, Repository> byRepo)
+        {
+            byRepo.TryGetValue(repo, out var matched);
+            var baseName = !string.IsNullOrEmpty(matched?.DisplayName)
+                ? matched.DisplayName
+                : repo.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? repo;
+            return string.IsNullOrEmpty(quant) ? baseName : $"{baseName} ({quant})";
         }
 
         /// <summary>
         /// Fetches the remote catalog and populates <see cref="RecommendedModels"/>.
-        /// Fire-and-forget from the constructor; the ObservableCollection updates
-        /// the UI incrementally as entries arrive.
+        /// Shares the single catalog fetch with the Available section.
         /// </summary>
         private async Task LoadRecommendedModelsAsync()
         {
-            try
-            {
-                var catalog = new LlamaApp.HuggingFace.Catalog();
-                var repos = await Catalog.FetchAsync();
+            List<Repository> repos;
+            try { repos = await _catalogTask; }
+            catch { return; } // network/parse failure — Recommended stays empty
 
-                // Build a display name that disambiguates quants: "GPT-OSS 20B (mxfp4)".
-                foreach (var repo in repos)
+            // Build a display name that disambiguates quants: "GPT-OSS 20B (mxfp4)".
+            foreach (var repo in repos)
+            {
+                var label = !string.IsNullOrEmpty(repo.DisplayName)
+                    ? !string.IsNullOrEmpty(repo.Quant)
+                        ? $"{repo.DisplayName} ({repo.Quant})"
+                        : repo.DisplayName
+                    : repo.Name;
+
+                RecommendedModels.Add(new ModelItem
                 {
-                    var label = !string.IsNullOrEmpty(repo.DisplayName)
-                        ? !string.IsNullOrEmpty(repo.Quant)
-                            ? $"{repo.DisplayName} ({repo.Quant})"
-                            : repo.DisplayName
-                        : repo.Name;
-
-                    RecommendedModels.Add(new ModelItem
-                    {
-                        Name = label,
-                        RepoName = repo.Name,
-                        Parameters = repo.Parameters,
-                        Size = repo.Size,
-                        License = repo.License,
-                        Vision = repo.Vision,
-                        Quant = repo.Quant,
-                        Downloadable = true,
-                        Brand = repo.Brand,
-                        Logo = ModelItem.ResolveLogo(repo.Brand),
-                    });
-                }
-            }
-            catch
-            {
-                // Network failure or parse error — leave the list empty; the
-                // section still renders with its header. Could show an error
-                // state here later.
+                    Name = label,
+                    RepoName = repo.Name,
+                    Parameters = repo.Parameters,
+                    Size = repo.Size,
+                    License = repo.License,
+                    Vision = repo.Vision,
+                    Quant = repo.Quant,
+                    Downloadable = true,
+                    Brand = repo.Brand,
+                    Logo = ModelItem.ResolveLogo(repo.Brand),
+                });
             }
         }
 

@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace LlamaApp.Llama;
 
@@ -14,9 +16,11 @@ namespace LlamaApp.Llama;
 /// (e.g. a manually built binary on PATH) is treated as unmanaged and left alone.
 /// The installation is silent (writes under the user profile, no elevation needed).</para>
 ///
-/// <para>Call <see cref="EnsureReadyAsync"/> at startup; it installs on demand and
-/// reports progress/state via <see cref="StateChanged"/>. <see cref="Version"/>
-/// (and <see cref="LlamaRunner.Version"/>) is populated once a binary is found.</para>
+/// <para>Call <see cref="EnsureLlamaOrDownloadAsync"/> at startup; it adopts a
+/// running server, launches one, or downloads the binary on demand, and reports
+/// progress/state via <see cref="StateChanged"/>. Once the server is reachable,
+/// <see cref="GetModelsAsync"/> lists locally available models via the
+/// <c>GET /models</c> REST endpoint.</para>
 /// </summary>
 public sealed class LlamaManager
 {
@@ -59,7 +63,7 @@ public sealed class LlamaManager
         Idle,
         /// <summary>Downloading/installing the app-managed binary.</summary>
         Installing,
-        /// <summary>The installation failed; retry via <see cref="EnsureReadyAsync"/>.</summary>
+        /// <summary>The installation failed; retry via <see cref="EnsureLlamaOrDownloadAsync"/>.</summary>
         Failed,
     }
 
@@ -160,40 +164,95 @@ public sealed class LlamaManager
     private LlamaManager() { }
 
     /// <summary>
-    /// Resolves the local <c>llama</c> binary and installs it if missing.
-    /// Returns <c>true</c> when a usable binary is available afterward (always,
-    /// except a failed install). Safe to await from the UI thread; the install
-    /// runs on a background process and <see cref="StateChanged"/> fires on the
-    /// UI thread via the awaited continuation.
+    /// Ensures a llama server is reachable at <c>localhost:<see cref="ServerPort"/></c> —
+    /// the app's single point of contact for the model REST API. Resolution order:
+    /// <list type="number">
+    /// <item><b>Probe</b> <c>GET /health</c>. If a server is already running (a
+    /// previous app instance, another tool, or a manual launch), adopt it as the
+    /// client — no binary needed, no process launched.</item>
+    /// <item>Otherwise <b>resolve</b> the <c>llama</c> binary (app-managed or on
+    /// PATH) and <see cref="StartServerAsync">launch it</see>.</item>
+    /// <item>If no binary is found, <b>download</b> it via the official
+    /// <c>install.ps1</c> (see <see cref="InstallAsync"/>), then launch the server.</item>
+    /// </list>
+    /// Returns <c>true</c> once the server is reachable. The Available models list
+    /// is then fetched via <see cref="GetModelsAsync"/>. Safe to await from the UI
+    /// thread; installs run on a background process.
     /// </summary>
-    /// <param name="cancel">Optional cancellation token.</param>
-    public async Task<bool> EnsureReadyAsync(CancellationToken cancel = default)
+    public async Task<bool> EnsureLlamaOrDownloadAsync(CancellationToken cancel = default)
     {
+        // 1. Adopt an already-running server (no binary/process needed).
+        if (await IsServerReachableAsync(cancel))
+        {
+            ServerStatus = ServerState.Running;
+            // Best-effort: resolve the binary so Version is populated for display,
+            // but don't block the client on it.
+            _ = ResolveAndReadVersionAsync(cancel);
+            return true;
+        }
+
+        // 2/3. Resolve the binary; install if missing; then launch the server.
         var resolved = Resolve();
         switch (resolved.Kind)
         {
             case ResolutionKind.Managed:
                 BinaryPath = resolved.Path;
                 CurrentOrigin = Origin.Managed;
-                Version = await ReadVersionAsync(resolved.Path, cancel);
+                Version = await ReadVersionAsync(resolved.Path!, cancel);
                 State = InstallState.Idle;
-                await StartServerAsync(cancel);
-                return true;
+                return await StartServerAsync(cancel);
 
             case ResolutionKind.External:
                 BinaryPath = resolved.Path;
                 CurrentOrigin = Origin.External;
-                Version = await ReadVersionAsync(resolved.Path, cancel);
+                Version = await ReadVersionAsync(resolved.Path!, cancel);
                 State = InstallState.Idle;
-                await StartServerAsync(cancel);
-                return true;
+                return await StartServerAsync(cancel);
 
-            default: // Missing
+            default: // Missing — download then launch.
                 var installed = await InstallAsync(cancel);
                 if (installed)
-                    await StartServerAsync(cancel);
-                return installed;
+                    return await StartServerAsync(cancel);
+                return false;
         }
+    }
+
+    /// <summary>
+    /// Probes <c>GET /health</c> on the server port. Any HTTP response means a
+    /// server is already up and listening (a connection-refused means not).
+    /// </summary>
+    private static async Task<bool> IsServerReachableAsync(CancellationToken cancel)
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            using var resp = await client.GetAsync($"http://localhost:{ServerPort}/health", cancel);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Best-effort binary resolution + version read for an adopted (external)
+    /// server — populates <see cref="BinaryPath"/>/<see cref="Version"/> for
+    /// display without blocking the client. Fire-and-forget.
+    /// </summary>
+    private async Task ResolveAndReadVersionAsync(CancellationToken cancel)
+    {
+        try
+        {
+            var resolved = Resolve();
+            if (resolved.Path is { } p && File.Exists(p))
+            {
+                BinaryPath = p;
+                CurrentOrigin = resolved.Kind == ResolutionKind.Managed ? Origin.Managed : Origin.External;
+                Version = await ReadVersionAsync(p, cancel);
+            }
+        }
+        catch { /* best-effort */ }
     }
 
     /// <summary>
@@ -233,7 +292,7 @@ public sealed class LlamaManager
     /// <summary>
     /// Launches <c>llama serve --port 2276</c> as a background process and polls
     /// the port until it responds (or times out). Called automatically by
-    /// <see cref="EnsureReadyAsync"/> once a binary is available. No-op (returns
+    /// <see cref="EnsureLlamaOrDownloadAsync"/> once a binary is available. No-op (returns
     /// true) if the server is already running.
     /// </summary>
     public async Task<bool> StartServerAsync(CancellationToken cancel = default)
@@ -451,7 +510,17 @@ public sealed class LlamaManager
         // ParseSseStreamAsync is an async iterator that yields events as they
         // arrive from the stream — no Task.Run needed since IAsyncEnumerable is
         // inherently lazy/streaming.
+        //
+        // On completion we `break` out of the loop rather than cancelling the
+        // SSE stream in-place: cancelling sseCts mid-iteration would make the
+        // next ReadLineAsync throw OperationCanceledException, and since that
+        // exception comes from sseCts (not the user's `cancel` token) it would
+        // escape the `when (cancel.IsCancellationRequested)` guard below and
+        // propagate out of the method — masking a successful download as a
+        // cancellation and skipping LaunchModelAsync. Breaking lets the finally
+        // block cancel + dispose the stream cleanly with no thrown exception.
         bool success = false;
+        bool completed = false;
         try
         {
             await foreach (var (evt, modelId, data) in ParseSseStreamAsync(reader, sseCts.Token))
@@ -473,15 +542,17 @@ public sealed class LlamaManager
                         success = true;
                         progress?.Report(new Common.ModelDownloadProgress(
                             modelName, 0, 0, Done: true, Failed: false, Message: "Download complete"));
-                        await sseCts.CancelAsync();
+                        completed = true;
                         break;
 
                     case "download_failed":
                         progress?.Report(new Common.ModelDownloadProgress(
                             modelName, 0, 0, Done: false, Failed: true, Message: "Download failed"));
-                        await sseCts.CancelAsync();
+                        completed = true;
                         break;
                 }
+
+                if (completed) break; // exit the await foreach; finally cleans up
             }
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
@@ -499,6 +570,132 @@ public sealed class LlamaManager
         }
 
         return success;
+    }
+
+    /// <summary>
+    /// Asks the running llama server to load (launch) a model into memory via
+    /// <c>POST /models/load</c>. In router mode, the server spawns a child
+    /// process for the model; this returns once the load request is accepted.
+    /// </summary>
+    /// <param name="model">The model to load; <see cref="IModel.Name"/> is the
+    /// repo id the server knows (must be downloaded first).</param>
+    /// <param name="cancel">Cancellation token.</param>
+    /// <returns><c>true</c> if the server accepted the load request.</returns>
+    public async Task<bool> LaunchModelAsync(
+        LlamaApp.Common.IModel model,
+        CancellationToken cancel = default)
+    {
+        if (ServerStatus != ServerState.Running)
+            return false;
+
+        var baseUrl = $"http://localhost:{ServerPort}";
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
+        try
+        {
+            var payload = $$$$"""{"model":"{{model.ServerModelId}}"}""";
+            using var content = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+            using var resp = await client.PostAsync($"{baseUrl}/models/load", content, cancel);
+            return resp.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    // ---- Model listing (GET /models) ----
+
+    /// <summary>
+    /// A model the running llama server knows about (router <c>/models</c> list):
+    /// its canonical <see cref="Id"/> (<c>repo:quant</c>), on-disk <see cref="Path"/>,
+    /// load <see cref="Status"/> (<c>loaded</c>/<c>unloaded</c>), and the
+    /// <see cref="SupportsImage"/> flag derived from
+    /// <c>architecture.input_modalities</c>.
+    /// </summary>
+    public sealed record ServerModel
+    {
+        /// <summary>Server model id, e.g. <c>ggml-org/gemma-3-4b-it-GGUF:Q4_K_M</c>.</summary>
+        public string Id { get; init; } = "";
+        /// <summary>Absolute path to the GGUF on disk, when known.</summary>
+        public string? Path { get; init; }
+        /// <summary>Load state: <c>loaded</c> or <c>unloaded</c>.</summary>
+        public string Status { get; init; } = "";
+        /// <summary>True when <c>architecture.input_modalities</c> contains <c>image</c>.</summary>
+        public bool SupportsImage { get; init; }
+        /// <summary>All declared input modalities (e.g. <c>text</c>, <c>image</c>).</summary>
+        public IReadOnlyList<string> InputModalities { get; init; } = Array.Empty<string>();
+        /// <summary>Where the server found the model, e.g. <c>cache</c>.</summary>
+        public string? Source { get; init; }
+        /// <summary>Whether the server allows removing this model.</summary>
+        public bool CanRemove { get; init; }
+    }
+
+    /// <summary>
+    /// Fetches the server's model list (<c>GET /models</c>) — the authoritative
+    /// set of locally available (cached) models, with each model's load state and
+    /// architecture (vision capability). Returns an empty list when the server
+    /// isn't running or the request fails.
+    /// </summary>
+    public async Task<IReadOnlyList<ServerModel>> GetModelsAsync(CancellationToken cancel = default)
+    {
+        if (ServerStatus != ServerState.Running)
+            return Array.Empty<ServerModel>();
+
+        var baseUrl = $"http://localhost:{ServerPort}";
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        try
+        {
+            using var resp = await client.GetAsync($"{baseUrl}/models", cancel);
+            resp.EnsureSuccessStatusCode();
+            await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
+            var dto = await JsonSerializer.DeserializeAsync<ModelsResponseDto>(stream, cancellationToken: cancel);
+            return dto?.Data?.Select(Map).ToList() ?? new List<ServerModel>();
+        }
+        catch
+        {
+            return Array.Empty<ServerModel>();
+        }
+    }
+
+    private static ServerModel Map(ServerModelDto d) => new()
+    {
+        Id = d.Id ?? "",
+        Path = d.Path,
+        Status = d.Status?.Value ?? "",
+        SupportsImage = d.Architecture?.InputModalities != null
+            && d.Architecture.InputModalities.Contains("image", StringComparer.OrdinalIgnoreCase),
+        InputModalities = (IReadOnlyList<string>?)d.Architecture?.InputModalities ?? Array.Empty<string>(),
+        Source = d.Source,
+        CanRemove = d.CanRemove,
+    };
+
+    // ---- /models JSON DTOs ----
+
+    private sealed class ModelsResponseDto
+    {
+        [JsonPropertyName("data")] public List<ServerModelDto>? Data { get; set; }
+    }
+
+    private sealed class ServerModelDto
+    {
+        [JsonPropertyName("id")] public string Id { get; set; } = "";
+        [JsonPropertyName("path")] public string? Path { get; set; }
+        [JsonPropertyName("status")] public ModelStatusDto? Status { get; set; }
+        [JsonPropertyName("architecture")] public ArchitectureDto? Architecture { get; set; }
+        [JsonPropertyName("source")] public string? Source { get; set; }
+        [JsonPropertyName("can_remove")] public bool CanRemove { get; set; }
+    }
+
+    private sealed class ModelStatusDto
+    {
+        [JsonPropertyName("value")] public string Value { get; set; } = "";
+    }
+
+    private sealed class ArchitectureDto
+    {
+        [JsonPropertyName("input_modalities")] public List<string>? InputModalities { get; set; }
+        [JsonPropertyName("output_modalities")] public List<string>? OutputModalities { get; set; }
     }
 
     /// <summary>
