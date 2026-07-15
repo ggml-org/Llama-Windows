@@ -128,6 +128,8 @@ namespace LlamaApp.Views
                         Size = repo.Size,
                         License = repo.License,
                         Downloadable = false,
+                        Brand = repo.Brand,
+                        Logo = ModelItem.ResolveLogo(repo.Brand),
                     });
                 }
 
@@ -168,6 +170,8 @@ namespace LlamaApp.Views
                         Size = repo.Size,
                         License = repo.License,
                         Downloadable = true,
+                        Brand = repo.Brand,
+                        Logo = ModelItem.ResolveLogo(repo.Brand),
                     });
                 }
             }

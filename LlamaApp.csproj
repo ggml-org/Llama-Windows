@@ -50,6 +50,12 @@
         <Content Include="Assets\Wide310x150Logo.scale-200.png"/>
         <Content Include="Assets\llama.ico"/>
         <Content Include="Assets\llama-white.svg"/>
+        <Content Include="Assets\Logos\qwen.svg"/>
+        <Content Include="Assets\Logos\gemma.svg"/>
+        <Content Include="Assets\Logos\gpt.svg"/>
+        <Content Include="Assets\Logos\mistral.svg"/>
+        <Content Include="Assets\Logos\nvidia.svg"/>
+        <Content Include="Assets\Logos\z.svg"/>
     </ItemGroup>
 
     <ItemGroup>
@@ -82,6 +88,9 @@
     -->
     <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
         <ProjectCapability Include="Msix"/>
+    </ItemGroup>
+    <ItemGroup>
+      <Folder Include="Assets\Logos\" />
     </ItemGroup>
 
     <!-- 

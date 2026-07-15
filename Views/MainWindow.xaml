@@ -45,7 +45,7 @@
                             Width="32" Height="32"
                             CornerRadius="6"
                             Background="{ThemeResource ControlFillColorSecondaryBrush}">
-                        <Image Source="{x:Bind Logo}"
+                        <Image Source="{x:Bind Logo, Mode=OneWay}"
                                Stretch="Uniform"
                                Margin="4" />
                     </Border>
@@ -91,7 +91,7 @@
                             Width="32" Height="32"
                             CornerRadius="6"
                             Background="{ThemeResource ControlFillColorSecondaryBrush}">
-                        <Image Source="{x:Bind Logo}"
+                        <Image Source="{x:Bind Logo, Mode=OneWay}"
                                Stretch="Uniform"
                                Margin="4" />
                     </Border>
