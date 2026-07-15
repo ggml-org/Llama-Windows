@@ -165,10 +165,24 @@
         <!-- ============ Section 2: Available (local models) ============ -->
         <StackPanel Grid.Row="2"
                     Margin="16,12,16,12" Spacing="8">
-            <TextBlock Text="Available"
-                       FontSize="13"
-                       FontWeight="SemiBold"
-                       Opacity="0.7" />
+            <!-- Section title + link to the running server's API. The link is
+                 styled gray/non-bold (not white/bold) to read as a subtle href. -->
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Available"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           Opacity="0.7" />
+                <HyperlinkButton x:Name="ServerLink"
+                                 Content="localhost:2276/v1"
+                                 NavigateUri="http://localhost:2276/v1"
+                                 FontSize="13"
+                                 FontWeight="Normal"
+                                 Opacity="0.55"
+                                 Padding="0"
+                                 MinWidth="0"
+                                 MinHeight="0"
+                                 VerticalAlignment="Center" />
+            </StackPanel>
 
             <!-- Empty state — shown when there are no local models. -->
             <TextBlock x:Name="NoLocalModelsText"

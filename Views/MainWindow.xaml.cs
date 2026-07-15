@@ -96,29 +96,48 @@ namespace LlamaApp.Views
         /// </summary>
         private void LoadModels()
         {
-            var logo = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(
-                new Uri("https://huggingface.co/datasets/huggingface/brand-assets/resolve/main/hf-logo.svg"));
-
-            // Placeholder local models (would be scanned from ~/.cache/huggingface/hub).
-            LocalModels.Add(new ModelItem
-            {
-                Name = "Llama 3.2 3B Instruct",
-                Parameters = "3.21B",
-                Size = "2.0 GB",
-                License = "Llama 3.2 Community",
-                Logo = logo,
-            });
-            LocalModels.Add(new ModelItem
-            {
-                Name = "Phi-3.5 Mini Instruct",
-                Parameters = "3.82B",
-                Size = "2.4 GB",
-                License = "MIT",
-                Logo = logo,
-            });
-
-            // Recommended models are fetched from the llama.app catalog.
+            // Local (Available) and Recommended models are both fetched async.
+            _ = LoadLocalModelsAsync();
             _ = LoadRecommendedModelsAsync();
+        }
+
+        /// <summary>
+        /// Scans the local Hugging Face cache (per <see cref="Settings.CacheDirectory"/>)
+        /// for downloaded GGUF models and populates <see cref="LocalModels"/>. Fire-
+        /// and-forget from the constructor; updates the UI incrementally.
+        /// </summary>
+        private async Task LoadLocalModelsAsync()
+        {
+            try
+            {
+                var cacheDir = Settings.Current.CacheDirectory;
+                var repos = await LlamaApp.HuggingFace.Catalog.FetchLocalAsync(cacheDir);
+
+                foreach (var repo in repos)
+                {
+                    var label = !string.IsNullOrEmpty(repo.DisplayName)
+                        ? !string.IsNullOrEmpty(repo.Quant)
+                            ? $"{repo.DisplayName} ({repo.Quant})"
+                            : repo.DisplayName
+                        : repo.Name;
+
+                    LocalModels.Add(new ModelItem
+                    {
+                        Name = label,
+                        Parameters = repo.Parameters,
+                        Size = repo.Size,
+                        License = repo.License,
+                        Downloadable = false,
+                    });
+                }
+
+                UpdateEmptyState();
+            }
+            catch
+            {
+                // Cache scan failure — leave the list empty ("No model yet").
+                UpdateEmptyState();
+            }
         }
 
         /// <summary>

@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LlamaApp.Common;
@@ -16,7 +15,6 @@ public sealed class Catalog : IModelSource
 {
     /// <summary>Remote catalog endpoint.</summary>
     private static readonly Uri CatalogUrl = new("https://llama.app/v1/catalog.json");
-
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -83,13 +81,160 @@ public sealed class Catalog : IModelSource
     }
 
     /// <summary>
-    /// Local (already-downloaded) models. Not yet implemented — returns an
-    /// empty collection until the Hugging Face cache scan is wired up.
+    /// Returns local (already-downloaded) models by scanning the HF cache.
     /// </summary>
-    public Task<ICollection<T>> GetLocalModelsAsync<T>() where T : IModel
+    public async Task<ICollection<T>> GetLocalModelsAsync<T>() where T : IModel
     {
-        ICollection<T> empty = Array.Empty<T>();
-        return Task.FromResult(empty);
+        // The cache directory defaults to the standard HF hub layout; callers
+        // can override it via Settings. Here we use the default — MainWindow
+        // passes the user-configured path to FetchLocalAsync directly.
+        var repos = await FetchLocalAsync(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache", "huggingface", "hub")
+        );
+        return repos.Cast<T>().ToList();
+    }
+
+    /// <summary>
+    /// Scans the local Hugging Face cache (see <c>Settings.CacheDirectory</c>)
+    /// for downloaded GGUF models and returns one <see cref="Repository"/> per
+    /// found build. Each entry is enriched with catalog metadata (display name,
+    /// params, license, …) when its repo id matches a remote catalog entry;
+    /// otherwise it's surfaced with basic info derived from the repo id and the
+    /// on-disk file size.
+    /// </summary>
+    public static async Task<IReadOnlyList<Repository>> FetchLocalAsync(string cacheDirectory, CancellationToken cancel = default)
+    {
+        if (!Directory.Exists(cacheDirectory))
+            return [];
+
+        // Build a repo-id → catalog-entry lookup so local models inherit rich
+        // metadata (display name, params, license, …) when available. Failures
+        // here (offline, parse error) just mean we fall back to cache-derived info.
+        Dictionary<string, Repository>? catalogLookup = null;
+        try
+        {
+            var remote = await FetchAsync(cancel);
+            catalogLookup = remote.ToDictionary(r => r.Name, StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            // Offline or parse error — proceed with cache-only info.
+        }
+
+        var results = new List<Repository>();
+        foreach (var modelDir in Directory.EnumerateDirectories(cacheDirectory, "models--*"))
+        {
+            cancel.ThrowIfCancellationRequested();
+
+            var dirName = Path.GetFileName(modelDir);
+            // "models--{org}--{repo}" → "{org}/{repo}"
+            var repoId = dirName["models--".Length..].Replace("--", "/");
+
+            var snapshotsDir = Path.Combine(modelDir, "snapshots");
+            if (!Directory.Exists(snapshotsDir))
+                continue;
+
+            // Each snapshot is a commit hash; pick the first that has GGUF files.
+            foreach (var snapshotDir in Directory.EnumerateDirectories(snapshotsDir))
+            {
+                cancel.ThrowIfCancellationRequested();
+
+                foreach (var ggufFile in Directory.EnumerateFiles(snapshotDir, "*.gguf"))
+                {
+                    cancel.ThrowIfCancellationRequested();
+
+                    var sizeBytes = TryGetFileSize(ggufFile);
+                    var fileName = Path.GetFileNameWithoutExtension(ggufFile);
+
+                    // Match against the remote catalog by repo id for metadata.
+                    if (catalogLookup != null &&
+                        catalogLookup.TryGetValue(repoId, out var matched))
+                    {
+                        results.Add(new Repository
+                        {
+                            Name = matched.Name,
+                            Description = matched.Description,
+                            License = matched.License,
+                            Parameters = matched.Parameters,
+                            // Prefer the actual on-disk size over the catalog's
+                            // (which is the download size, not necessarily what landed).
+                            Size = sizeBytes.HasValue ? FormatBytes(sizeBytes.Value) : matched.Size,
+                            Vision = matched.Vision,
+                            DisplayName = matched.DisplayName,
+                            Brand = matched.Brand,
+                            Quant = matched.Quant,
+                            SizeBytes = sizeBytes ?? matched.SizeBytes,
+                            Featured = matched.Featured,
+                        });
+                    }
+                    else
+                    {
+                        // Not in the catalog — surface with basic info.
+                        results.Add(new Repository
+                        {
+                            Name = repoId,
+                            Description = "",
+                            License = "Unknown",
+                            Parameters = "",
+                            Size = sizeBytes.HasValue ? FormatBytes(sizeBytes.Value) : "",
+                            Vision = false,
+                            DisplayName = fileName,
+                            Brand = repoId.Split('/', StringSplitOptions.None).FirstOrDefault(),
+                            Quant = ExtractQuant(fileName),
+                            SizeBytes = sizeBytes ?? 0,
+                        });
+                    }
+                }
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Returns the size of a file, following symlinks/hardlinks to the actual
+    /// blob. Returns null if the file can't be read (e.g. it's a broken symlink
+    /// to a not-yet-downloaded blob).
+    /// </summary>
+    private static ulong? TryGetFileSize(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            // On Windows, HF cache snapshot files can be symlinks to blobs;
+            // resolve the link target to get the real size. If the link is
+            // broken (download incomplete), Length throws — return null.
+            return info.LinkTarget != null
+                ? (ulong?)new FileInfo(info.LinkTarget).Length
+                : (ulong)info.Length;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Extracts a quant label from a GGUF filename, e.g. "model-Q4_K_M.gguf" → "Q4_K_M".</summary>
+    private static string? ExtractQuant(string fileName)
+    {
+        var parts = fileName.Split('-');
+        return parts.Select(p => p.Trim()).FirstOrDefault(
+            trimmed => trimmed.Length > 1 && (trimmed[0] == 'Q' || trimmed.StartsWith("mxfp", StringComparison.OrdinalIgnoreCase))
+        );
+    }
+
+    /// <summary>Formats a byte count as a human-readable size string, e.g. 2526080992 → "2.5 GB".</summary>
+    private static string FormatBytes(ulong bytes)
+    {
+        string[] units = { "B", "KB", "MB", "GB", "TB" };
+        double size = bytes;
+        var unit = 0;
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+        return unit == 0 ? $"{bytes} B" : $"{size:0.#} {units[unit]}";
     }
 
     // ---- JSON DTOs matching the catalog.json schema ----
