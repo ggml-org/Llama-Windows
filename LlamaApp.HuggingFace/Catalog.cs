@@ -50,23 +50,25 @@ public sealed class Catalog : IModelSource
     private static List<Repository> Flatten(CatalogFamily[] families)
     {
         var repos = new List<Repository>(families.Length * 4);
-        repos.AddRange(from family in families
-        from size in family.Sizes
-        from build in size.Builds
-        select new Repository
-        {
-            Name = build.Repo,
-            Description = family.Description,
-            License = family.License,
-            Parameters = size.Params,
-            Size = build.Size,
-            Vision = size.Vision,
-            DisplayName = size.Name,
-            Brand = family.Brand,
-            Quant = build.Quant,
-            SizeBytes = build.SizeBytes,
-            Featured = family.Featured,
-        });
+        repos.AddRange(
+            from family in families
+            from size in family.Sizes
+            from build in size.Builds
+            select new Repository
+            {
+                Name = build.Repo,
+                Description = family.Description,
+                License = family.License,
+                Parameters = size.Params,
+                Size = build.Size,
+                Vision = size.Vision,
+                DisplayName = size.Name,
+                Brand = family.Brand,
+                Quant = build.Quant,
+                SizeBytes = build.SizeBytes,
+                Featured = family.Featured,
+            }
+        );
 
         return repos;
     }

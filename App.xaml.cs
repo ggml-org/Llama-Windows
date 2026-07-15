@@ -36,6 +36,13 @@ namespace LlamaApp
 
             // Add the system-tray icon with its right-click context menu.
             _trayIcon = new TrayIconManager(_window);
+
+            // Ensure a llama.cpp binary is present, installing it on demand via
+            // install.ps1 when none is found. Fire-and-forget: it runs on the UI
+            // thread so LlamaManager.StateChanged (and thus the footer version
+            // line) updates land on the UI thread. The flyout footer shows the
+            // resolved version (or "not installed" / the install state).
+            _ = Llama.LlamaManager.Shared.EnsureReadyAsync();
         }
     }
 }

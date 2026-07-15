@@ -79,6 +79,12 @@ namespace LlamaApp.Views
             LoadModels();
             LoadVersionInfo();
             UpdateEmptyState();
+
+            // Refresh the footer's llama.cpp version line as the binary is
+            // detected/installed. LlamaManager.EnsureReadyAsync is kicked off
+            // by App.OnLaunched; its StateChanged fires on the UI thread, so we
+            // can touch the TextBlock directly.
+            Llama.LlamaManager.Shared.StateChanged += LlamaManager_StateChanged;
         }
 
         // ---- Data ----
@@ -177,6 +183,24 @@ namespace LlamaApp.Views
             LlamaVersionText.Text = Llama.LlamaRunner.Version is { } v
                 ? $"llama.cpp {v}"
                 : "llama.cpp not installed";
+        }
+
+        /// <summary>
+        /// Handler for <see cref="Llama.LlamaManager.StateChanged"/>: re-renders the
+        /// footer llama.cpp line to reflect the current install state — version
+        /// once resolved, "installing…" while the install script runs, or the
+        /// failure message if it failed.
+        /// </summary>
+        private void LlamaManager_StateChanged(object? sender, EventArgs e)
+        {
+            var mgr = Llama.LlamaManager.Shared;
+            LlamaVersionText.Text = mgr.State switch
+            {
+                Llama.LlamaManager.InstallState.Installing => "llama.cpp installing…",
+                Llama.LlamaManager.InstallState.Failed when mgr.FailureMessage is { } msg
+                    => $"llama.cpp install failed: {msg}",
+                _ => Llama.LlamaRunner.Version is { } v ? $"llama.cpp {v}" : "llama.cpp not installed",
+            };
         }
 
         // ---- Footer actions ----
