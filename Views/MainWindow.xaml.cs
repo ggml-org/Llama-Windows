@@ -1,10 +1,12 @@
 using System.Collections.ObjectModel;
 using System.Drawing;
-using System.Reflection;
 using System.Runtime.InteropServices;
+using LlamaApp.Common;
+using LlamaApp.HuggingFace;
+using LlamaApp.Llama;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
 using Windows.Graphics;
-using LlamaApp.HuggingFace;
 using WinRT.Interop;
 
 namespace LlamaApp.Views
@@ -77,14 +79,7 @@ namespace LlamaApp.Views
             Activated += MainWindow_Activated;
 
             LoadModels();
-            LoadVersionInfo();
             UpdateEmptyState();
-
-            // Refresh the footer's llama.cpp version line as the binary is
-            // detected/installed. LlamaManager.EnsureReadyAsync is kicked off
-            // by App.OnLaunched; its StateChanged fires on the UI thread, so we
-            // can touch the TextBlock directly.
-            Llama.LlamaManager.Shared.StateChanged += LlamaManager_StateChanged;
         }
 
         // ---- Data ----
@@ -124,9 +119,12 @@ namespace LlamaApp.Views
                     LocalModels.Add(new ModelItem
                     {
                         Name = label,
+                        RepoName = repo.Name,
                         Parameters = repo.Parameters,
                         Size = repo.Size,
                         License = repo.License,
+                        Vision = repo.Vision,
+                        Quant = repo.Quant,
                         Downloadable = false,
                         Brand = repo.Brand,
                         Logo = ModelItem.ResolveLogo(repo.Brand),
@@ -166,9 +164,12 @@ namespace LlamaApp.Views
                     RecommendedModels.Add(new ModelItem
                     {
                         Name = label,
+                        RepoName = repo.Name,
                         Parameters = repo.Parameters,
                         Size = repo.Size,
                         License = repo.License,
+                        Vision = repo.Vision,
+                        Quant = repo.Quant,
                         Downloadable = true,
                         Brand = repo.Brand,
                         Logo = ModelItem.ResolveLogo(repo.Brand),
@@ -194,36 +195,92 @@ namespace LlamaApp.Views
             LocalModelsList.Visibility = empty ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
         }
 
-        /// <summary>
-        /// Fills the footer version lines: the app's assembly version and the
-        /// bundled llama.cpp version (or "not installed" when absent).
-        /// </summary>
-        private void LoadVersionInfo()
-        {
-            var ver = Assembly.GetExecutingAssembly().GetName().Version;
-            AppVersionText.Text = ver != null ? $"LlamaApp {ver}" : "LlamaApp";
+        // ---- Model download + launch ----
 
-            LlamaVersionText.Text = Llama.LlamaRunner.Version is { } v
-                ? $"llama.cpp {v}"
-                : "llama.cpp not installed";
+        /// <summary>
+        /// Fired when a row in the Recommended Models section is tapped. Moves
+        /// the model to the Available section with a progress ring, kicks off
+        /// <see cref="LlamaManager.DownloadModelAsync"/> via the running llama
+        /// server, then calls <see cref="LlamaManager.LaunchModelAsync"/> when
+        /// the download completes.
+        /// </summary>
+        private void RecommendedModel_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+        {
+            if (sender is not Microsoft.UI.Xaml.FrameworkElement fe)
+                return;
+            if (fe.DataContext is not ModelItem item)
+                return;
+            if (item.IsDownloading)
+                return; // already in flight (double-tap guard)
+
+            // Move the model from Recommended → Available (downloading).
+            RecommendedModels.Remove(item);
+            item.Downloadable = false;
+            item.IsDownloading = true;
+            LocalModels.Add(item);
+            UpdateEmptyState();
+
+            _ = DownloadAndLaunchAsync(item);
         }
 
         /// <summary>
-        /// Handler for <see cref="Llama.LlamaManager.StateChanged"/>: re-renders the
-        /// footer llama.cpp line to reflect the current install state — version
-        /// once resolved, "installing…" while the install script runs, or the
-        /// failure message if it failed.
+        /// Drives a single model's download → launch lifecycle. Reports
+        /// progress to the <see cref="ModelItem.DownloadFraction"/> property
+        /// (bound to the progress ring), then calls
+        /// <see cref="LlamaManager.LaunchModelAsync"/> on success.
         /// </summary>
-        private void LlamaManager_StateChanged(object? sender, EventArgs e)
+        private async Task DownloadAndLaunchAsync(ModelItem item)
         {
-            var mgr = Llama.LlamaManager.Shared;
-            LlamaVersionText.Text = mgr.State switch
+            var mgr = LlamaManager.Shared;
+            var queue = DispatcherQueue; // marshal progress back to the UI thread
+            var progress = new Progress<ModelDownloadProgress>(p =>
             {
-                Llama.LlamaManager.InstallState.Installing => "llama.cpp installing…",
-                Llama.LlamaManager.InstallState.Failed when mgr.FailureMessage is { } msg
-                    => $"llama.cpp install failed: {msg}",
-                _ => Llama.LlamaRunner.Version is { } v ? $"llama.cpp {v}" : "llama.cpp not installed",
-            };
+                void Apply()
+                {
+                    if (p.TotalBytes > 0)
+                        item.DownloadFraction = p.Fraction;
+                }
+                if (queue is null || queue.HasThreadAccess)
+                    Apply();
+                else
+                    queue.TryEnqueue(() => Apply());
+            });
+
+            try
+            {
+                var ok = await mgr.DownloadModelAsync(item, progress);
+                void Complete()
+                {
+                    item.IsDownloading = false;
+                    if (ok)
+                        _ = mgr.LaunchModelAsync(item); // download done — load it
+                    else
+                        item.DownloadFailed = true;
+                }
+                if (queue is null || queue.HasThreadAccess)
+                    Complete();
+                else
+                    queue.TryEnqueue(Complete);
+            }
+            catch (OperationCanceledException)
+            {
+                if (queue is null || queue.HasThreadAccess)
+                    item.IsDownloading = false;
+                else
+                    queue.TryEnqueue(() => item.IsDownloading = false);
+            }
+            catch
+            {
+                void Fail()
+                {
+                    item.IsDownloading = false;
+                    item.DownloadFailed = true;
+                }
+                if (queue is null || queue.HasThreadAccess)
+                    Fail();
+                else
+                    queue.TryEnqueue(Fail);
+            }
         }
 
         // ---- Footer actions ----

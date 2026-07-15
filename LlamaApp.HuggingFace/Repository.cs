@@ -12,6 +12,15 @@ public record Repository : IModel
     /// <summary>Hugging Face repo id, e.g. "ggml-org/gpt-oss-20b-GGUF".</summary>
     public required string Name { get; init; }
 
+    /// <summary>
+    /// Server model id = <c>&lt;repo&gt;:&lt;quant&gt;</c> (or just <c>&lt;repo&gt;</c>
+    /// when <see cref="Quant"/> is empty) — the form <c>POST /models/load</c>
+    /// requires. See <see cref="IModel.ServerModelId"/>.
+    /// </summary>
+    public string ServerModelId => string.IsNullOrEmpty(Quant)
+        ? Name
+        : $"{Name}:{Quant}";
+
     public required string Description { get; init; }
     public required string License { get; init; }
 
