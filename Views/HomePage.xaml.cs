@@ -7,23 +7,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace LlamaApp.Views;
 
-/// <summary>
-/// Lightweight view-model item used by the HomePage placeholders.
-/// Represents either a locally downloaded GGUF model or a Hugging Face Hub model.
-/// </summary>
-public sealed class ModelItem
-{
-    public string Name { get; set; } = "";
-    public string Description { get; set; } = "";
-    /// <summary>Short display name: the part of <see cref="Name"/> after the last '/'.</summary>
-    public string DisplayName => Name.Split('/', StringSplitOptions.RemoveEmptyEntries).Last().Trim();
-    public string Parameters { get; set; } = "";
-    public string Size { get; set; } = "";
-    public string License { get; set; } = "";
-    public ImageSource? Logo { get; set; }
-    /// <summary>True for Hub models that can be downloaded; false for locally available models (run/play).</summary>
-    public bool Downloadable { get; set; }
-}
+// ModelItem is defined in Views/ModelItem.cs (shared with MainWindow).
 
 /// <summary>Converts a bool to Visibility (true => Visible, false => Collapsed).</summary>
 public sealed class BoolToVisibilityConverter : Microsoft.UI.Xaml.Data.IValueConverter
