@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LlamaApp.LlamaCpp", "LlamaA
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LlamaApp.Catalog", "LlamaApp.Catalog\LlamaApp.Catalog.csproj", "{85B64DF7-37F2-4AAD-A246-4E963D443A1A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LlamaApp.LlamaCpp.Tests", "LlamaApp.LlamaCpp.Tests\LlamaApp.LlamaCpp.Tests.csproj", "{C9062309-59B7-4364-9AC7-A277B0F44FAA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|ARM64 = Debug|ARM64
@@ -86,5 +88,17 @@ Global
 		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Release|x64.Build.0 = Release|Any CPU
 		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Release|x86.ActiveCfg = Release|Any CPU
 		{85B64DF7-37F2-4AAD-A246-4E963D443A1A}.Release|x86.Build.0 = Release|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Debug|ARM64.ActiveCfg = Debug|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Debug|ARM64.Build.0 = Debug|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Debug|x64.Build.0 = Debug|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Debug|x86.Build.0 = Debug|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Release|ARM64.ActiveCfg = Release|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Release|ARM64.Build.0 = Release|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Release|x64.ActiveCfg = Release|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Release|x64.Build.0 = Release|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Release|x86.ActiveCfg = Release|Any CPU
+		{C9062309-59B7-4364-9AC7-A277B0F44FAA}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

@@ -18,7 +18,7 @@
 
         <!-- Exclude nested sub-project directories from the default item globs.
              They are compiled by their own .csproj files, not by this one. -->
-        <DefaultItemExcludes>$(DefaultItemExcludes);LlamaApp.Common\**;LlamaApp.HuggingFace\**;LlamaApp.LlamaCpp\**;LlamaApp.Catalog\**</DefaultItemExcludes>
+        <DefaultItemExcludes>$(DefaultItemExcludes);LlamaApp.Common\**;LlamaApp.HuggingFace\**;LlamaApp.LlamaCpp\**;LlamaApp.LlamaCpp.Tests\**;LlamaApp.Catalog\**</DefaultItemExcludes>
 
         <!-- App Options -->
         <UseRidGraph>true</UseRidGraph>

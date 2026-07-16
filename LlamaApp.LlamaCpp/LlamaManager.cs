@@ -798,7 +798,7 @@ public sealed class LlamaManager
         }
     }
 
-    private static ServerModel Map(ServerModelDto d) => new()
+    internal static ServerModel Map(ServerModelDto d) => new()
     {
         Id = d.Id ?? "",
         Path = d.Path,
@@ -812,12 +812,12 @@ public sealed class LlamaManager
 
     // ---- /models JSON DTOs ----
 
-    private sealed class ModelsResponseDto
+    internal sealed class ModelsResponseDto
     {
         [JsonPropertyName("data")] public List<ServerModelDto>? Data { get; init; }
     }
 
-    private sealed class ServerModelDto
+    internal sealed class ServerModelDto
     {
         [JsonPropertyName("id")] public string Id { get; set; } = "";
         [JsonPropertyName("path")] public string? Path { get; set; }
@@ -827,12 +827,12 @@ public sealed class LlamaManager
         [JsonPropertyName("can_remove")] public bool CanRemove { get; set; }
     }
 
-    private sealed class ModelStatusDto
+    internal sealed class ModelStatusDto
     {
         [JsonPropertyName("value")] public string Value { get; set; } = "";
     }
 
-    private sealed class ArchitectureDto
+    internal sealed class ArchitectureDto
     {
         [JsonPropertyName("input_modalities")] public List<string>? InputModalities { get; set; }
         [JsonPropertyName("output_modalities")] public List<string>? OutputModalities { get; set; }
@@ -843,7 +843,7 @@ public sealed class LlamaManager
     /// <c>data</c> JSON) tuples. Standard SSE framing: <c>data:</c> lines carry
     /// the payload, a blank line dispatches the event.
     /// </summary>
-    private static async IAsyncEnumerable<(string Event, string Model, JsonElement Data)> ParseSseStreamAsync(
+    internal static async IAsyncEnumerable<(string Event, string Model, JsonElement Data)> ParseSseStreamAsync(
         StreamReader reader,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancel)
     {
@@ -866,7 +866,9 @@ public sealed class LlamaManager
                     var root = doc.RootElement;
                     var evt = root.TryGetProperty("event", out var e) ? e.GetString() ?? "" : "";
                     var mdl = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
-                    var data = root.TryGetProperty("data", out var d) ? d : default;
+                    // Clone detaches the element from the JsonDocument so callers
+                    // can safely consume it after the enumerator is disposed.
+                    var data = root.TryGetProperty("data", out var d) ? d.Clone() : default;
 
                     if (evt.Length > 0)
                         yield return (evt, mdl, data);
@@ -889,7 +891,7 @@ public sealed class LlamaManager
     /// Sums <c>done</c>/<c>total</c> bytes across all URLs in a
     /// <c>download_progress</c> data payload (a repo can have multiple files).
     /// </summary>
-    private static (long downloaded, long total) SumProgress(JsonElement data)
+    internal static (long downloaded, long total) SumProgress(JsonElement data)
     {
         long downloaded = 0, total = 0;
         if (data.ValueKind != JsonValueKind.Object) return (0, 0);
