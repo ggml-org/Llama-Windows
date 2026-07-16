@@ -107,6 +107,11 @@ public sealed class LlamaManager
     private ServerState _serverState = ServerState.Stopped;
     private Process? _serverProcess;
 
+    // Model-state poller: a background loop that fetches /models every second
+    // while the server is Running and publishes the snapshot via ModelsChanged.
+    private CancellationTokenSource? _pollerCts;
+    private Task? _pollerTask;
+
     /// <summary>Current installation state.</summary>
     public InstallState State
     {
@@ -161,12 +166,23 @@ public sealed class LlamaManager
         {
             if (_serverState == value) return;
             _serverState = value;
+            // The model-state poller runs only while the server is up: start it
+            // on Running, tear it down on any other state (Stopped/Failed).
+            if (value == ServerState.Running) StartModelPoller();
+            else StopModelPoller();
             StateChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
     /// <summary>Raised whenever any observable property changes.</summary>
     public event EventHandler? StateChanged;
+
+    /// <summary>
+    /// Raised on a background thread roughly once per second with a fresh
+    /// <c>GET /models</c> snapshot while the server is <see cref="ServerState.Running"/>.
+    /// Handlers should marshal to the UI thread before touching view models.
+    /// </summary>
+    public event EventHandler<IReadOnlyList<ServerModel>>? ModelsChanged;
 
     private LlamaManager() { }
 
@@ -191,6 +207,7 @@ public sealed class LlamaManager
         // 1. Adopt an already-running server (no binary/process needed).
         if (await IsServerReachableAsync(cancel))
         {
+            Log.Info("Adopted an already-running llama server");
             ServerStatus = ServerState.Running;
             // Best-effort: resolve the binary so Version is populated for display,
             // but don't block the client on it.
@@ -200,6 +217,7 @@ public sealed class LlamaManager
 
         // 2/3. Resolve the binary; install if missing; then launch the server.
         var resolved = Resolve();
+        Log.Info($"Resolved llama binary: kind={resolved.Kind} path={resolved.Path ?? "<none>"}");
         switch (resolved.Kind)
         {
             case ResolutionKind.Managed:
@@ -259,7 +277,7 @@ public sealed class LlamaManager
                 Version = await ReadVersionAsync(p, cancel);
             }
         }
-        catch { /* best-effort */ }
+        catch (Exception ex) { Log.Warn(ex, "best-effort version resolve failed"); }
     }
 
     /// <summary>
@@ -288,6 +306,7 @@ public sealed class LlamaManager
         }
         catch (Exception ex)
         {
+            Log.Error(ex, "llama binary install failed");
             FailureMessage = ex.Message;
             State = InstallState.Failed;
             return false;
@@ -338,6 +357,8 @@ public sealed class LlamaManager
             if (!string.IsNullOrEmpty(CacheDirectory) && Directory.Exists(CacheDirectory))
                 psi.EnvironmentVariables["HF_HUB_CACHE"] = CacheDirectory;
 
+            Log.Info($"Starting llama server: {BinaryPath} serve --port {ServerPort} --jinja");
+
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             proc.Exited += (_, _) =>
             {
@@ -347,11 +368,19 @@ public sealed class LlamaManager
                 // process field here. Only flip state if this wasn't an
                 // intentional stop (StopServer sets Stopped before killing).
                 if (ServerStatus != ServerState.Stopped)
+                {
+                    Log.Warn($"llama server process exited unexpectedly (code={proc.ExitCode})");
                     ServerStatus = ServerState.Failed;
+                }
+                else
+                {
+                    Log.Info("llama server process exited (intentional stop)");
+                }
             };
 
             if (!proc.Start())
             {
+                Log.Error("llama server process failed to start (proc.Start returned false)");
                 ServerStatus = ServerState.Failed;
                 return false;
             }
@@ -360,11 +389,13 @@ public sealed class LlamaManager
             // Wait for the port to respond — the server takes a moment to bind.
             if (await WaitForPortAsync(TimeSpan.FromSeconds(15), cancel))
             {
+                Log.Info("llama server is reachable");
                 ServerStatus = ServerState.Running;
                 return true;
             }
 
             // Timed out waiting for the port — the process may have exited.
+            Log.Error("llama server failed to bind within 15s (port probe timed out)");
             ServerStatus = ServerState.Failed;
             return false;
         }
@@ -372,8 +403,9 @@ public sealed class LlamaManager
         {
             throw;
         }
-        catch
+        catch (Exception ex)
         {
+            Log.Error(ex, "llama server start threw");
             ServerStatus = ServerState.Failed;
             return false;
         }
@@ -392,7 +424,7 @@ public sealed class LlamaManager
         if (proc == null || proc.HasExited) return;
         
         try { proc.Kill(entireProcessTree: true); }
-        catch { /* best-effort */ }
+        catch (Exception ex) { Log.Warn(ex, "best-effort server kill failed"); }
     }
 
     /// <summary>
@@ -425,6 +457,56 @@ public sealed class LlamaManager
         return false;
     }
 
+    // ---- Model-state poller ----
+
+    /// <summary>
+    /// Starts the background <c>GET /models</c> poller (every 1s) that publishes
+    /// fresh snapshots via <see cref="ModelsChanged"/>. Idempotent — restarts the
+    /// loop if one is already running. Torn down automatically when the server
+    /// leaves <see cref="ServerState.Running"/> (see <see cref="ServerStatus"/> setter).
+    /// </summary>
+    private void StartModelPoller()
+    {
+        StopModelPoller();
+        _pollerCts = new CancellationTokenSource();
+        var token = _pollerCts.Token;
+        _pollerTask = Task.Run(() => PollModelsAsync(token));
+    }
+
+    /// <summary>Stops the poller and releases its cancellation token. Safe to call repeatedly.</summary>
+    private void StopModelPoller()
+    {
+        try { _pollerCts?.Cancel(); } catch { /* best-effort */ }
+        try { _pollerCts?.Dispose(); } catch { /* best-effort */ }
+        _pollerCts = null;
+        // Don't await the loop: it exits on cancel within one delay interval;
+        // awaiting would block the UI thread (the ServerStatus setter runs on it).
+    }
+
+    /// <summary>
+    /// The poll loop: fetch <c>/models</c> every second and raise
+    /// <see cref="ModelsChanged"/> with the snapshot. Transient errors are
+    /// swallowed — the UI reconcile is additive and never clears rows on an
+    /// empty/error fetch, so a network blip doesn't flicker the list. Exits
+    /// cleanly on cancellation.
+    /// </summary>
+    private async Task PollModelsAsync(CancellationToken cancel)
+    {
+        while (!cancel.IsCancellationRequested)
+        {
+            IReadOnlyList<ServerModel> snapshot = Array.Empty<ServerModel>();
+            try { snapshot = await GetModelsAsync(cancel); }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { Log.Debug($"model poll fetch failed: {ex.Message}"); /* transient — keep the previous snapshot in effect */ }
+
+            try { ModelsChanged?.Invoke(this, snapshot); }
+            catch (Exception ex) { Log.Warn(ex, "ModelsChanged handler threw"); /* a handler error doesn't take down the poller */ }
+
+            try { await Task.Delay(1000, cancel); }
+            catch (OperationCanceledException) { break; }
+        }
+    }
+
     // ---- Model download ----
 
     /// <summary>
@@ -455,6 +537,7 @@ public sealed class LlamaManager
     /// <c>false</c> on failure or cancellation.</returns>
     public async Task<bool> DownloadModelAsync(IModel model, IProgress<ModelDownloadProgress>? progress = null, CancellationToken cancel = default)
     {
+        Log.Info($"Downloading model {model.Name}");
         if (ServerStatus != ServerState.Running)
         {
             progress?.Report(new Common.ModelDownloadProgress(
@@ -503,6 +586,7 @@ public sealed class LlamaManager
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            Log.Error(ex, "Download POST threw");
             await sseCts.CancelAsync();
             progress?.Report(new Common.ModelDownloadProgress(
                 modelName, 0, 0, Done: false, Failed: true, Message: ex.Message));
@@ -520,7 +604,7 @@ public sealed class LlamaManager
         // exception comes from sseCts (not the user's `cancel` token) it would
         // escape the `when (cancel.IsCancellationRequested)` guard below and
         // propagate out of the method — masking a successful download as a
-        // cancellation and skipping LaunchModelAsync. Breaking lets the finally
+        // cancellation and skipping the post-download load. Breaking lets the finally
         // block cancel + dispose the stream cleanly with no thrown exception.
         var success = false;
         var completed = false;
@@ -548,6 +632,7 @@ public sealed class LlamaManager
                         break;
 
                     case "download_failed":
+                        Log.Warn($"Server reported download_failed for {modelName}");
                         progress?.Report(new Common.ModelDownloadProgress(
                             modelName, 0, 0, Done: false, Failed: true, Message: "Download failed"));
                         completed = true;
@@ -577,13 +662,18 @@ public sealed class LlamaManager
     /// <summary>
     /// Asks the running llama server to load (launch) a model into memory via
     /// <c>POST /models/load</c>. In router mode, the server spawns a child
-    /// process for the model; this returns once the load request is accepted.
+    /// process for the model; this returns once the load request is accepted —
+    /// the model isn't necessarily <c>loaded</c> yet. Track the transition via
+    /// the <see cref="ModelsChanged"/> poller, which reports the server's
+    /// <c>status</c> field flipping from <c>unloaded</c> to <c>loaded</c>.
     /// </summary>
-    /// <param name="model">The model to load; <see cref="Common.IModel.Name"/> is the
-    /// repo id the server knows (must be downloaded first).</param>
+    /// <param name="model">The model to load; <see cref="Common.IModel.ServerModelId"/>
+    /// is the canonical id the server knows (the HF repo id with its
+    /// <c>:&lt;quant&gt;</c> suffix, e.g. <c>ggml-org/gemma-3-4b-it-GGUF:Q4_K_M</c>) —
+    /// <c>/models/load</c> requires the quant suffix, so the bare repo id won't do.</param>
     /// <param name="cancel">Cancellation token.</param>
     /// <returns><c>true</c> if the server accepted the load request.</returns>
-    public async Task<bool> LaunchModelAsync(IModel model, CancellationToken cancel = default)
+    public async Task<bool> LoadModelAsync(IModel model, CancellationToken cancel = default)
     {
         if (ServerStatus != ServerState.Running)
             return false;
@@ -592,13 +682,19 @@ public sealed class LlamaManager
 
         try
         {
+            Log.Info($"Loading model {model.ServerModelId}");
             const string payload = $$$"""{"model":"{{model.ServerModelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await Client.PostAsync($"{baseUrl}/models/load", content, cancel);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Log.Warn($"Server rejected model load ({(int)resp.StatusCode})");
+            }
             return resp.IsSuccessStatusCode;
         }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            Log.Error(ex, "Model load request threw");
             return false;
         }
     }
@@ -620,6 +716,8 @@ public sealed class LlamaManager
         public string? Path { get; init; }
         /// <summary>Load state: <c>loaded</c> or <c>unloaded</c>.</summary>
         public string Status { get; init; } = "";
+        /// <summary>True when <see cref="Status"/> is <c>loaded</c> (model resident in a child process).</summary>
+        public bool IsLoaded => string.Equals(Status, "loaded", StringComparison.OrdinalIgnoreCase);
         /// <summary>True when <c>architecture.input_modalities</c> contains <c>image</c>.</summary>
         public bool SupportsImage { get; init; }
         /// <summary>All declared input modalities (e.g. <c>text</c>, <c>image</c>).</summary>
@@ -864,6 +962,7 @@ public sealed class LlamaManager
             psi.ArgumentList.Add("-File");
             psi.ArgumentList.Add(scriptPath);
 
+            Log.Info("Running install.ps1 from " + InstallScriptUrl);
             using var proc = new Process();
             proc.StartInfo = psi;
             if (!proc.Start())
@@ -876,6 +975,9 @@ public sealed class LlamaManager
 
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
+            Log.Debug("install.ps1 exit code " + proc.ExitCode);
+            if (stdout.Length > 0) Log.Debug("install.ps1 stdout: " + stdout.Trim());
+            if (stderr.Length > 0) Log.Debug("install.ps1 stderr: " + stderr.Trim());
             if (proc.ExitCode != 0)
             {
                 throw new IOException($"install.ps1 exited with code {proc.ExitCode}.\n{stderr}");

@@ -17,6 +17,8 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private bool _isDownloading;
     private double _downloadFraction;
     private bool _downloadFailed;
+    private bool _isLoading;
+    private bool _isLoaded;
 
     /// <summary>Display label (e.g. "GPT-OSS 20B (mxfp4)").</summary>
     public string Name { get; set; } = "";
@@ -71,6 +73,8 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(PlayGlyphVisible));
                 OnPropertyChanged(nameof(ProgressRingVisible));
+                OnPropertyChanged(nameof(LoadingRingVisible));
+                OnPropertyChanged(nameof(OpenGlyphVisible));
                 OnPropertyChanged(nameof(IsIndeterminateDownload));
             }
         }
@@ -99,13 +103,73 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         set { if (_downloadFailed != value) { _downloadFailed = value; OnPropertyChanged(); } }
     }
 
+    // ---- Model load state (drives the Available-row action cell) ----
+    // The lifecycle of a local model row, left to right:
+    //   unloaded  --(play click)-->  loading  --(server reports loaded)-->  loaded
+    // A row that's mid-download shows the download ring first, then transitions
+    // to loading once the download finishes and the load request is sent.
+
+    /// <summary>
+    /// True while a load request is in flight — the row shows an indeterminate
+    /// progress ring. Set optimistically by the play-click handler; cleared by
+    /// the model-state poller once the server reports the model as <c>loaded</c>
+    /// (or by the load caller on rejection).
+    /// </summary>
+    public bool IsLoading
+    {
+        get => _isLoading;
+        set
+        {
+            if (_isLoading != value)
+            {
+                _isLoading = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(PlayGlyphVisible));
+                OnPropertyChanged(nameof(LoadingRingVisible));
+                OnPropertyChanged(nameof(OpenGlyphVisible));
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when the server reports the model as <c>loaded</c> — the row shows
+    /// the OpenInNewWindow glyph (click to open the WebUI). Updated by the
+    /// model-state poller.
+    /// </summary>
+    public bool IsLoaded
+    {
+        get => _isLoaded;
+        set
+        {
+            if (_isLoaded != value)
+            {
+                _isLoaded = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(PlayGlyphVisible));
+                OnPropertyChanged(nameof(LoadingRingVisible));
+                OnPropertyChanged(nameof(OpenGlyphVisible));
+            }
+        }
+    }
+
     // ---- Derived UI state (avoids needing XAML value converters) ----
 
-    /// <summary>True when the play glyph should be visible (not downloading).</summary>
-    public bool PlayGlyphVisible => !IsDownloading;
+    // The Available-row action cell shows exactly one of: play (unloaded),
+    // download ring (downloading from the Hub), indeterminate load ring
+    // (load request sent), or OpenInNewWindow (loaded). Download takes
+    // priority over load (a row can't load until it's downloaded).
 
-    /// <summary>True when the progress ring should be visible (downloading).</summary>
+    /// <summary>True when the play glyph should be visible (unloaded, idle).</summary>
+    public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded;
+
+    /// <summary>True when the download progress ring should be visible.</summary>
     public bool ProgressRingVisible => IsDownloading;
+
+    /// <summary>True when the indeterminate load ring should be visible.</summary>
+    public bool LoadingRingVisible => IsLoading && !IsDownloading;
+
+    /// <summary>True when the OpenInNewWindow glyph should be visible (loaded).</summary>
+    public bool OpenGlyphVisible => IsLoaded && !IsDownloading && !IsLoading;
 
     /// <summary>True when the ring should spin indeterminately (no bytes yet).</summary>
     public bool IsIndeterminateDownload => IsDownloading && DownloadFraction <= 0;

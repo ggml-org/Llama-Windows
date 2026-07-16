@@ -53,10 +53,11 @@ public sealed class Settings
                 if (s != null) return s;
             }
         }
-        catch
+        catch (Exception ex)
         {
             // Corrupt or unreadable settings — fall back to defaults rather than
             // crashing the app. The user can re-enter values in the Settings UI.
+            Common.Log.Warn(ex, "settings load failed; using defaults");
         }
         return new Settings();
     }
@@ -77,8 +78,9 @@ public sealed class Settings
             File.WriteAllText(SettingsPath, json);
             return true;
         }
-        catch
+        catch (Exception ex)
         {
+            Common.Log.Warn(ex, "settings save failed");
             return false;
         }
     }

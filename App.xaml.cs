@@ -14,6 +14,19 @@ namespace LlamaApp
         /// </summary>
         public App()
         {
+            // Initialize the global logger first, before anything that can
+            // fail: a debug build logs at Debug level, a release build at Info.
+            // The log lives at %LOCALAPPDATA%\LlamaApp\logs\LlamaApp-YYYYMMDD.log
+            // (rolled daily, old files swept to a 7-day retention).
+            Common.Log.Initialize(level:
+#if DEBUG
+                Common.LogLevel.Debug
+#else
+                Common.LogLevel.Info
+#endif
+            );
+            Common.Log.Info("LlamaApp starting");
+
             InitializeComponent();
         }
 
@@ -42,6 +55,7 @@ namespace LlamaApp
             // binary via install.ps1 then launch. Fire-and-forget; once reachable the
             // MainWindow fetches the Available model list via GET /models.
             Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
+            Common.Log.Info($"Cache directory: {Settings.Current.CacheDirectory}");
             _ = Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
         }
     }

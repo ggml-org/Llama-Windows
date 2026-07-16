@@ -114,11 +114,17 @@ public sealed class Catalog : IModelSource
         try
         {
             var remote = await FetchAsync(cancel);
-            catalogLookup = remote.ToDictionary(r => r.Name, StringComparer.OrdinalIgnoreCase);
+            // The catalog is flattened per-quant, so a repo can appear more than
+            // once — GroupBy keeps a single entry (ToDictionary would throw on
+            // the duplicate keys and silently skip enrichment).
+            catalogLookup = remote
+                .GroupBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         }
-        catch
+        catch (Exception ex)
         {
             // Offline or parse error — proceed with cache-only info.
+            Log.Warn(ex, "catalog fetch for local enrichment failed");
         }
 
         var results = new List<Repository>();

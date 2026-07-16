@@ -80,6 +80,18 @@ namespace LlamaApp.Views
         /// </summary>
         private Task<List<Repository>> _catalogTask = null!;
 
+        // Re-entry guard for LoadLocalModelsAsync: 0 idle, 1 running.
+        // StateChanged can re-trigger a load while an earlier invocation is
+        // still waiting for the server, so we serialize population passes.
+        private int _loadingLocalModels;
+
+        // Index of Available rows by the server model id ("repo:quant"), so the
+        // ModelsChanged poller can update each row's load state in place instead
+        // of rebuilding the list every second (which would flicker and lose
+        // click/loading state). Kept in sync wherever LocalModels is mutated.
+        private readonly Dictionary<string, ModelItem> _localByServerId =
+            new(StringComparer.OrdinalIgnoreCase);
+
         public MainWindow()
         {
             InitializeComponent();
@@ -96,6 +108,13 @@ namespace LlamaApp.Views
             // in parallel from App.OnLaunched; its StateChanged fires on the UI
             // thread, so we can touch the TextBlock directly.
             LlamaManager.Shared.StateChanged += LlamaManager_StateChanged;
+
+            // The model-state poller (started by LlamaManager once the server is
+            // Running) fires ModelsChanged roughly every 1s with a fresh /models
+            // snapshot. We reconcile it into the Available rows in place —
+            // flipping play -> indeterminate load ring -> OpenInNewWindow glyph
+            // as the server reports each model's load state.
+            LlamaManager.Shared.ModelsChanged += LlamaManager_ModelsChanged;
         }
 
         // ---- Data ----
@@ -122,7 +141,11 @@ namespace LlamaApp.Views
         private async Task<List<Repository>> FetchCatalogAsync()
         {
             try { return (await Catalog.FetchAsync()).ToList(); }
-            catch { return new List<Repository>(); }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "catalog fetch failed; Recommended stays empty");
+                return new List<Repository>();
+            }
         }
 
         /// <summary>
@@ -137,59 +160,120 @@ namespace LlamaApp.Views
         /// </summary>
         private async Task LoadLocalModelsAsync()
         {
-            var mgr = LlamaManager.Shared;
-
-            // Wait for the server to be reachable; bail if setup fails. The
-            // server can take a while to download/install on first run.
-            var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(5);
-            while (mgr.ServerStatus != LlamaManager.ServerState.Running)
+            // Only one population pass at a time — LlamaManager_StateChanged can
+            // re-trigger us while an earlier invocation is still waiting for the
+            // server (or after a transient failure cleared up).
+            if (Interlocked.CompareExchange(ref _loadingLocalModels, 1, 0) != 0) return;
+            try
             {
-                if (mgr.State == LlamaManager.InstallState.Failed ||
-                    mgr.ServerStatus == LlamaManager.ServerState.Failed ||
-                    DateTime.UtcNow >= deadline)
+                var mgr = LlamaManager.Shared;
+
+                // Wait for the server to be reachable. A transient Failed here
+                // isn't fatal: StateChanged re-triggers this once Running is
+                // reached, so bail rather than block the full 5 minutes.
+                var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(5);
+                while (mgr.ServerStatus != LlamaManager.ServerState.Running)
                 {
-                    UpdateEmptyState();
-                    return;
+                    if (mgr.State == LlamaManager.InstallState.Failed ||
+                        mgr.ServerStatus == LlamaManager.ServerState.Failed ||
+                        DateTime.UtcNow >= deadline)
+                    {
+                        UpdateEmptyState();
+                        return;
+                    }
+                    try { await Task.Delay(500); }
+                    catch { return; }
                 }
-                try { await Task.Delay(500); }
-                catch { UpdateEmptyState(); return; }
+
+                // The router answers /health as soon as it binds, but /models
+                // can come back empty for the first second or two while the HF
+                // cache is scanned. Retry briefly so a startup race doesn't pin
+                // the list to "No model yet" forever.
+                IReadOnlyList<LlamaManager.ServerModel> serverModels =
+                    Array.Empty<LlamaManager.ServerModel>();
+                var modelDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+                while (DateTime.UtcNow < modelDeadline)
+                {
+                    try { serverModels = await mgr.GetModelsAsync(); }
+                    catch (Exception ex) { Common.Log.Debug("GetModels retry failed: " + ex.Message); serverModels = Array.Empty<LlamaManager.ServerModel>(); }
+                    if (serverModels.Count > 0) break;
+                    try { await Task.Delay(500); }
+                    catch { break; }
+                }
+
+                await PopulateLocalModelsAsync(serverModels);
+                Common.Log.Info("Loaded " + serverModels.Count + " local model(s) from the server");
             }
+            finally
+            {
+                Interlocked.Exchange(ref _loadingLocalModels, 0);
+            }
+        }
 
-            IReadOnlyList<LlamaManager.ServerModel> serverModels;
-            try { serverModels = await mgr.GetModelsAsync(); }
-            catch { UpdateEmptyState(); return; }
+        /// <summary>
+        /// Replaces <see cref="LocalModels"/> with one row per server-reported
+        /// model, enriched with catalog metadata (display name, params, size,
+        /// brand logo); the vision flag comes from the server's
+        /// <c>architecture.input_modalities</c>. Idempotent — clears before
+        /// adding so repeated calls (e.g. on StateChanged) don't accumulate
+        /// duplicates. Runs on the UI thread (callers await on it).
+        /// </summary>
+        private async Task PopulateLocalModelsAsync(
+            IReadOnlyList<LlamaManager.ServerModel> serverModels)
+        {
+            var byRepo = await GetCatalogByRepoAsync();
 
-            // Enrich with the catalog (display name, params, size, brand/logo).
-            // Keyed by the bare repo id, which is the server id without the
-            // ":quant" suffix.
-            var catalog = await _catalogTask;
-            var byRepo = catalog.ToDictionary(r => r.Name, StringComparer.OrdinalIgnoreCase);
-
+            LocalModels.Clear();
+            _localByServerId.Clear();
             foreach (var sm in serverModels)
             {
-                // Server id is "repo:quant" (or just "repo"). Split it so
-                // IModel.ServerModelId reconstructs the exact id the server uses.
-                var (repo, quant) = SplitServerId(sm.Id);
-
-                var label = DeriveDisplayName(repo, quant, byRepo);
-                byRepo.TryGetValue(repo, out var matched);
-
-                LocalModels.Add(new ModelItem
-                {
-                    Name = label,
-                    RepoName = repo,
-                    Quant = quant,
-                    Parameters = matched?.Parameters ?? "",
-                    Size = matched?.Size ?? "",
-                    License = matched?.License ?? "",
-                    Vision = sm.SupportsImage, // authoritative — from the server
-                    Downloadable = false,
-                    Brand = matched?.Brand,
-                    Logo = ModelItem.ResolveLogo(matched?.Brand),
-                });
+                var item = BuildLocalItem(sm, byRepo);
+                _localByServerId[sm.Id] = item;
+                LocalModels.Add(item);
             }
 
             UpdateEmptyState();
+        }
+
+        /// <summary>
+        /// Resolves the remote catalog into a bare-repo-id to <see cref="Repository"/>
+        /// lookup, collapsing the per-quant duplicates (a repo can appear several
+        /// times in the flattened catalog). Shared by the initial populate and
+        /// the poller reconcile.
+        /// </summary>
+        private async Task<Dictionary<string, Repository>> GetCatalogByRepoAsync()
+        {
+            var catalog = await _catalogTask;
+            return catalog
+                .GroupBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Builds an enriched <see cref="ModelItem"/> for a server-reported
+        /// model (display name, params, size, brand/logo from the catalog; vision
+        /// and load state from the server snapshot). Seeds <see cref="ModelItem.IsLoaded"/>
+        /// so an already-loaded model lands straight on the OpenInNewWindow glyph.
+        /// </summary>
+        private static ModelItem BuildLocalItem(
+            LlamaManager.ServerModel sm, Dictionary<string, Repository> byRepo)
+        {
+            var (repo, quant) = SplitServerId(sm.Id);
+            byRepo.TryGetValue(repo, out var matched);
+            return new ModelItem
+            {
+                Name = DeriveDisplayName(repo, quant, byRepo),
+                RepoName = repo,
+                Quant = quant,
+                Parameters = matched?.Parameters ?? "",
+                Size = matched?.Size ?? "",
+                License = matched?.License ?? "",
+                Vision = sm.SupportsImage, // authoritative — from the server
+                Downloadable = false,
+                Brand = matched?.Brand,
+                Logo = ModelItem.ResolveLogo(matched?.Brand),
+                IsLoaded = sm.IsLoaded,
+            };
         }
 
         /// <summary>
@@ -226,7 +310,7 @@ namespace LlamaApp.Views
         {
             List<Repository> repos;
             try { repos = await _catalogTask; }
-            catch { return; } // network/parse failure — Recommended stays empty
+            catch (Exception ex) { Common.Log.Warn(ex, "recommended models load failed"); return; } // network/parse failure — Recommended stays empty
 
             // Build a display name that disambiguates quants: "GPT-OSS 20B (mxfp4)".
             foreach (var repo in repos)
@@ -270,8 +354,9 @@ namespace LlamaApp.Views
         /// Fired when a row in the Recommended Models section is tapped. Moves
         /// the model to the Available section with a progress ring, kicks off
         /// <see cref="LlamaManager.DownloadModelAsync"/> via the running llama
-        /// server, then calls <see cref="LlamaManager.LaunchModelAsync"/> when
-        /// the download completes.
+        /// server, then loads it (see <see cref="LoadAndWatchAsync"/>) when the
+        /// download completes — the row transitions download ring -> load ring ->
+        /// OpenInNewWindow glyph.
         /// </summary>
         private void RecommendedModel_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
         {
@@ -286,6 +371,7 @@ namespace LlamaApp.Views
             RecommendedModels.Remove(item);
             item.Downloadable = false;
             item.IsDownloading = true;
+            _localByServerId[((IModel)item).ServerModelId] = item;
             LocalModels.Add(item);
             UpdateEmptyState();
 
@@ -293,10 +379,11 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Drives a single model's download → launch lifecycle. Reports
+        /// Drives a single model's download → load lifecycle. Reports
         /// progress to the <see cref="ModelItem.DownloadFraction"/> property
-        /// (bound to the progress ring), then calls
-        /// <see cref="LlamaManager.LaunchModelAsync"/> on success.
+        /// (bound to the download progress ring), then on success flips the row
+        /// into the loading state and asks the server to load it (see
+        /// <see cref="LoadAndWatchAsync"/>).
         /// </summary>
         private async Task DownloadAndLaunchAsync(ModelItem item)
         {
@@ -322,7 +409,13 @@ namespace LlamaApp.Views
                 {
                     item.IsDownloading = false;
                     if (ok)
-                        _ = mgr.LaunchModelAsync(item); // download done — load it
+                    {
+                        // Download done — load it. The row now shows the
+                        // indeterminate load ring until the poller reports the
+                        // model as loaded.
+                        item.IsLoading = true;
+                        _ = LoadAndWatchAsync(item);
+                    }
                     else
                         item.DownloadFailed = true;
                 }
@@ -352,6 +445,77 @@ namespace LlamaApp.Views
             }
         }
 
+        // ---- Model load → open ----
+
+        /// <summary>
+        /// Fired when the play glyph on an Available (local) row is tapped.
+        /// Asks the running llama server to load the model and flips the row into
+        /// the loading state (indeterminate ring) until the poller reports it as
+        /// loaded. No-op if the row is already loading/loaded/downloading.
+        /// </summary>
+        private void LocalModelPlay_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            if (sender is not Microsoft.UI.Xaml.FrameworkElement fe)
+                return;
+            if (fe.DataContext is not ModelItem item)
+                return;
+            if (item.IsLoading || item.IsLoaded || item.IsDownloading)
+                return;
+
+            item.IsLoading = true;
+            _ = LoadAndWatchAsync(item);
+        }
+
+        /// <summary>
+        /// Opens the running llama server's WebUI in the system browser — the
+        /// action behind the OpenInNewWindow glyph on a loaded Available row.
+        /// </summary>
+        private async void LocalModelOpen_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            await Windows.System.Launcher.LaunchUriAsync(
+                new System.Uri($"http://localhost:{LlamaManager.ServerPort}"));
+        }
+
+        /// <summary>
+        /// Sends a <c>POST /models/load</c> for <paramref name="item"/> and, on
+        /// rejection, clears the optimistic <see cref="ModelItem.IsLoading"/> so
+        /// the row falls back to the play glyph. On acceptance the load ring
+        /// stays up until the <see cref="LlamaManager.ModelsChanged"/> poller
+        /// reports the model as <c>loaded</c> (which sets <see cref="ModelItem.IsLoaded"/>
+        /// and clears <see cref="ModelItem.IsLoading"/> via <see cref="ReconcileAsync"/>).
+        /// </summary>
+        private async Task LoadAndWatchAsync(ModelItem item)
+        {
+            var mgr = LlamaManager.Shared;
+            var queue = DispatcherQueue;
+            var ok = await mgr.LoadModelAsync(item);
+            if (!ok)
+            {
+                if (queue is null || queue.HasThreadAccess)
+                    item.IsLoading = false;
+                else
+                    queue.TryEnqueue(() => item.IsLoading = false);
+                return;
+            }
+
+            // Accepted. The poller will flip IsLoaded=true / IsLoading=false once
+            // the server reports the model resident. Watchdog: if the server never
+            // reports loaded within a generous window (a large model can take a
+            // while to mmap), give up on the spinner so the row falls back to the
+            // play glyph and stays retryable rather than spinning forever.
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromMinutes(2));
+                if (item.IsLoading && !item.IsLoaded)
+                {
+                    if (queue is null || queue.HasThreadAccess)
+                        item.IsLoading = false;
+                    else
+                        queue.TryEnqueue(() => { if (item.IsLoading && !item.IsLoaded) item.IsLoading = false; });
+                }
+            });
+        }
+
         // ---- Version footer ----
 
         /// <summary>
@@ -374,7 +538,101 @@ namespace LlamaApp.Views
         /// </summary>
         private void LlamaManager_StateChanged(object? sender, EventArgs e)
         {
-            LoadVersionInfo();
+            // StateChanged can fire off the UI thread (the server process Exited
+            // handler runs on a thread-pool thread), so marshal before touching
+            // any UI element / the LocalModels collection.
+            var dq = DispatcherQueue;
+            if (dq is null || dq.HasThreadAccess)
+                OnStateChanged();
+            else
+                dq.TryEnqueue(OnStateChanged);
+
+            void OnStateChanged()
+            {
+                LoadVersionInfo();
+
+                // (Re)populate the Available list once the server is actually
+                // running — covers the startup race where the initial fetch ran
+                // before the server was ready (or /models was momentarily empty).
+                // Only triggers while the list is empty, so an in-flight download
+                // row is never clobbered.
+                if (LlamaManager.Shared.ServerStatus == LlamaManager.ServerState.Running &&
+                    LocalModels.Count == 0)
+                {
+                    _ = LoadLocalModelsAsync();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handler for <see cref="LlamaManager.ModelsChanged"/> (the 1s poller):
+        /// marshals the fresh server snapshot to the UI thread and reconciles it
+        /// into the Available rows in place. The poller fires on a background
+        /// thread, so we never touch the ObservableCollection directly here.
+        /// </summary>
+        private void LlamaManager_ModelsChanged(object? sender, IReadOnlyList<LlamaManager.ServerModel> models)
+        {
+            var dq = DispatcherQueue;
+            if (dq is null || dq.HasThreadAccess)
+                _ = ReconcileAsync(models);
+            else
+                dq.TryEnqueue(() => _ = ReconcileAsync(models));
+        }
+
+        /// <summary>
+        /// Merges a fresh <c>GET /models</c> snapshot into <see cref="LocalModels"/>
+        /// without rebuilding the list (which would flicker and lose click/load
+        /// state). Existing rows get their <see cref="ModelItem.IsLoaded"/>/
+        /// <see cref="ModelItem.IsLoading"/> flipped to match the server's
+        /// reported status; models the server now knows about that we haven't
+        /// listed yet (e.g. added to the cache out-of-band) are appended with
+        /// catalog enrichment. Never clears rows — a transient empty/error
+        /// snapshot is a no-op, so a network blip doesn't unload the list.
+        /// </summary>
+        private async Task ReconcileAsync(IReadOnlyList<LlamaManager.ServerModel> serverModels)
+        {
+            // If the initial populate hasn't run yet, let LoadLocalModelsAsync
+            // build the list (and the index) once — reconcile only updates
+            // existing rows. Avoid racing the first populate.
+            if (LocalModels.Count == 0)
+            {
+                if (Interlocked.CompareExchange(ref _loadingLocalModels, 0, 0) == 0)
+                    _ = LoadLocalModelsAsync();
+                return;
+            }
+
+            var byRepo = await GetCatalogByRepoAsync();
+
+            foreach (var sm in serverModels)
+            {
+                if (_localByServerId.TryGetValue(sm.Id, out var item))
+                {
+                    if (sm.IsLoaded)
+                    {
+                        // The server reports the model resident — land on the
+                        // OpenInNewWindow glyph and clear any optimistic load.
+                        item.IsLoaded = true;
+                        item.IsLoading = false;
+                    }
+                    else
+                    {
+                        item.IsLoaded = false;
+                        // Leave IsLoading alone: if the user just tapped play,
+                        // the server may still report "unloaded" until the child
+                        // process spawns — the load ring stays up. If no load is
+                        // in flight this is a no-op (already false) → play glyph.
+                    }
+                }
+                else
+                {
+                    // New server model not yet listed — add an enriched row.
+                    var newItem = BuildLocalItem(sm, byRepo);
+                    _localByServerId[sm.Id] = newItem;
+                    LocalModels.Add(newItem);
+                }
+            }
+
+            UpdateEmptyState();
         }
 
         // ---- Footer actions ----
