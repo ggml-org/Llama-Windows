@@ -471,6 +471,7 @@ public sealed class LlamaManager
         _pollerCts = new CancellationTokenSource();
         var token = _pollerCts.Token;
         _pollerTask = Task.Run(() => PollModelsAsync(token));
+        Log.Info("Model-state poller started (1s interval)");
     }
 
     /// <summary>Stops the poller and releases its cancellation token. Safe to call repeatedly.</summary>
@@ -494,13 +495,17 @@ public sealed class LlamaManager
     {
         while (!cancel.IsCancellationRequested)
         {
-            IReadOnlyList<ServerModel> snapshot = Array.Empty<ServerModel>();
+            IReadOnlyList<ServerModel> snapshot = [];
             try { snapshot = await GetModelsAsync(cancel); }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Log.Debug($"model poll fetch failed: {ex.Message}"); /* transient — keep the previous snapshot in effect */ }
 
             try { ModelsChanged?.Invoke(this, snapshot); }
             catch (Exception ex) { Log.Warn(ex, "ModelsChanged handler threw"); /* a handler error doesn't take down the poller */ }
+
+            if (snapshot.Count > 0)
+                Log.Debug("poll: " + snapshot.Count + " model(s): " +
+                    string.Join(", ", snapshot.Select(m => m.Id + "=" + (m.Status ?? "?"))));
 
             try { await Task.Delay(1000, cancel); }
             catch (OperationCanceledException) { break; }
@@ -578,7 +583,7 @@ public sealed class LlamaManager
             {
                 var body = await postResp.Content.ReadAsStringAsync(cancel);
                 await sseCts.CancelAsync();
-                progress?.Report(new Common.ModelDownloadProgress(
+                progress?.Report(new ModelDownloadProgress(
                     modelName, 0, 0, Done: false, Failed: true,
                     Message: $"Server rejected the request ({(int)postResp.StatusCode}): {body}"));
                 return false;
@@ -683,7 +688,7 @@ public sealed class LlamaManager
         try
         {
             Log.Info($"Loading model {model.ServerModelId}");
-            const string payload = $$$"""{"model":"{{model.ServerModelId}}"}""";
+            var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await Client.PostAsync($"{baseUrl}/models/load", content, cancel);
             if (!resp.IsSuccessStatusCode)
@@ -714,14 +719,16 @@ public sealed class LlamaManager
         public string Id { get; init; } = "";
         /// <summary>Absolute path to the GGUF on disk, when known.</summary>
         public string? Path { get; init; }
-        /// <summary>Load state: <c>loaded</c> or <c>unloaded</c>.</summary>
+        /// <summary>Load state reported by the server: <c>unloaded</c>, <c>loading</c>, or <c>loaded</c>.</summary>
         public string Status { get; init; } = "";
         /// <summary>True when <see cref="Status"/> is <c>loaded</c> (model resident in a child process).</summary>
         public bool IsLoaded => string.Equals(Status, "loaded", StringComparison.OrdinalIgnoreCase);
+        /// <summary>True when <see cref="Status"/> is <c>loading</c> (load in progress: child process spawning / weights mmapping).</summary>
+        public bool IsLoading => string.Equals(Status, "loading", StringComparison.OrdinalIgnoreCase);
         /// <summary>True when <c>architecture.input_modalities</c> contains <c>image</c>.</summary>
         public bool SupportsImage { get; init; }
         /// <summary>All declared input modalities (e.g. <c>text</c>, <c>image</c>).</summary>
-        public IReadOnlyList<string> InputModalities { get; init; } = Array.Empty<string>();
+        public IReadOnlyList<string> InputModalities { get; init; } = [];
         /// <summary>Where the server found the model, e.g. <c>cache</c>.</summary>
         public string? Source { get; init; }
         /// <summary>Whether the server allows removing this model.</summary>

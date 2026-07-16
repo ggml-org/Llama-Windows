@@ -88,6 +88,7 @@
                         <!-- Play button: model is unloaded, click to load it. -->
                         <Button Visibility="{x:Bind PlayGlyphVisible, Mode=OneWay}"
                                 Click="LocalModelPlay_Click"
+                                Tag="{x:Bind}"
                                 Padding="6"
                                 MinWidth="0" MinHeight="0"
                                 Background="Transparent"
@@ -117,6 +118,7 @@
                              the running server's WebUI in the browser. -->
                         <Button Visibility="{x:Bind OpenGlyphVisible, Mode=OneWay}"
                                 Click="LocalModelOpen_Click"
+                                Tag="{x:Bind}"
                                 Padding="6"
                                 MinWidth="0" MinHeight="0"
                                 Background="Transparent"

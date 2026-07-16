@@ -456,12 +456,28 @@ namespace LlamaApp.Views
         private void LocalModelPlay_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             if (sender is not Microsoft.UI.Xaml.FrameworkElement fe)
+            {
+                Common.Log.Warn("LocalModelPlay_Click: sender is not a FrameworkElement");
                 return;
-            if (fe.DataContext is not ModelItem item)
+            }
+            // x:Bind doesn't set DataContext on child elements inside a
+            // DataTemplate (compiled bindings bypass the property), so read
+            // the row's model from the bound Tag instead and fall back to a
+            // visual-tree walk.
+            if (ResolveRowItem(fe) is not { } item)
+            {
+                Common.Log.Warn("LocalModelPlay_Click: could not resolve a ModelItem (Tag=" +
+                    (fe.Tag?.GetType().FullName ?? "null") + ")");
                 return;
+            }
             if (item.IsLoading || item.IsLoaded || item.IsDownloading)
+            {
+                Common.Log.Debug("LocalModelPlay_Click: ignored (isLoading=" + item.IsLoading +
+                    " isLoaded=" + item.IsLoaded + " isDownloading=" + item.IsDownloading + ")");
                 return;
+            }
 
+            Common.Log.Info("Play clicked: loading " + ((IModel)item).ServerModelId);
             item.IsLoading = true;
             _ = LoadAndWatchAsync(item);
         }
@@ -472,8 +488,30 @@ namespace LlamaApp.Views
         /// </summary>
         private async void LocalModelOpen_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
+            if (sender is Microsoft.UI.Xaml.FrameworkElement fe && ResolveRowItem(fe) is { } item)
+                Common.Log.Debug("Open clicked for " + ((IModel)item).ServerModelId);
             await Windows.System.Launcher.LaunchUriAsync(
                 new System.Uri($"http://localhost:{LlamaManager.ServerPort}"));
+        }
+
+        /// <summary>
+        /// Resolves the <see cref="ModelItem"/> a click came from. <c>x:Bind</c>
+        /// doesn't propagate <c>DataContext</c> to child elements inside a
+        /// <c>DataTemplate</c> (compiled bindings bypass the property), so the
+        /// row's model is bound to the element's <c>Tag</c> via <c>Tag="{x:Bind}"</c>;
+        /// this reads it. Falls back to a visual-tree walk (the <c>ItemsRepeater</c>
+        /// sets <c>DataContext</c> on the row's root element) so it also works for
+        /// elements that didn't bind <c>Tag</c>.
+        /// </summary>
+        private static ModelItem? ResolveRowItem(Microsoft.UI.Xaml.FrameworkElement fe)
+        {
+            if (fe.Tag is ModelItem tagItem) return tagItem;
+            for (var el = fe; el is not null; el = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(el)
+                as Microsoft.UI.Xaml.FrameworkElement)
+            {
+                if (el.DataContext is ModelItem dcItem) return dcItem;
+            }
+            return null;
         }
 
         /// <summary>
@@ -607,20 +645,33 @@ namespace LlamaApp.Views
             {
                 if (_localByServerId.TryGetValue(sm.Id, out var item))
                 {
+                    // Map the server's three load states onto the row:
+                    //   loaded  -> OpenInNewWindow glyph (IsLoaded, ring off)
+                    //   loading -> indeterminate load ring (server-truth load)
+                    //   unloaded-> play glyph (but don't clobber an optimistic
+                    //              IsLoading set by a just-fired play click that
+                    //              the server hasn't acknowledged yet)
                     if (sm.IsLoaded)
                     {
-                        // The server reports the model resident — land on the
-                        // OpenInNewWindow glyph and clear any optimistic load.
+                        if (!item.IsLoaded) Log.Info("Model loaded: " + sm.Id);
                         item.IsLoaded = true;
                         item.IsLoading = false;
                     }
-                    else
+                    else if (sm.IsLoading)
                     {
+                        if (!item.IsLoading) Log.Info("Model loading: " + sm.Id);
                         item.IsLoaded = false;
-                        // Leave IsLoading alone: if the user just tapped play,
-                        // the server may still report "unloaded" until the child
-                        // process spawns — the load ring stays up. If no load is
-                        // in flight this is a no-op (already false) → play glyph.
+                        item.IsLoading = true;
+                    }
+                    else // "unloaded" (or unknown)
+                    {
+                        if (item.IsLoaded) Log.Info("Model unloaded: " + sm.Id);
+                        item.IsLoaded = false;
+                        // Leave IsLoading alone: a just-fired play click sets it
+                        // optimistically before the server transitions to "loading";
+                        // clearing it here would flicker the ring off for up to one
+                        // poll cycle. Once the server reports "loading" or "loaded"
+                        // the branches above take over.
                     }
                 }
                 else
@@ -629,6 +680,7 @@ namespace LlamaApp.Views
                     var newItem = BuildLocalItem(sm, byRepo);
                     _localByServerId[sm.Id] = newItem;
                     LocalModels.Add(newItem);
+                    Log.Info("Added new local row from poller: " + sm.Id);
                 }
             }
 
