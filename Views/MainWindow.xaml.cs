@@ -362,7 +362,11 @@ namespace LlamaApp.Views
         {
             if (sender is not Microsoft.UI.Xaml.FrameworkElement fe)
                 return;
-            if (fe.DataContext is not ModelItem item)
+            // x:Bind doesn't set DataContext inside a DataTemplate (compiled
+            // bindings bypass the property), so read the row's model from its
+            // Tag (bound via Tag="{x:Bind}") and fall back to a visual-tree
+            // walk — same approach as the Available-row play/open buttons.
+            if (ResolveRowItem(fe) is not { } item)
                 return;
             if (item.IsDownloading)
                 return; // already in flight (double-tap guard)
@@ -483,15 +487,56 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Opens the running llama server's WebUI in the system browser — the
-        /// action behind the OpenInNewWindow glyph on a loaded Available row.
+        /// Opens the running llama server's WebUI in the system browser for the
+        /// selected model — the action behind the OpenInNewWindow glyph on a
+        /// loaded Available row. Passes <c>?model=&lt;ServerModelId&gt;</c> so the
+        /// server loads the requested model automatically.
         /// </summary>
         private async void LocalModelOpen_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
-            if (sender is Microsoft.UI.Xaml.FrameworkElement fe && ResolveRowItem(fe) is { } item)
-                Common.Log.Debug("Open clicked for " + ((IModel)item).ServerModelId);
-            await Windows.System.Launcher.LaunchUriAsync(
-                new System.Uri($"http://localhost:{LlamaManager.ServerPort}"));
+            if (sender is not Microsoft.UI.Xaml.FrameworkElement fe || ResolveRowItem(fe) is not ModelItem item)
+            {
+                Common.Log.Warn("LocalModelOpen_Click: could not resolve a ModelItem");
+                return;
+            }
+
+            var serverModelId = ((IModel)item).ServerModelId;
+            Common.Log.Info("Open clicked for " + serverModelId);
+            var url = $"http://localhost:{LlamaManager.ServerPort}?model={Uri.EscapeDataString(serverModelId)}";
+            await Windows.System.Launcher.LaunchUriAsync(new System.Uri(url));
+        }
+
+        /// <summary>
+        /// Unloads a loaded model from the running llama server — the action behind
+        /// the power glyph next to the OpenInNewWindow glyph on a loaded Available
+        /// row. Sends <c>POST /models/unload</c> and clears the row's loaded state
+        /// once the server accepts the request; the poller will confirm the status
+        /// change on its next tick.
+        /// </summary>
+        private async void LocalModelUnload_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            if (sender is not Microsoft.UI.Xaml.FrameworkElement fe || ResolveRowItem(fe) is not ModelItem item)
+            {
+                Common.Log.Warn("LocalModelUnload_Click: could not resolve a ModelItem");
+                return;
+            }
+            if (!item.IsLoaded)
+            {
+                Common.Log.Debug("LocalModelUnload_Click: ignored (not loaded)");
+                return;
+            }
+
+            Common.Log.Info("Unload clicked: unloading " + ((IModel)item).ServerModelId);
+            var ok = await LlamaManager.Shared.UnloadModelAsync(item);
+            if (ok)
+            {
+                item.IsLoaded = false;
+                item.IsLoading = false;
+            }
+            else
+            {
+                Common.Log.Warn("Server rejected unload for " + ((IModel)item).ServerModelId);
+            }
         }
 
         /// <summary>

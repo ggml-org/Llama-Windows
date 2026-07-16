@@ -102,7 +102,7 @@ public sealed class Catalog : IModelSource
     /// otherwise it's surfaced with basic info derived from the repo id and the
     /// on-disk file size.
     /// </summary>
-    public static async Task<IReadOnlyList<Repository>> FetchLocalAsync(string cacheDirectory, CancellationToken cancel = default)
+    private static async Task<IReadOnlyList<Repository>> FetchLocalAsync(string cacheDirectory, CancellationToken cancel = default)
     {
         if (!Directory.Exists(cacheDirectory))
             return [];
@@ -232,7 +232,7 @@ public sealed class Catalog : IModelSource
     /// <summary>Formats a byte count as a human-readable size string, e.g. 2526080992 → "2.5 GB".</summary>
     private static string FormatBytes(ulong bytes)
     {
-        string[] units = { "B", "KB", "MB", "GB", "TB" };
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
         double size = bytes;
         var unit = 0;
         while (size >= 1024 && unit < units.Length - 1)

@@ -519,7 +519,6 @@ public sealed class LlamaManager
     /// server (router mode) handles the actual Hugging Face transfer; this
     /// method just <b>POST</b>s <c>{"model": "&lt;name&gt;"}</c> to
     /// <c>/models</c> and tracks progress via the <c>/models/sse</c> stream.
-    /// </summary>
     /// <para>Flow:
     /// <list type="number">
     /// <item>Open an SSE connection to <c>/models/sse</c> and start parsing
@@ -554,7 +553,6 @@ public sealed class LlamaManager
         var modelName = model.Name;
 
         using var sseClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-        using var postClient = Client;
 
         // Open the SSE stream first so we don't miss the earliest progress events.
         // HttpCompletionOption.ResponseHeadersRead lets us read the body as it
@@ -578,7 +576,7 @@ public sealed class LlamaManager
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
         try
         {
-            using var postResp = await postClient.PostAsync($"{baseUrl}/models", content, cancel);
+            using var postResp = await Client.PostAsync($"{baseUrl}/models", content, cancel);
             if (!postResp.IsSuccessStatusCode)
             {
                 var body = await postResp.Content.ReadAsStringAsync(cancel);
@@ -650,7 +648,7 @@ public sealed class LlamaManager
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
             // User canceled — ask the server to stop the download.
-            await CancelServerDownloadAsync(postClient, baseUrl, modelName);
+            await CancelServerDownloadAsync(Client, baseUrl, modelName);
             progress?.Report(new Common.ModelDownloadProgress(
                 modelName, 0, 0, Done: false, Failed: false, Message: "Cancelled"));
             throw;
@@ -700,6 +698,44 @@ public sealed class LlamaManager
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Error(ex, "Model load request threw");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Asks the running llama server to unload a model from memory via
+    /// <c>POST /models/unload</c>. In router mode, the server stops the model's
+    /// child process; this returns once the unload request is accepted. Track
+    /// the transition via the <see cref="ModelsChanged"/> poller, which reports the
+    /// server's <see cref="ServerModel.Status"/> field flipping from <c>loaded</c>
+    /// to <c>unloaded</c>.
+    /// </summary>
+    /// <param name="model">The model to unload; <see cref="Common.IModel.ServerModelId"/>
+    /// is the canonical id the server knows.</param>
+    /// <param name="cancel">Cancellation token.</param>
+    /// <returns><c>true</c> if the server accepted the unload request.</returns>
+    public async Task<bool> UnloadModelAsync(IModel model, CancellationToken cancel = default)
+    {
+        if (ServerStatus != ServerState.Running)
+            return false;
+
+        var baseUrl = $"http://localhost:{ServerPort}";
+
+        try
+        {
+            Log.Info($"Unloading model {model.ServerModelId}");
+            var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var resp = await Client.PostAsync($"{baseUrl}/models/unload", content, cancel);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Log.Warn($"Server rejected model unload ({(int)resp.StatusCode})");
+            }
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Error(ex, "Model unload request threw");
             return false;
         }
     }

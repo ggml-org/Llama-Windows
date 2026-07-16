@@ -82,9 +82,13 @@
 
                     <!-- Action cell: exactly one of play / download ring /
                          load ring / open glyph, driven by the ModelItem
-                         load/download state. Mutually exclusive via Visibility. -->
-                    <Grid Grid.Column="2"
-                          VerticalAlignment="Center">
+                         load/download state. Mutually exclusive via Visibility.
+                         When loaded, the Open and Power/unload glyphs appear
+                         side by side. -->
+                    <StackPanel Grid.Column="2"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center">
                         <!-- Play button: model is unloaded, click to load it. -->
                         <Button Visibility="{x:Bind PlayGlyphVisible, Mode=OneWay}"
                                 Click="LocalModelPlay_Click"
@@ -128,7 +132,22 @@
                                       FontSize="16"
                                       Opacity="0.5" />
                         </Button>
-                    </Grid>
+
+                        <!-- Power/unload: model is loaded, click to unload it
+                             from the server and free memory. -->
+                        <Button Visibility="{x:Bind OpenGlyphVisible, Mode=OneWay}"
+                                Click="LocalModelUnload_Click"
+                                Tag="{x:Bind}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ToolTipService.ToolTip="Unload model">
+                            <FontIcon Glyph="&#xE7E8;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+                    </StackPanel>
                 </Grid>
             </DataTemplate>
 
@@ -140,6 +159,7 @@
                       ColumnSpacing="10"
                       CornerRadius="6"
                       Background="Transparent"
+                      Tag="{x:Bind}"
                       Tapped="RecommendedModel_Tapped">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
