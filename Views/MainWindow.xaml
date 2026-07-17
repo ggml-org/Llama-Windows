@@ -316,14 +316,21 @@
                        HorizontalAlignment="Center"
                        Margin="0,8,0,8" />
 
-            <!-- Local model rows (run on click). -->
-            <ItemsRepeater x:Name="LocalModelsList"
-                           ItemsSource="{x:Bind LocalModels}"
-                           ItemTemplate="{StaticResource LocalModelRowTemplate}">
-                <ItemsRepeater.Layout>
-                    <StackLayout Spacing="2" />
-                </ItemsRepeater.Layout>
-            </ItemsRepeater>
+            <!-- Local model rows (run on click). Capped at ~4 rows so the
+                 section never pushes the Recommended list off-screen; scrolls
+                 internally when there are more local models than that. -->
+            <ScrollViewer MaxHeight="184"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Hidden"
+                          HorizontalScrollMode="Disabled">
+                <ItemsRepeater x:Name="LocalModelsList"
+                               ItemsSource="{x:Bind LocalModels}"
+                               ItemTemplate="{StaticResource LocalModelRowTemplate}">
+                    <ItemsRepeater.Layout>
+                        <StackLayout Spacing="2" />
+                    </ItemsRepeater.Layout>
+                </ItemsRepeater>
+            </ScrollViewer>
         </StackPanel>
 
         <Rectangle Grid.Row="3"

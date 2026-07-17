@@ -607,7 +607,7 @@ public sealed class LlamaManager
         // exception comes from sseCts (not the user's `cancel` token) it would
         // escape the `when (cancel.IsCancellationRequested)` guard below and
         // propagate out of the method — masking a successful download as a
-        // cancellation and skipping the post-download load. Breaking lets the finally
+        // cancellation and skipping the post-download load. Breaking lets the final
         // block cancel + dispose the stream cleanly with no thrown exception.
         var success = false;
         var completed = false;
@@ -642,14 +642,14 @@ public sealed class LlamaManager
                         break;
                 }
 
-                if (completed) break; // exit the await foreach; finally cleans up
+                if (completed) break; // exit to await foreach; finally cleans up
             }
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
             // User canceled — ask the server to stop the download.
             await CancelServerDownloadAsync(Client, baseUrl, modelName);
-            progress?.Report(new Common.ModelDownloadProgress(
+            progress?.Report(new ModelDownloadProgress(
                 modelName, 0, 0, Done: false, Failed: false, Message: "Cancelled"));
             throw;
         }
@@ -1033,16 +1033,15 @@ public sealed class LlamaManager
             var stdoutTask = proc.StandardOutput.ReadToEndAsync(cancel);
             var stderrTask = proc.StandardError.ReadToEndAsync(cancel);
             await proc.WaitForExitAsync(cancel);
+            Log.Debug("install.ps1 exit code " + proc.ExitCode);
 
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
-            Log.Debug("install.ps1 exit code " + proc.ExitCode);
             if (stdout.Length > 0) Log.Debug("install.ps1 stdout: " + stdout.Trim());
             if (stderr.Length > 0) Log.Debug("install.ps1 stderr: " + stderr.Trim());
             if (proc.ExitCode != 0)
-            {
                 throw new IOException($"install.ps1 exited with code {proc.ExitCode}.\n{stderr}");
-            }
+            
         }
         finally
         {
