@@ -1,6 +1,6 @@
 using System.Drawing;
-using System.IO;
 using H.NotifyIcon.Core;
+using LlamaApp.Common;
 using Microsoft.UI.Dispatching;
 
 namespace LlamaApp;
@@ -102,15 +102,15 @@ internal sealed class TrayIconManager : IDisposable
 
     /// <summary>
     /// Shuts the app down: removes the tray icon (so it doesn't linger in the
-    /// notification area), then closes the window and exits.
+    /// notification area), then closes the window, and exits.
     /// </summary>
     public void RequestExit()
     {
-        Common.Log.Info("App exit requested");
+        Log.Info("App exit requested");
         // Stop the llama server first so it doesn't outlive the app (and leave
-        // the port bound). Best-effort — if it hangs, Environment.Exit reaps it.
+        // the port-bound). Best-effort — if it hangs, Environment.Exit reaps it.
         try { Llama.LlamaManager.Shared.StopServer(); }
-        catch (Exception ex) { Common.Log.Warn(ex, "best-effort server stop on exit failed"); }
+        catch (Exception ex) { Log.Warn(ex, "best-effort server stop on exit failed"); }
 
         // Removing the tray icon first avoids a stray icon lingering in the
         // notification area after the process is gone. Letting the window close
@@ -125,7 +125,7 @@ internal sealed class TrayIconManager : IDisposable
         catch (Exception ex)
         {
             // Best-effort cleanup during shutdown.
-            Common.Log.Warn(ex, "best-effort tray icon dispose on exit failed");
+            Log.Warn(ex, "best-effort tray icon dispose on exit failed");
         }
 
         _window.AllowClose = true;
@@ -135,7 +135,7 @@ internal sealed class TrayIconManager : IDisposable
 
     /// <summary>
     /// Runs <paramref name="action"/> on the UI thread. Tray-icon callbacks
-    /// arrive on the message window's thread; marshalling keeps all WinUI
+    /// arrive on the message window's thread; marshaling keeps all WinUI
     /// window access on the UI thread.
     /// </summary>
     private void Enqueue(Action action)
