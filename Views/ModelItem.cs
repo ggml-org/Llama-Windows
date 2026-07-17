@@ -52,8 +52,9 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public string Size { get; set; } = "";
     public string License { get; set; } = "";
     public bool Vision { get; set; }
+
     /// <summary>Quantization label, e.g. "Q4_0", "mxfp4" (used for ServerModelId).</summary>
-    public string Quant { get; set; } = "";
+    public string? Quant { get; set; } = null;
     public ImageSource? Logo { get; set; }
     /// <summary>True for Hub models that can be downloaded; false for locally available models (run/play).</summary>
     public bool Downloadable { get; set; }
@@ -67,16 +68,15 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         get => _isDownloading;
         set
         {
-            if (_isDownloading != value)
-            {
-                _isDownloading = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(PlayGlyphVisible));
-                OnPropertyChanged(nameof(ProgressRingVisible));
-                OnPropertyChanged(nameof(LoadingRingVisible));
-                OnPropertyChanged(nameof(OpenGlyphVisible));
-                OnPropertyChanged(nameof(IsIndeterminateDownload));
-            }
+            if (_isDownloading == value) return;
+                
+            _isDownloading = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(ProgressRingVisible));
+            OnPropertyChanged(nameof(LoadingRingVisible));
+            OnPropertyChanged(nameof(OpenGlyphVisible));
+            OnPropertyChanged(nameof(IsIndeterminateDownload));
         }
     }
 
@@ -86,13 +86,12 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         get => _downloadFraction;
         set
         {
-            if (Math.Abs(_downloadFraction - value) > 0.001)
-            {
-                _downloadFraction = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(DownloadProgressPercent));
-                OnPropertyChanged(nameof(IsIndeterminateDownload));
-            }
+            if (!(Math.Abs(_downloadFraction - value) > 0.001)) return;
+            
+            _downloadFraction = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DownloadProgressPercent));
+            OnPropertyChanged(nameof(IsIndeterminateDownload));
         }
     }
 
@@ -100,7 +99,11 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public bool DownloadFailed
     {
         get => _downloadFailed;
-        set { if (_downloadFailed != value) { _downloadFailed = value; OnPropertyChanged(); } }
+        set
+        {
+            if (_downloadFailed == value) return;
+            _downloadFailed = value; OnPropertyChanged();
+        }
     }
 
     // ---- Model load state (drives the Available-row action cell) ----
@@ -120,14 +123,13 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         get => _isLoading;
         set
         {
-            if (_isLoading != value)
-            {
-                _isLoading = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(PlayGlyphVisible));
-                OnPropertyChanged(nameof(LoadingRingVisible));
-                OnPropertyChanged(nameof(OpenGlyphVisible));
-            }
+            if (_isLoading == value) return;
+            
+            _isLoading = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(LoadingRingVisible));
+            OnPropertyChanged(nameof(OpenGlyphVisible));
         }
     }
 
@@ -141,14 +143,13 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         get => _isLoaded;
         set
         {
-            if (_isLoaded != value)
-            {
-                _isLoaded = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(PlayGlyphVisible));
-                OnPropertyChanged(nameof(LoadingRingVisible));
-                OnPropertyChanged(nameof(OpenGlyphVisible));
-            }
+            if (_isLoaded == value) return;
+            
+            _isLoaded = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(LoadingRingVisible));
+            OnPropertyChanged(nameof(OpenGlyphVisible));
         }
     }
 
@@ -190,9 +191,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public static ImageSource? ResolveLogo(string? brand)
     {
         var logo = BrandToLogo(brand);
-        if (logo is null) return null;
-
-        return new SvgImageSource(new Uri($"ms-appx:///Assets/Logos/{logo}.svg"));
+        return logo is null ? null : new SvgImageSource(new Uri($"ms-appx:///Assets/Logos/{logo}.svg"));
     }
 
     /// <summary>
@@ -203,8 +202,6 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     {
         if (string.IsNullOrWhiteSpace(brand)) return null;
         var b = brand.Trim();
-
-        bool Has(string key) => b.StartsWith(key, StringComparison.OrdinalIgnoreCase);
 
         if (Has("qwen")) return "qwen";
         if (Has("gemma")) return "gemma";
@@ -219,5 +216,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         if (Has("nvidia")) return "nvidia";
 
         return null;
+
+        bool Has(string key) => b.StartsWith(key, StringComparison.OrdinalIgnoreCase);
     }
 }
