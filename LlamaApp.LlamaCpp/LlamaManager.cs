@@ -74,7 +74,7 @@ public sealed class LlamaManager
         Failed,
     }
 
-    /// <summary>Server lifecycle state, surfaced in the UI.</summary>
+    /// <summary>Server lifecycle state surfaced in the UI.</summary>
     public enum ServerState
     {
         /// <summary>Not started (no binary yet, or stopped).</summary>
@@ -99,12 +99,6 @@ public sealed class LlamaManager
     /// </summary>
     public string? CacheDirectory { get; set; }
 
-    private InstallState _state = InstallState.Idle;
-    private string? _failureMessage;
-    private string? _binaryPath;
-    private string? _version;
-    private Origin _origin = Origin.Unknown;
-    private ServerState _serverState = ServerState.Stopped;
     private Process? _serverProcess;
 
     // Model-state poller: a background loop that fetches /models every second
@@ -115,36 +109,44 @@ public sealed class LlamaManager
     /// <summary>Current installation state.</summary>
     public InstallState State
     {
-        get => _state;
+        get;
         private set
         {
-            if (_state == value) return;
-            _state = value;
+            if (field == value) return;
+            field = value;
             StateChanged?.Invoke(this, EventArgs.Empty);
         }
-    }
+    } = InstallState.Idle;
 
-    /// <summary>User-facing reason for the <see cref="Failed"/> state, if any.</summary>
+    /// <summary>User-facing reason for the <see cref="ServerState.Failed"/> state, if any.</summary>
     public string? FailureMessage
     {
-        get => _failureMessage;
-        private set { _failureMessage = value; StateChanged?.Invoke(this, EventArgs.Empty); }
+        get;
+        private set
+        {
+            field = value;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     /// <summary>Path to the resolved <c>llama.exe</c>, or <c>null</c> if none.</summary>
     public string? BinaryPath
     {
-        get => _binaryPath;
-        private set { _binaryPath = value; StateChanged?.Invoke(this, EventArgs.Empty); }
+        get;
+        private set
+        {
+            field = value;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     /// <summary>Version string reported by the resolved binary, or <c>null</c>.</summary>
     public string? Version
     {
-        get => _version;
+        get;
         private set
         {
-            _version = value;
+            field = value;
             // Keep LlamaRunner.Version in sync so the footer reads live.
             LlamaRunner.VersionCache = value;
             StateChanged?.Invoke(this, EventArgs.Empty);
@@ -154,31 +156,35 @@ public sealed class LlamaManager
     /// <summary>Where the resolved binary comes from.</summary>
     public Origin CurrentOrigin
     {
-        get => _origin;
-        private set { _origin = value; StateChanged?.Invoke(this, EventArgs.Empty); }
-    }
+        get;
+        private set
+        {
+            field = value;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    } = Origin.Unknown;
 
     /// <summary>Current server state.</summary>
     public ServerState ServerStatus
     {
-        get => _serverState;
+        get;
         private set
         {
-            if (_serverState == value) return;
-            _serverState = value;
+            if (field == value) return;
+            field = value;
             // The model-state poller runs only while the server is up: start it
             // on Running, tear it down on any other state (Stopped/Failed).
             if (value == ServerState.Running) StartModelPoller();
             else StopModelPoller();
             StateChanged?.Invoke(this, EventArgs.Empty);
         }
-    }
+    } = ServerState.Stopped;
 
     /// <summary>Raised whenever any observable property changes.</summary>
     public event EventHandler? StateChanged;
 
     /// <summary>
-    /// Raised on a background thread roughly once per second with a fresh
+    /// Rose on a background thread roughly once per second with a fresh
     /// <c>GET /models</c> snapshot while the server is <see cref="ServerState.Running"/>.
     /// Handlers should marshal to the UI thread before touching view models.
     /// </summary>
@@ -470,7 +476,7 @@ public sealed class LlamaManager
         StopModelPoller();
         _pollerCts = new CancellationTokenSource();
         var token = _pollerCts.Token;
-        _pollerTask = Task.Run(() => PollModelsAsync(token));
+        _pollerTask = Task.Run(() => PollModelsAsync(token), token);
         Log.Info("Model-state poller started (1s interval)");
     }
 
@@ -544,7 +550,7 @@ public sealed class LlamaManager
         Log.Info($"Downloading model {model.Name}");
         if (ServerStatus != ServerState.Running)
         {
-            progress?.Report(new Common.ModelDownloadProgress(
+            progress?.Report(new ModelDownloadProgress(
                 model.Name, 0, 0, Done: false, Failed: true, Message: "Server is not running"));
             return false;
         }
@@ -591,7 +597,7 @@ public sealed class LlamaManager
         {
             Log.Error(ex, "Download POST threw");
             await sseCts.CancelAsync();
-            progress?.Report(new Common.ModelDownloadProgress(
+            progress?.Report(new ModelDownloadProgress(
                 modelName, 0, 0, Done: false, Failed: true, Message: ex.Message));
             return false;
         }
@@ -686,6 +692,7 @@ public sealed class LlamaManager
         try
         {
             Log.Info($"Loading model {model.ServerModelId}");
+            
             var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await Client.PostAsync($"{baseUrl}/models/load", content, cancel);
@@ -724,6 +731,7 @@ public sealed class LlamaManager
         try
         {
             Log.Info($"Unloading model {model.ServerModelId}");
+            
             var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await Client.PostAsync($"{baseUrl}/models/unload", content, cancel);
@@ -847,31 +855,7 @@ public sealed class LlamaManager
         StreamReader reader,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancel)
     {
-        var pendingData = new System.Text.StringBuilder();
-
-        // Dispatch whatever has been accumulated so far as a single event.
-        // A well-formed SSE stream terminates every event with a blank line,
-        // but we also flush on EOF so a trailing event without a final blank
-        // line (e.g. a server that dropped the connection mid-event, or a test
-        // fixture) is not silently dropped.
-        IEnumerable<(string Event, string Model, JsonElement Data)> FlushAsync()
-        {
-            if (pendingData.Length == 0) yield break;
-
-            var json = pendingData.ToString();
-            pendingData.Clear();
-
-            using var doc = System.Text.Json.JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            var evt = root.TryGetProperty("event", out var e) ? e.GetString() ?? "" : "";
-            var mdl = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
-            // Clone detaches the element from the JsonDocument so callers
-            // can safely consume it after the enumerator is disposed.
-            var data = root.TryGetProperty("data", out var d) ? d.Clone() : default;
-
-            if (evt.Length > 0)
-                yield return (evt, mdl, data);
-        }
+        var pendingData = new StringBuilder();
 
         while (!cancel.IsCancellationRequested)
         {
@@ -900,6 +884,32 @@ public sealed class LlamaManager
             pendingData.Append(value);
             // Ignore event:/id:/retry: lines — the server bundles the event
             // type inside the JSON data payload ("event" field).
+        }
+
+        yield break;
+
+        // Dispatch whatever has been accumulated so far as a single event.
+        // A well-formed SSE stream terminates every event with a blank line. However,
+        //  we also flush on EOF so a trailing event without a final blank
+        // line (e.g., a server that dropped the connection mid-event, or a test
+        // fixture) is not silently dropped.
+        IEnumerable<(string Event, string Model, JsonElement Data)> FlushAsync()
+        {
+            if (pendingData.Length == 0) yield break;
+
+            var json = pendingData.ToString();
+            pendingData.Clear();
+
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var evt = root.TryGetProperty("event", out var e) ? e.GetString() ?? "" : "";
+            var mdl = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
+            // Clone detaches the element from the JsonDocument so callers
+            // can safely consume it after the enumerator is disposed.
+            var data = root.TryGetProperty("data", out var d) ? d.Clone() : default;
+
+            if (evt.Length > 0)
+                yield return (evt, mdl, data);
         }
     }
 
