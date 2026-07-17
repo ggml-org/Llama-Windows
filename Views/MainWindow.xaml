@@ -4,56 +4,384 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-    xmlns:local="using:LlamaApp"
+    xmlns:local="using:LlamaApp.Views"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
+    <!--
+        This window is never shown as a normal top-level window. It is styled
+        as a Windows 11 flyout (borderless, Mica backdrop, rounded corners) and
+        only ever appears anchored to the system-tray icon, dismissing itself
+        when it loses focus — mirroring the macOS menu-bar app on Windows.
+
+        The content is a vertical Grid with three sections separated by divider
+        lines. Sections 1, 2 take their natural height; section 3 stretches to
+        fill the remaining space (Row *):
+          1. Brand header (logo + llama.app left, action icons right) — Auto, compact
+          2. Available (local models, or "No model yet") — Auto
+          3. Recommended Models                        — * (stretches)
+          4. Version footer (app version - llama.cpp version) — Auto, compact
+        The old footer's Settings/Quit buttons are gone; those actions live as
+        icons in the header now. The version caption is re-added as the last
+        section.
+    -->
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="Base" />
     </Window.SystemBackdrop>
 
     <Grid>
+        <Grid.Resources>
+            <!-- Local model row: icon + name/params·size + play glyph or progress ring. -->
+            <DataTemplate x:Key="LocalModelRowTemplate"
+                          x:DataType="local:ModelItem">
+                <Grid Padding="8,6"
+                      ColumnSpacing="10"
+                      CornerRadius="6"
+                      Background="Transparent">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0"
+                            Width="32" Height="32"
+                            CornerRadius="6"
+                            Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                        <Image Source="{x:Bind Logo, Mode=OneWay}"
+                               Stretch="Uniform"
+                               Margin="4" />
+                    </Border>
+
+                    <StackPanel Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Spacing="1">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="{x:Bind DisplayName}"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+                            <!-- Vision marker: shown when the server reports
+                                 image input (architecture.input_modalities).
+                                 A small “glass” glyph, dimmed so it reads as a
+                                 capability hint rather than part of the name. -->
+                            <FontIcon Glyph="&#xEB25;"
+                                      FontSize="11"
+                                      Opacity="0.55"
+                                      VerticalAlignment="Center"
+                                      Visibility="{x:Bind Vision, Mode=OneWay}" />
+                        </StackPanel>
+                        <TextBlock FontSize="11"
+                                   Opacity="0.6"
+                                   TextTrimming="CharacterEllipsis">
+                            <Run Text="{x:Bind Parameters}" />
+                            <Run Text=" · " />
+                            <Run Text="{x:Bind Size}" />
+                        </TextBlock>
+                    </StackPanel>
+
+                    <!-- Action cell: exactly one of play / download ring /
+                         load ring / open glyph, driven by the ModelItem
+                         load/download state. Mutually exclusive via Visibility.
+                         When loaded, the Open and Power/unload glyphs appear
+                         side by side. -->
+                    <StackPanel Grid.Column="2"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center">
+                        <!-- Play button: model is unloaded, click to load it. -->
+                        <Button Visibility="{x:Bind PlayGlyphVisible, Mode=OneWay}"
+                                Click="LocalModelPlay_Click"
+                                Tag="{x:Bind}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ToolTipService.ToolTip="Load model">
+                            <FontIcon Glyph="&#xE768;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
+                        <!-- Download progress ring (downloading from the Hub). -->
+                        <ProgressRing Visibility="{x:Bind ProgressRingVisible, Mode=OneWay}"
+                                      Width="20" Height="20"
+                                      Value="{x:Bind DownloadProgressPercent, Mode=OneWay}"
+                                      Maximum="100"
+                                      IsIndeterminate="{x:Bind IsIndeterminateDownload, Mode=OneWay}"
+                                      VerticalAlignment="Center" />
+
+                        <!-- Indeterminate load ring: load request sent, waiting
+                             for the poller to report the model as loaded. -->
+                        <ProgressRing Visibility="{x:Bind LoadingRingVisible, Mode=OneWay}"
+                                      Width="20" Height="20"
+                                      IsIndeterminate="True"
+                                      VerticalAlignment="Center" />
+
+                        <!-- Open in new window: model is loaded, click to open
+                             the running server's WebUI in the browser. -->
+                        <Button Visibility="{x:Bind OpenGlyphVisible, Mode=OneWay}"
+                                Click="LocalModelOpen_Click"
+                                Tag="{x:Bind}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ToolTipService.ToolTip="Open WebUI">
+                            <FontIcon Glyph="&#xE8A7;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
+                        <!-- Power/unload: model is loaded, click to unload it
+                             from the server and free memory. -->
+                        <Button Visibility="{x:Bind OpenGlyphVisible, Mode=OneWay}"
+                                Click="LocalModelUnload_Click"
+                                Tag="{x:Bind}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ToolTipService.ToolTip="Unload model">
+                            <FontIcon Glyph="&#xE7E8;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
+            </DataTemplate>
+
+            <!-- Recommended model row: icon + name/params·license + download glyph.
+                 The whole row is tappable — clicking starts a download. -->
+            <DataTemplate x:Key="RecommendedModelRowTemplate"
+                          x:DataType="local:ModelItem">
+                <Grid Padding="8,6"
+                      ColumnSpacing="10"
+                      CornerRadius="6"
+                      Background="Transparent"
+                      Tag="{x:Bind}"
+                      Tapped="RecommendedModel_Tapped">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0"
+                            Width="32" Height="32"
+                            CornerRadius="6"
+                            Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                        <Image Source="{x:Bind Logo, Mode=OneWay}"
+                               Stretch="Uniform"
+                               Margin="4" />
+                    </Border>
+
+                    <StackPanel Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Spacing="1">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="{x:Bind DisplayName}"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+                            <!-- Vision marker (same as the Available rows). -->
+                            <FontIcon Glyph="&#xE7B3;"
+                                      FontSize="11"
+                                      Opacity="0.55"
+                                      VerticalAlignment="Center"
+                                      Visibility="{x:Bind Vision, Mode=OneWay}" />
+                        </StackPanel>
+                        <TextBlock FontSize="11"
+                                   Opacity="0.6"
+                                   TextTrimming="CharacterEllipsis">
+                            <Run Text="{x:Bind Parameters}" />
+                            <Run Text=" · " />
+                            <Run Text="{x:Bind License}" />
+                        </TextBlock>
+                    </StackPanel>
+
+                    <FontIcon Grid.Column="2"
+                              Glyph="&#xE896;"
+                              FontSize="16"
+                              Opacity="0.5"
+                              VerticalAlignment="Center" />
+                </Grid>
+            </DataTemplate>
+        </Grid.Resources>
+
         <Grid.RowDefinitions>
-            <RowDefinition Height="48" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" /> <!-- Section 1: brand header -->
+            <RowDefinition Height="Auto" /> <!-- Divider -->
+            <RowDefinition Height="Auto" /> <!-- Section 2: Available -->
+            <RowDefinition Height="Auto" /> <!-- Divider -->
+            <RowDefinition Height="*" />    <!-- Section 3: Recommended (stretches) -->
+            <RowDefinition Height="Auto" /> <!-- Divider -->
+            <RowDefinition Height="Auto" /> <!-- Section 4: version footer -->
         </Grid.RowDefinitions>
 
-        <!-- Custom title bar: draggable region with centered search box -->
-        <Grid x:Name="AppTitleBar"
-              Grid.Row="0"
-              Height="48"
-              VerticalAlignment="Stretch"
-              HorizontalAlignment="Stretch">
+        <!-- ============ Section 1: Brand header (compact) ============
+             Logo + "llama.app" left-aligned, action icons right-aligned, both
+             at the same 16px horizontal margin as the sections below. The
+             settings gear opens Settings; the globe quits the app — replacing
+             the old footer's Settings/Quit buttons. -->
+        <Grid Grid.Row="0"
+              Margin="16,10,16,8"
+              ColumnSpacing="8">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <AutoSuggestBox Grid.Column="1"
-                            x:Name="HubSearchBox"
-                            PlaceholderText="Search models.."
-                            Width="320"
-                            VerticalAlignment="Center" />
+
+            <!-- Left: brand logo + wordmark -->
+            <StackPanel Grid.Column="0"
+                        Orientation="Horizontal"
+                        Spacing="6"
+                        VerticalAlignment="Center">
+                <Image Source="ms-appx:///Assets/llama-white.svg"
+                       Width="20" Height="20"
+                       Stretch="Uniform" />
+                <StackPanel Orientation="Horizontal"
+                            Spacing="1"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="llama"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="White"
+                               VerticalAlignment="Center" />
+                    <TextBlock Text=".app"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#FF8A3D"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Right: action icons (replace the old footer buttons) -->
+            <StackPanel Grid.Column="1"
+                        Orientation="Horizontal"
+                        Spacing="2"
+                        VerticalAlignment="Center">
+                <Button Click="Settings_Click"
+                        Padding="6"
+                        MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center"
+                        ToolTipService.ToolTip="Settings">
+                    <FontIcon Glyph="&#xE713;"
+                              FontSize="14" />
+                </Button>
+                <Button Click="Quit_Click"
+                        Padding="6"
+                        MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center"
+                        ToolTipService.ToolTip="Quit">
+                    <FontIcon Glyph="&#xE7E8;"
+                              FontSize="14" />
+                </Button>
+            </StackPanel>
         </Grid>
 
-        <NavigationView
-            x:Name="MenuControl"
-            Grid.Row="1"
-            PaneDisplayMode="LeftCompact"
-            IsBackEnabled="False"
-            IsBackButtonVisible="Collapsed"
-            IsPaneToggleButtonVisible="False"
-            IsPaneOpen="False"
-            SelectionChanged="NavigationView_SelectionChanged">
-            <NavigationView.MenuItems>
-                <NavigationViewItem Icon="Home" Content="Home" Tag="HomePage" />
-                <NavigationViewItem Icon="Message" Content="Chat" Tag="ChatPage" />
-                <NavigationViewItem Icon="SaveLocal" Content="Manage Models" Tag="LocalModelsPage" />
-            </NavigationView.MenuItems>
-            <NavigationView.FooterMenuItems>
-                <NavigationViewItem Content="Account" Tag="HuggingFaceAccountPage" Icon="Contact" />
-            </NavigationView.FooterMenuItems>
-            <Frame x:Name="ContentFrame" Navigated="ContentFrame_OnNavigated" />
-        </NavigationView>
+        <Rectangle Grid.Row="1"
+                   Height="1"
+                   Margin="16,0"
+                   Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+        <!-- ============ Section 2: Available (local models) ============ -->
+        <StackPanel Grid.Row="2"
+                    Margin="16,12,16,12" Spacing="8">
+            <!-- Section title + link to the running server's API. The link is
+                 styled gray/non-bold (not white/bold) to read as a subtle href. -->
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Available"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           Opacity="0.7" />
+                <Button x:Name="ServerLink"
+                        Click="ServerLink_Click"
+                        Padding="0"
+                        MinWidth="0"
+                        MinHeight="0"
+                        Opacity="0.55"
+                        VerticalAlignment="Center"
+                        ToolTipService.ToolTip="Open WebUI">
+                    <FontIcon Glyph="&#xE8A7;"
+                              FontSize="14" />
+                </Button>
+            </StackPanel>
+
+            <!-- Empty state — shown when there are no local models. -->
+            <TextBlock x:Name="NoLocalModelsText"
+                       Text="No model yet"
+                       FontSize="13"
+                       Opacity="0.45"
+                       HorizontalAlignment="Center"
+                       Margin="0,8,0,8" />
+
+            <!-- Local model rows (run on click). Capped at ~4 rows so the
+                 section never pushes the Recommended list off-screen; scrolls
+                 internally when there are more local models than that. -->
+            <ScrollViewer MaxHeight="184"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Hidden"
+                          HorizontalScrollMode="Disabled">
+                <ItemsRepeater x:Name="LocalModelsList"
+                               ItemsSource="{x:Bind LocalModels}"
+                               ItemTemplate="{StaticResource LocalModelRowTemplate}">
+                    <ItemsRepeater.Layout>
+                        <StackLayout Spacing="2" />
+                    </ItemsRepeater.Layout>
+                </ItemsRepeater>
+            </ScrollViewer>
+        </StackPanel>
+
+        <Rectangle Grid.Row="3"
+                   Height="1"
+                   Margin="16,0"
+                   Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+        <!-- ============ Section 3: Recommended Models (stretches, scrolls) ============ -->
+        <Grid Grid.Row="4" Margin="16,12,16,12" RowSpacing="8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" /> <!-- Header (fixed) -->
+                <RowDefinition Height="*" />    <!-- List (fills + scrolls) -->
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0"
+                       Text="Recommended Models"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Opacity="0.7" />
+
+            <!-- Scrolls internally when the list outgrows the stretched row. -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Hidden"
+                          HorizontalScrollMode="Disabled">
+                <ItemsRepeater x:Name="RecommendedModelsList"
+                               ItemsSource="{x:Bind RecommendedModels}"
+                               ItemTemplate="{StaticResource RecommendedModelRowTemplate}">
+                    <ItemsRepeater.Layout>
+                        <StackLayout Spacing="2" />
+                    </ItemsRepeater.Layout>
+                </ItemsRepeater>
+            </ScrollViewer>
+        </Grid>
+
+        <Rectangle Grid.Row="5"
+                   Height="1"
+                   Margin="16,0"
+                   Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+        <!-- ============ Section 4: Version footer (compact) ============
+             A single centered line: the app's version (no name) and the
+             resolved llama.cpp version, separated by " - ". Bold white so it
+             reads as a clear caption under the Recommended list. -->
+        <TextBlock x:Name="VersionText"
+                   Grid.Row="6"
+                   Margin="16,8,16,10"
+                   HorizontalAlignment="Center"
+                   FontSize="11"
+                   FontWeight="Bold"
+                   Foreground="White" />
+
     </Grid>
 </Window>

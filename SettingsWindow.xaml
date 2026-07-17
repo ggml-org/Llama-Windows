@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Window
+    x:Class="LlamaApp.SettingsWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!--
+        A small centered settings window (not the tray flyout). Holds the
+        Hugging Face token (password style) and a folder picker for the local
+        models cache directory, plus Save / Cancel actions.
+    -->
+    <Window.SystemBackdrop>
+        <MicaBackdrop Kind="Base" />
+    </Window.SystemBackdrop>
+
+    <Grid Padding="24" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" /> <!-- Title -->
+            <RowDefinition Height="Auto" /> <!-- Token field -->
+            <RowDefinition Height="Auto" /> <!-- Cache field -->
+            <RowDefinition Height="Auto" /> <!-- Buttons -->
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0"
+                   Text="Settings"
+                   FontSize="20"
+                   FontWeight="SemiBold" />
+
+        <!-- Hugging Face token (password style — masked) -->
+        <StackPanel Grid.Row="1" Spacing="6">
+            <TextBlock Text="Hugging Face Token"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Opacity="0.7" />
+            <PasswordBox x:Name="TokenBox"
+                         PlaceholderText="hf_… (optional, for private/gated repos)"
+                         PasswordRevealMode="Peek"
+                         MinWidth="360" />
+        </StackPanel>
+
+        <!-- Cache directory with folder chooser -->
+        <StackPanel Grid.Row="2" Spacing="6">
+            <TextBlock Text="Local Models Cache"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Opacity="0.7" />
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="CacheBox"
+                         Grid.Column="0"
+                         PlaceholderText="Where downloaded models are stored"
+                         IsReadOnly="False" />
+                <Button x:Name="BrowseButton"
+                        Grid.Column="1"
+                        Content="Browse…"
+                        Click="Browse_Click" />
+            </Grid>
+        </StackPanel>
+
+        <!-- Save / Cancel -->
+        <StackPanel Grid.Row="3"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    HorizontalAlignment="Right">
+            <Button Content="Cancel"
+                    Padding="20,6"
+                    Click="Cancel_Click" />
+            <Button Content="Save"
+                    Padding="20,6"
+                    Style="{ThemeResource AccentButtonStyle}"
+                    Click="Save_Click" />
+        </StackPanel>
+    </Grid>
+</Window>
