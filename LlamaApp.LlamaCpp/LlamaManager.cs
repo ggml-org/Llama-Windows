@@ -849,36 +849,52 @@ public sealed class LlamaManager
     {
         var pendingData = new System.Text.StringBuilder();
 
+        // Dispatch whatever has been accumulated so far as a single event.
+        // A well-formed SSE stream terminates every event with a blank line,
+        // but we also flush on EOF so a trailing event without a final blank
+        // line (e.g. a server that dropped the connection mid-event, or a test
+        // fixture) is not silently dropped.
+        IEnumerable<(string Event, string Model, JsonElement Data)> FlushAsync()
+        {
+            if (pendingData.Length == 0) yield break;
+
+            var json = pendingData.ToString();
+            pendingData.Clear();
+
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var evt = root.TryGetProperty("event", out var e) ? e.GetString() ?? "" : "";
+            var mdl = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
+            // Clone detaches the element from the JsonDocument so callers
+            // can safely consume it after the enumerator is disposed.
+            var data = root.TryGetProperty("data", out var d) ? d.Clone() : default;
+
+            if (evt.Length > 0)
+                yield return (evt, mdl, data);
+        }
+
         while (!cancel.IsCancellationRequested)
         {
             var line = await reader.ReadLineAsync(cancel);
-            if (line is null) yield break; // stream closed
+            if (line is null)
+            {
+                // Stream closed — flush any partially accumulated event.
+                foreach (var tuple in FlushAsync())
+                    yield return tuple;
+                yield break;
+            }
 
             if (line.Length == 0)
             {
                 // Blank line = dispatch the accumulated event.
-                if (pendingData.Length > 0)
-                {
-                    var json = pendingData.ToString();
-                    pendingData.Clear();
-
-                    using var doc = System.Text.Json.JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-                    var evt = root.TryGetProperty("event", out var e) ? e.GetString() ?? "" : "";
-                    var mdl = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
-                    // Clone detaches the element from the JsonDocument so callers
-                    // can safely consume it after the enumerator is disposed.
-                    var data = root.TryGetProperty("data", out var d) ? d.Clone() : default;
-
-                    if (evt.Length > 0)
-                        yield return (evt, mdl, data);
-                }
+                foreach (var tuple in FlushAsync())
+                    yield return tuple;
                 continue;
             }
 
             // Accumulate data: lines (may span multiple for a single event).
             if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
-            
+
             var value = line[5..].TrimStart();
             if (pendingData.Length > 0) pendingData.Append('\n');
             pendingData.Append(value);
