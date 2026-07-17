@@ -67,10 +67,10 @@ namespace LlamaApp.Views
         public event Action? ExitRequested;
 
         /// <summary>Locally installed models — shown with a run glyph.</summary>
-        public ObservableCollection<ModelItem> LocalModels { get; } = new();
+        public ObservableCollection<ModelItem> LocalModels { get; } = [];
 
         /// <summary>Recommended Hub models — shown with a download glyph.</summary>
-        public ObservableCollection<ModelItem> RecommendedModels { get; } = new();
+        public ObservableCollection<ModelItem> RecommendedModels { get; } = [];
 
         /// <summary>
         /// The remote catalog, fetched once and shared by both sections: the
@@ -143,8 +143,8 @@ namespace LlamaApp.Views
             try { return (await Catalog.FetchAsync()).ToList(); }
             catch (Exception ex)
             {
-                Common.Log.Warn(ex, "catalog fetch failed; Recommended stays empty");
-                return new List<Repository>();
+                Log.Warn(ex, "catalog fetch failed; Recommended stays empty");
+                return [];
             }
         }
 
@@ -189,20 +189,20 @@ namespace LlamaApp.Views
                 // can come back empty for the first second or two while the HF
                 // cache is scanned. Retry briefly so a startup race doesn't pin
                 // the list to "No model yet" forever.
-                IReadOnlyList<LlamaManager.ServerModel> serverModels =
-                    Array.Empty<LlamaManager.ServerModel>();
+                IReadOnlyList<LlamaManager.ServerModel> serverModels = [];
                 var modelDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
                 while (DateTime.UtcNow < modelDeadline)
                 {
                     try { serverModels = await mgr.GetModelsAsync(); }
-                    catch (Exception ex) { Common.Log.Debug("GetModels retry failed: " + ex.Message); serverModels = Array.Empty<LlamaManager.ServerModel>(); }
+                    catch (Exception ex) { Log.Debug("GetModels retry failed: " + ex.Message); serverModels = []; }
+                    
                     if (serverModels.Count > 0) break;
                     try { await Task.Delay(500); }
                     catch { break; }
                 }
 
                 await PopulateLocalModelsAsync(serverModels);
-                Common.Log.Info("Loaded " + serverModels.Count + " local model(s) from the server");
+                Log.Info("Loaded " + serverModels.Count + " local model(s) from the server");
             }
             finally
             {
@@ -215,7 +215,7 @@ namespace LlamaApp.Views
         /// model, enriched with catalog metadata (display name, params, size,
         /// brand logo); the vision flag comes from the server's
         /// <c>architecture.input_modalities</c>. Idempotent — clears before
-        /// adding so repeated calls (e.g. on StateChanged) don't accumulate
+        /// adding so repeated calls (e.g., on StateChanged) don't accumulate
         /// duplicates. Runs on the UI thread (callers await on it).
         /// </summary>
         private async Task PopulateLocalModelsAsync(
@@ -238,8 +238,8 @@ namespace LlamaApp.Views
         /// <summary>
         /// Resolves the remote catalog into a bare-repo-id to <see cref="Repository"/>
         /// lookup, collapsing the per-quant duplicates (a repo can appear several
-        /// times in the flattened catalog). Shared by the initial populate and
-        /// the poller reconcile.
+        /// times in the flattened catalog). Shared by the initial populating and
+        /// the poller reconciled.
         /// </summary>
         private async Task<Dictionary<string, Repository>> GetCatalogByRepoAsync()
         {
@@ -283,8 +283,7 @@ namespace LlamaApp.Views
         private static (string repo, string quant) SplitServerId(string id)
         {
             var idx = id.IndexOf(':');
-            if (idx < 0) return (id, "");
-            return (id[..idx], id[(idx + 1)..]);
+            return idx < 0 ? (id, "") : (id[..idx], id[(idx + 1)..]);
         }
 
         /// <summary>
@@ -310,9 +309,9 @@ namespace LlamaApp.Views
         {
             List<Repository> repos;
             try { repos = await _catalogTask; }
-            catch (Exception ex) { Common.Log.Warn(ex, "recommended models load failed"); return; } // network/parse failure — Recommended stays empty
+            catch (Exception ex) { Log.Warn(ex, "recommended models load failed"); return; } // network/parse failure — Recommended stays empty
 
-            // Build a display name that disambiguates quants: "GPT-OSS 20B (mxfp4)".
+            // Build a display name that disambiguate quants: "GPT-OSS 20B (mxfp4)".
             foreach (var repo in repos)
             {
                 var label = !string.IsNullOrEmpty(repo.DisplayName)
@@ -344,8 +343,8 @@ namespace LlamaApp.Views
         private void UpdateEmptyState()
         {
             var empty = LocalModels.Count == 0;
-            NoLocalModelsText.Visibility = empty ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
-            LocalModelsList.Visibility = empty ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
+            NoLocalModelsText.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+            LocalModelsList.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
         }
 
         // ---- Model download + launch ----
@@ -360,14 +359,16 @@ namespace LlamaApp.Views
         /// </summary>
         private void RecommendedModel_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
         {
-            if (sender is not Microsoft.UI.Xaml.FrameworkElement fe)
+            if (sender is not FrameworkElement fe)
                 return;
+            
             // x:Bind doesn't set DataContext inside a DataTemplate (compiled
             // bindings bypass the property), so read the row's model from its
             // Tag (bound via Tag="{x:Bind}") and fall back to a visual-tree
             // walk — same approach as the Available-row play/open buttons.
             if (ResolveRowItem(fe) is not { } item)
                 return;
+            
             if (item.IsDownloading)
                 return; // already in flight (double-tap guard)
 
@@ -386,7 +387,7 @@ namespace LlamaApp.Views
         /// Drives a single model's download → load lifecycle. Reports
         /// progress to the <see cref="ModelItem.DownloadFraction"/> property
         /// (bound to the download progress ring), then on success flips the row
-        /// into the loading state and asks the server to load it (see
+        /// into the loading state, and asks the server to load it (see
         /// <see cref="LoadAndWatchAsync"/>).
         /// </summary>
         private async Task DownloadAndLaunchAsync(ModelItem item)
@@ -403,7 +404,7 @@ namespace LlamaApp.Views
                 if (queue is null || queue.HasThreadAccess)
                     Apply();
                 else
-                    queue.TryEnqueue(() => Apply());
+                    queue.TryEnqueue(Apply);
             });
 
             try
@@ -457,11 +458,11 @@ namespace LlamaApp.Views
         /// the loading state (indeterminate ring) until the poller reports it as
         /// loaded. No-op if the row is already loading/loaded/downloading.
         /// </summary>
-        private void LocalModelPlay_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        private void LocalModelPlay_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is not Microsoft.UI.Xaml.FrameworkElement fe)
+            if (sender is not FrameworkElement fe)
             {
-                Common.Log.Warn("LocalModelPlay_Click: sender is not a FrameworkElement");
+                Log.Warn("LocalModelPlay_Click: sender is not a FrameworkElement");
                 return;
             }
             // x:Bind doesn't set DataContext on child elements inside a
@@ -470,18 +471,18 @@ namespace LlamaApp.Views
             // visual-tree walk.
             if (ResolveRowItem(fe) is not { } item)
             {
-                Common.Log.Warn("LocalModelPlay_Click: could not resolve a ModelItem (Tag=" +
+                Log.Warn("LocalModelPlay_Click: could not resolve a ModelItem (Tag=" +
                     (fe.Tag?.GetType().FullName ?? "null") + ")");
                 return;
             }
             if (item.IsLoading || item.IsLoaded || item.IsDownloading)
             {
-                Common.Log.Debug("LocalModelPlay_Click: ignored (isLoading=" + item.IsLoading +
+                Log.Debug("LocalModelPlay_Click: ignored (isLoading=" + item.IsLoading +
                     " isLoaded=" + item.IsLoaded + " isDownloading=" + item.IsDownloading + ")");
                 return;
             }
 
-            Common.Log.Info("Play clicked: loading " + ((IModel)item).ServerModelId);
+            Log.Info("Play clicked: loading " + ((IModel)item).ServerModelId);
             item.IsLoading = true;
             _ = LoadAndWatchAsync(item);
         }
@@ -492,18 +493,19 @@ namespace LlamaApp.Views
         /// loaded Available row. Passes <c>?model=&lt;ServerModelId&gt;</c> so the
         /// server loads the requested model automatically.
         /// </summary>
-        private async void LocalModelOpen_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        private async void LocalModelOpen_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is not Microsoft.UI.Xaml.FrameworkElement fe || ResolveRowItem(fe) is not ModelItem item)
+            if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
             {
-                Common.Log.Warn("LocalModelOpen_Click: could not resolve a ModelItem");
+                Log.Warn("LocalModelOpen_Click: could not resolve a ModelItem");
                 return;
             }
 
             var serverModelId = ((IModel)item).ServerModelId;
-            Common.Log.Info("Open clicked for " + serverModelId);
+            Log.Info("Open clicked for " + serverModelId);
+            
             var url = $"http://localhost:{LlamaManager.ServerPort}?model={Uri.EscapeDataString(serverModelId)}";
-            await Windows.System.Launcher.LaunchUriAsync(new System.Uri(url));
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(url));
         }
 
         /// <summary>
@@ -513,29 +515,28 @@ namespace LlamaApp.Views
         /// once the server accepts the request; the poller will confirm the status
         /// change on its next tick.
         /// </summary>
-        private async void LocalModelUnload_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        private async void LocalModelUnload_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is not Microsoft.UI.Xaml.FrameworkElement fe || ResolveRowItem(fe) is not ModelItem item)
+            if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
             {
-                Common.Log.Warn("LocalModelUnload_Click: could not resolve a ModelItem");
+                Log.Warn("LocalModelUnload_Click: could not resolve a ModelItem");
                 return;
             }
             if (!item.IsLoaded)
             {
-                Common.Log.Debug("LocalModelUnload_Click: ignored (not loaded)");
+                Log.Debug("LocalModelUnload_Click: ignored (not loaded)");
                 return;
             }
 
-            Common.Log.Info("Unload clicked: unloading " + ((IModel)item).ServerModelId);
-            var ok = await LlamaManager.Shared.UnloadModelAsync(item);
-            if (ok)
+            Log.Info("Unload clicked: unloading " + ((IModel)item).ServerModelId);
+            if (await LlamaManager.Shared.UnloadModelAsync(item))
             {
                 item.IsLoaded = false;
                 item.IsLoading = false;
             }
             else
             {
-                Common.Log.Warn("Server rejected unload for " + ((IModel)item).ServerModelId);
+                Log.Warn("Server rejected unload for " + ((IModel)item).ServerModelId);
             }
         }
 

@@ -108,7 +108,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
 
     // ---- Model load state (drives the Available-row action cell) ----
     // The lifecycle of a local model row, left to right:
-    //   unloaded  --(play click)-->  loading  --(server reports loaded)-->  loaded
+    //   unloaded --(play click)--> loading --(server reports loaded)--> loaded
     // A row that's mid-download shows the download ring first, then transitions
     // to loading once the download finishes and the load request is sent.
 
@@ -158,7 +158,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     // The Available-row action cell shows exactly one of: play (unloaded),
     // download ring (downloading from the Hub), indeterminate load ring
     // (load request sent), or OpenInNewWindow (loaded). Download takes
-    // priority over load (a row can't load until it's downloaded).
+    // priority over a load (a row can't load until it's downloaded).
 
     /// <summary>True when the play glyph should be visible (unloaded, idle).</summary>
     public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded;
@@ -185,7 +185,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>
     /// Resolves a <see cref="Brand"/> to a bundled brand-logo ImageSource
     /// (Assets/Logos/&lt;logo&gt;.svg), using the brand→logo mapping. Returns
-    /// null when the brand is unknown — the XAML Image then stays empty and the
+    /// null when the brand is unknown — the XAML Image then stays empty, and the
     /// row shows the background tile alone.
     /// </summary>
     public static ImageSource? ResolveLogo(string? brand)
