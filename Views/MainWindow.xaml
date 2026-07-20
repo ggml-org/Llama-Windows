@@ -57,6 +57,15 @@
                                 VerticalAlignment="Center"
                                 Spacing="1">
                         <StackPanel Orientation="Horizontal" Spacing="4">
+                            <!-- Running badge: a green dot shown when the server
+                                 reports this model as loaded (running). Bound to
+                                 OpenGlyphVisible so it appears in lockstep with
+                                 the Open/Unload action glyphs. -->
+                            <Ellipse Visibility="{x:Bind OpenGlyphVisible, Mode=OneWay}"
+                                     Width="8" Height="8"
+                                     Fill="#3FB950"
+                                     VerticalAlignment="Center"
+                                     ToolTipService.ToolTip="Running" />
                             <TextBlock Text="{x:Bind DisplayName}"
                                        FontSize="13"
                                        FontWeight="SemiBold"

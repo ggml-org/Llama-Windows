@@ -1,8 +1,11 @@
 using System.Runtime.InteropServices;
 using LlamaApp.Llama;
 using Microsoft.UI.Windowing;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Windows.Graphics;
+using Windows.UI;
 using WinRT.Interop;
 
 namespace LlamaApp.Views;
@@ -23,8 +26,8 @@ namespace LlamaApp.Views;
 /// </summary>
 public sealed partial class OverlayWindow : Window
 {
-    private const int OverlayWidth = 560;
-    private const int OverlayHeight = 220;
+    private const int OverlayWidth = 760;
+    private const int OverlayHeight = 440;
 
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
@@ -83,31 +86,68 @@ public sealed partial class OverlayWindow : Window
     /// <summary>Shows the overlay centered on the monitor nearest the cursor, ready for input.</summary>
     public void Summon()
     {
+        // Show the window FIRST, then populate content. Mutating a batch of
+        // control properties (Visibility / IsEnabled / Fill / Text) on a
+        // frameless WS_POPUP Mica window before it has been shown can trigger a
+        // layout pass on an un-shown window that faults in the native WinUI
+        // layer (0xC0000005). The original working version set only
+        // InputBox.IsEnabled before Show; we restore that order and do all
+        // content updates after the window is on screen.
+        Common.Log.Info("overlay summon: begin");
         CenterOnScreen();
         _lastShownMs = Environment.TickCount64;
         _suppressDeactivate = true;
-        RefreshModelBadge();
-
-        // Clear any stale response from a prior session.
-        ResponseText.Text = string.Empty;
-        InputBox.Text = string.Empty;
-        InputBox.IsEnabled = LlamaManager.Shared.LoadedModelId is not null;
 
         AppWindow.Show();
         ShowWindow(_hwnd, SW_SHOW);
         SetForegroundWindow(_hwnd);
+        Common.Log.Info("overlay summon: window shown");
+
+        // Now that the window is on screen, refresh the chrome and content.
+        RefreshModelBadge();
+        ResponseText.Text = string.Empty;
+        SetResponseChrome(streaming: false, empty: true);
+        InputBox.Text = string.Empty;
+
         _ = InputBox.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
+        Common.Log.Info("overlay summon: done");
     }
 
     private void RefreshModelBadge()
     {
         var id = LlamaManager.Shared.LoadedModelId;
-        ModelBadge.Text = id is null
-            ? "No model loaded — load one from the flyout first."
-            : $"Model: {id}";
-        InputBox.PlaceholderText = id is null
-            ? "No model loaded"
-            : "Ask the loaded model…";
+        var loaded = id is not null;
+        ModelBadge.Text = loaded ? id! : "No model";
+        StatusDot.Fill = loaded
+            ? new SolidColorBrush(Color.FromArgb(0xFF, 0x3F, 0xB9, 0x50))  // green
+            : new SolidColorBrush(Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23)); // amber
+
+        InputBox.PlaceholderText = loaded ? "Ask the loaded model…" : "No model loaded";
+        InputBox.IsEnabled = loaded;
+        SendButton.IsEnabled = loaded && !_streaming;
+
+        // Empty-state copy reflects whether a model is available.
+        if (loaded)
+        {
+            PlaceholderTitle.Text = "Ask anything";
+            PlaceholderSubtitle.Text = "Your answer will stream here.";
+        }
+        else
+        {
+            PlaceholderTitle.Text = "No model loaded";
+            PlaceholderSubtitle.Text = "Load a model from the flyout to start asking.";
+        }
+    }
+
+    /// <summary>
+    /// Toggles the streaming indicator and the empty-state placeholder. The
+    /// streaming indicator wins when active; the placeholder shows only when
+    /// the response is empty and nothing is streaming.
+    /// </summary>
+    private void SetResponseChrome(bool streaming, bool empty)
+    {
+        StreamingIndicator.Visibility = streaming ? Visibility.Visible : Visibility.Collapsed;
+        ResponsePlaceholder.Visibility = (empty && !streaming) ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void CenterOnScreen()
@@ -152,6 +192,15 @@ public sealed partial class OverlayWindow : Window
         _ = SendAsync(text);
     }
 
+    /// <summary>Send button = Enter. Same guards as the key handler.</summary>
+    private void SendButton_Click(object sender, RoutedEventArgs e)
+    {
+        var text = InputBox.Text.Trim();
+        if (string.IsNullOrEmpty(text) || _streaming) return;
+        if (LlamaManager.Shared.LoadedModelId is null) return;
+        _ = SendAsync(text);
+    }
+
     private async Task SendAsync(string message)
     {
         _chatCts?.Cancel();
@@ -159,15 +208,45 @@ public sealed partial class OverlayWindow : Window
         var token = _chatCts.Token;
 
         _streaming = true;
+        SendButton.IsEnabled = false;
         InputBox.IsEnabled = false;
         ResponseText.Text = string.Empty;
+        SetResponseChrome(streaming: true, empty: false);
+        // The LlamaManager.StreamChatAsync call below logs the model id, the
+        // HTTP response status, and the final chunk count, so the overlay log
+        // only needs to record that a send started (for correlation).
+        Common.Log.Info("overlay send: " + message.Length + " chars");
 
         try
         {
+            var firstChunk = true;
             await foreach (var chunk in LlamaManager.Shared.StreamChatAsync(message, token))
+            {
+                if (firstChunk)
+                {
+                    StreamingIndicator.Visibility = Visibility.Collapsed;
+                    firstChunk = false;
+                }
                 ResponseText.Text += chunk;
+                // Keep the latest content in view as it streams in. Scroll to
+                // the actual bottom (ScrollableHeight) rather than
+                // double.MaxValue, which can overflow native scroll math and
+                // fault (0xC0000005).
+                ResponseScroll.ChangeView(null, ResponseScroll.ScrollableHeight, null);
+            }
         }
-        catch (OperationCanceledException) { /* user started a new prompt or dismissed */ }
+        catch (OperationCanceledException)
+        {
+            // User started a new prompt or dismissed the overlay. If the
+            // overlay is still visible and nothing was streamed, the
+            // cancellation was unexpected — surface it so it doesn't silently
+            // read as "nothing happened" (which was the original bug report).
+            if (ResponseText.Text.Length == 0 && AppWindow.IsVisible)
+            {
+                Common.Log.Warn("overlay chat cancelled before any text (overlay still visible)");
+                ResponseText.Text = "⚠ Request was cancelled before any response. Try again.";
+            }
+        }
         catch (Exception ex)
         {
             ResponseText.Text = $"⚠ {ex.Message}";
@@ -176,8 +255,8 @@ public sealed partial class OverlayWindow : Window
         finally
         {
             _streaming = false;
-            RefreshModelBadge();
-            InputBox.IsEnabled = LlamaManager.Shared.LoadedModelId is not null;
+            RefreshModelBadge(); // re-enables SendButton/InputBox per model state
+            SetResponseChrome(streaming: false, empty: string.IsNullOrEmpty(ResponseText.Text));
             InputBox.Text = string.Empty;
         }
     }

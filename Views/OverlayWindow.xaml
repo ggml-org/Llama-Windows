@@ -8,48 +8,189 @@
     mc:Ignorable="d">
 
     <!--
-        Spotlight-style prompt overlay. Borderless, Mica backdrop, centered on
-        the active monitor. A single text input + a streaming response area.
-        Esc (or losing focus) dismisses it. Only useful while the app is running
-        and a model is loaded — otherwise the input is disabled with a hint.
+        Spotlight-style prompt overlay. Borderless Mica backdrop, centered on
+        the active monitor. A header (brand + model chip), a streaming response
+        area with an empty state, a composer (input + send button), and a
+        keyboard-hint footer. Esc (or losing focus) dismisses it. Only useful
+        while the app is running and a model is loaded — otherwise the input
+        is disabled with an explanatory empty state.
     -->
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="Base" />
     </Window.SystemBackdrop>
 
-    <Grid Padding="14" RowSpacing="8">
+    <Grid Padding="18" RowSpacing="12">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" /> <!-- model badge -->
-            <RowDefinition Height="Auto" /> <!-- input -->
-            <RowDefinition Height="*" />    <!-- response (scrolls) -->
+            <RowDefinition Height="Auto" /> <!-- Header -->
+            <RowDefinition Height="*" />    <!-- Response (scrolls) -->
+            <RowDefinition Height="Auto" /> <!-- Divider -->
+            <RowDefinition Height="Auto" /> <!-- Composer -->
+            <RowDefinition Height="Auto" /> <!-- Footer hint -->
         </Grid.RowDefinitions>
 
-        <!-- Loaded-model badge: dim caption above the input. -->
-        <TextBlock x:Name="ModelBadge"
-                   Grid.Row="0"
+        <!-- ============ Header: brand + model chip ============ -->
+        <Grid Grid.Row="0" ColumnSpacing="10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Brand: logo + wordmark -->
+            <StackPanel Grid.Column="0"
+                        Orientation="Horizontal"
+                        Spacing="6"
+                        VerticalAlignment="Center">
+                <Image Source="ms-appx:///Assets/llama-white.svg"
+                       Width="18" Height="18"
+                       Stretch="Uniform"
+                       VerticalAlignment="Center" />
+                <StackPanel Orientation="Horizontal"
+                            Spacing="1"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="llama"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="White"
+                               VerticalAlignment="Center" />
+                    <TextBlock Text=".app"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#FF8A3D"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Spacer -->
+
+            <!-- Model chip: status dot + model name (or "No model"). -->
+            <Border Grid.Column="2"
+                    CornerRadius="12"
+                    Padding="10,4"
+                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                    <!-- Status dot: green when a model is loaded, amber otherwise.
+                         Fill is flipped in RefreshModelBadge(). -->
+                    <Ellipse x:Name="StatusDot"
+                             Width="8" Height="8"
+                             Fill="#3FB950" />
+                    <TextBlock x:Name="ModelBadge"
+                               FontSize="12"
+                               TextTrimming="CharacterEllipsis"
+                               TextWrapping="NoWrap"
+                               MaxWidth="380"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- ============ Response area ============ -->
+        <Grid Grid.Row="1">
+            <!-- Streaming indicator (centered, shown while waiting for the
+                 first chunk). Toggled in SendAsync. -->
+            <StackPanel x:Name="StreamingIndicator"
+                        Visibility="Collapsed"
+                        Spacing="10"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center">
+                <ProgressRing Width="28" Height="28"
+                              IsActive="True" />
+                <TextBlock Text="Thinking…"
+                           FontSize="12"
+                           Opacity="0.6"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Empty state (shown when there's no response yet). Toggled in
+                 RefreshModelBadge / Summon / SendAsync. -->
+            <StackPanel x:Name="ResponsePlaceholder"
+                        Spacing="8"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center">
+                <Image Source="ms-appx:///Assets/llama-white.svg"
+                       Width="40" Height="40"
+                       Stretch="Uniform"
+                       Opacity="0.35"
+                       HorizontalAlignment="Center" />
+                <TextBlock x:Name="PlaceholderTitle"
+                           Text="Ask anything"
+                           FontSize="14"
+                           FontWeight="SemiBold"
+                           Opacity="0.7"
+                           HorizontalAlignment="Center" />
+                <TextBlock x:Name="PlaceholderSubtitle"
+                           Text="Your answer will stream here."
+                           FontSize="12"
+                           Opacity="0.5"
+                           TextWrapping="WrapWholeWords"
+                           MaxWidth="460"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- Streaming response. -->
+            <ScrollViewer x:Name="ResponseScroll"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Hidden"
+                          HorizontalScrollMode="Disabled">
+                <TextBlock x:Name="ResponseText"
+                           FontSize="14"
+                           TextWrapping="WrapWholeWords"
+                           IsTextSelectionEnabled="True" />
+            </ScrollViewer>
+        </Grid>
+
+        <!-- ============ Divider ============ -->
+        <Rectangle Grid.Row="2"
+                   Height="1"
+                   Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+        <!-- ============ Composer: input + send button ============ -->
+        <Grid Grid.Row="3" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- The input field. Enter sends; Esc closes. -->
+            <TextBox x:Name="InputBox"
+                     Grid.Column="0"
+                     PlaceholderText="Ask the loaded model…"
+                     AcceptsReturn="False"
+                     TextWrapping="Wrap"
+                     MaxHeight="120"
+                     CornerRadius="8"
+                     KeyDown="InputBox_KeyDown" />
+
+            <!-- Send button (accent). Mirrors Enter; disabled while streaming
+                 or when no model is loaded. -->
+            <Button x:Name="SendButton"
+                    Grid.Column="1"
+                    Click="SendButton_Click"
+                    CornerRadius="8"
+                    Padding="14,10"
+                    MinWidth="44"
+                    MinHeight="44"
+                    Style="{ThemeResource AccentButtonStyle}"
+                    ToolTipService.ToolTip="Send (Enter)"
+                    VerticalAlignment="Stretch">
+                <FontIcon Glyph="&#xE724;"
+                          FontSize="16" />
+            </Button>
+        </Grid>
+
+        <!-- ============ Footer: keyboard hint ============ -->
+        <TextBlock Grid.Row="4"
+                   HorizontalAlignment="Center"
                    FontSize="11"
-                   Opacity="0.6"
-                   TextWrapping="NoWrap"
-                   TextTrimming="CharacterEllipsis" />
-
-        <!-- The input field. Enter sends; Esc closes. -->
-        <TextBox x:Name="InputBox"
-                 Grid.Row="1"
-                 PlaceholderText="Ask the loaded model…"
-                 AcceptsReturn="False"
-                 TextWrapping="Wrap"
-                 MaxHeight="80"
-                 KeyDown="InputBox_KeyDown" />
-
-        <!-- Streaming response. -->
-        <ScrollViewer Grid.Row="2"
-                      VerticalScrollBarVisibility="Auto"
-                      HorizontalScrollBarVisibility="Hidden"
-                      HorizontalScrollMode="Disabled">
-            <TextBlock x:Name="ResponseText"
-                       FontSize="13"
-                       TextWrapping="WrapWholeWords"
-                       IsTextSelectionEnabled="True" />
-        </ScrollViewer>
+                   Opacity="0.45">
+            <Run Text="Enter" FontWeight="SemiBold" />
+            <Run Text=" to send" />
+            <Run Text="  ·  " />
+            <Run Text="Esc" FontWeight="SemiBold" />
+            <Run Text=" to dismiss" />
+        </TextBlock>
     </Grid>
 </Window>

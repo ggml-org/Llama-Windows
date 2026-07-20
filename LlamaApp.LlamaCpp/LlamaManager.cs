@@ -851,26 +851,52 @@ public sealed class LlamaManager
         using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 
         var body = $$"""{"model":"{{model}}","stream":true,"messages":[{"role":"user","content":{{JsonString(userMessage)}}}]}""";
-        using var resp = await client.PostAsync(
-            new Uri($"{baseUrl}/v1/chat/completions"),
-            new StringContent(body, Encoding.UTF8, "application/json"),
-            cancel);
+        // SendAsync with ResponseHeadersRead returns as soon as the response
+        // headers arrive, so we can read the SSE body incrementally below.
+        // PostAsync (the default ResponseContentRead) would buffer the entire
+        // response before completing — defeating streaming and making the
+        // overlay hang until the whole generation finished.
+        using var req = new HttpRequestMessage(HttpMethod.Post,
+            new Uri($"{baseUrl}/v1/chat/completions"))
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+        Log.Info($"chat completion → POST /v1/chat/completions (model={model}, prompt={userMessage.Length} chars)");
+        using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancel);
+        Log.Info($"chat completion ← HTTP {(int)resp.StatusCode} {resp.StatusCode}");
         resp.EnsureSuccessStatusCode();
 
         // Reuse the same SSE line framing as /models/sse: data: {json} lines,
         // terminated by a blank line / "data: [DONE]". We parse incrementally so
         // tokens surface as soon as the server flushes them.
+        // Default buffer size matches the working /models/sse path.
         await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
         using var reader = new StreamReader(stream);
 
+        var yielded = 0;
+        var loggedLines = 0;
+        Log.Info("chat completion: reading SSE stream");
         while (await reader.ReadLineAsync(cancel) is { } line)
         {
             cancel.ThrowIfCancellationRequested();
+            // Log the first few raw lines verbatim (truncated) so we can see
+            // the exact framing the server uses — prefix, line breaks, JSON
+            // shape. Capped to avoid spamming the log on long generations.
+            if (loggedLines < 20)
+            {
+                var preview = line.Length > 200 ? line.Substring(0, 200) + "…" : line;
+                Log.Debug($"chat sse raw[{loggedLines}]: '{preview}'");
+                loggedLines++;
+            }
             if (line.Length == 0) continue;
             if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
 
             var value = line[5..].TrimStart();
-            if (value == "[DONE]") yield break;
+            if (value == "[DONE]")
+            {
+                Log.Info($"chat completion done: {yielded} chunk(s) yielded");
+                yield break;
+            }
             if (value.Length == 0) continue;
 
             using var doc = JsonDocument.Parse(value);
@@ -885,8 +911,15 @@ public sealed class LlamaManager
             
             var text = c.GetString();
             if (!string.IsNullOrEmpty(text))
+            {
+                yielded++;
                 yield return text;
+            }
         }
+        // ReadLineAsync returned null: the server closed the stream without
+        // sending [DONE]. Log so we can tell a hang (no log) from a clean
+        // close with zero parsed chunks (this line).
+        Log.Info($"chat completion stream ended without [DONE]: {yielded} chunk(s) yielded");
     }
 
     /// <summary>Minimal JSON string escaper for embedding user text in a raw body.</summary>
