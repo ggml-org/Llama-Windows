@@ -506,7 +506,7 @@ public sealed class LlamaManager
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Log.Debug($"model poll fetch failed: {ex.Message}"); /* transient — keep the previous snapshot in effect */ }
 
-            try { ModelsChanged?.Invoke(this, snapshot); }
+            try { _lastModelsSnapshot = snapshot; ModelsChanged?.Invoke(this, snapshot); }
             catch (Exception ex) { Log.Warn(ex, "ModelsChanged handler threw"); /* a handler error doesn't take down the poller */ }
 
             if (snapshot.Count > 0)
@@ -817,6 +817,112 @@ public sealed class LlamaManager
         Source = d.Source,
         CanRemove = d.CanRemove,
     };
+
+    // ---- Chat completion (POST /v1/chat/completions, SSE) ----
+
+    /// <summary>
+    /// The model the spotlight overlay should prompt: the first server-reported
+    /// <c>loaded</c> model, or <c>null</c> when none is resident (the overlay
+    /// shows its disabled hint in that case). Cached from the latest poller
+    /// snapshot so a hotkey press doesn't block on <c>GET /models</c>.
+    /// </summary>
+    private IReadOnlyList<ServerModel> _lastModelsSnapshot = [];
+
+    /// <summary>Latest known loaded model id, or <c>null</c> when none is loaded.</summary>
+    public string? LoadedModelId
+    {
+        get
+        {
+            foreach (var m in _lastModelsSnapshot)
+                if (m.IsLoaded) return m.Id;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Streams an OpenAI-compatible chat completion for <paramref name="userMessage"/>
+    /// against the currently-loaded model, yielding <c>delta.content</c> chunks as
+    /// they arrive from <c>POST /v1/chat/completions</c> (SSE). Throws if the
+    /// server isn't running or no model is loaded. The caller cancels to abort.
+    /// </summary>
+    public async IAsyncEnumerable<string> StreamChatAsync(
+        string userMessage,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancel)
+    {
+        if (ServerStatus != ServerState.Running)
+            throw new InvalidOperationException("llama server is not running.");
+
+        var model = LoadedModelId
+            ?? throw new InvalidOperationException("No model is loaded. Load one from the flyout first.");
+
+        var baseUrl = $"http://localhost:{ServerPort}";
+        using var client = new HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+
+        var body = $$"""{"model":"{{model}}","stream":true,"messages":[{"role":"user","content":{{JsonString(userMessage)}}}]}""";
+        using var resp = await client.PostAsync(
+            new Uri($"{baseUrl}/v1/chat/completions"),
+            new StringContent(body, System.Text.Encoding.UTF8, "application/json"),
+            cancel);
+        resp.EnsureSuccessStatusCode();
+
+        // Reuse the same SSE line framing as /models/sse: data: {json} lines,
+        // terminated by a blank line / "data: [DONE]". We parse incrementally so
+        // tokens surface as soon as the server flushes them.
+        using var stream = await resp.Content.ReadAsStreamAsync(cancel);
+        using var reader = new StreamReader(stream);
+
+        string? line;
+        while ((line = await reader.ReadLineAsync(cancel)) is not null)
+        {
+            cancel.ThrowIfCancellationRequested();
+            if (line.Length == 0) continue;
+            if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
+
+            var value = line[5..].TrimStart();
+            if (value == "[DONE]") yield break;
+            if (value.Length == 0) continue;
+
+            using var doc = System.Text.Json.JsonDocument.Parse(value);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
+                continue;
+            var delta = choices[0].TryGetProperty("delta", out var d) ? d : default;
+            if (delta.ValueKind == JsonValueKind.Object &&
+                delta.TryGetProperty("content", out var c) &&
+                c.ValueKind == JsonValueKind.String)
+            {
+                var text = c.GetString();
+                if (!string.IsNullOrEmpty(text))
+                    yield return text;
+            }
+        }
+    }
+
+    /// <summary>Minimal JSON string escaper for embedding user text in a raw body.</summary>
+    private static string JsonString(string s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length + 2);
+        sb.Append('"');
+        foreach (var ch in s)
+        {
+            switch (ch)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                default:
+                    if (ch < 0x20) sb.Append($"\\u{(int)ch:X4}");
+                    else sb.Append(ch);
+                    break;
+            }
+        }
+        sb.Append('"');
+        return sb.ToString();
+    }
 
     // ---- /models JSON DTOs ----
 

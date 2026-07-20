@@ -7,6 +7,8 @@ namespace LlamaApp
     {
         private MainWindow? _window;
         private TrayIconManager? _trayIcon;
+        private Views.OverlayWindow? _overlay;
+        private GlobalHotkey? _hotkey;
         
         /// <summary>
         /// Initializes the singleton application object.  This is the first line of authored code
@@ -27,8 +29,13 @@ namespace LlamaApp
             );
             Common.Log.Info("LlamaApp starting");
 
+            _dispatcher = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()
+                ?? throw new InvalidOperationException("App must initialize on the UI thread.");
+
             InitializeComponent();
         }
+
+        private Microsoft.UI.Dispatching.DispatcherQueue _dispatcher = null!;
 
         /// <summary>
         /// Invoked when the end user launches the application normally.  Other entry points
@@ -57,6 +64,14 @@ namespace LlamaApp
             Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
             Common.Log.Info($"Cache directory: {Settings.Current.CacheDirectory}");
             _ = Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
+
+            // Spotlight-style prompt overlay, summoned by a global Alt+Space
+            // hotkey. Created lazily on first press and reused thereafter; the
+            // hotkey is registered for the app's lifetime only, so it stops
+            // working the moment LlamaApp exits.
+            _overlay = new Views.OverlayWindow();
+            _hotkey = new GlobalHotkey();
+            _hotkey.Register(() => _dispatcher.TryEnqueue(() => _overlay.Summon()));
         }
     }
 }
