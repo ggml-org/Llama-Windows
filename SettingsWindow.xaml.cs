@@ -13,21 +13,30 @@ namespace LlamaApp
     /// </summary>
     public sealed partial class SettingsWindow : Window
     {
-        private const int WindowWidth = 480;
-        private const int WindowHeight = 380;
+        // Settings window occupies 60% of the work-area width and 40% of its
+        // height on whichever monitor the cursor is on (sized/centered on
+        // construction in SizeAndCenterOnScreen).
+        private const double WidthFraction = 0.50;
+        private const double HeightFraction = 0.50;
 
         public SettingsWindow()
         {
             InitializeComponent();
-            Title = "LlamaApp Settings";
+            Title = "Settings";
             Configure();
-            CenterOnScreen();
+            SizeAndCenterOnScreen();
             LoadCurrent();
+
+            // Extend Mica/content into the titlebar area and register our
+            // AppTitleBar element as the drag region. The system caption
+            // buttons (close) stay on the right; this is what drops the
+            // default white titlebar that clashes with the Mica backdrop.
+            ExtendsContentIntoTitleBar = true;
+            SetTitleBar(AppTitleBar);
         }
 
         private void Configure()
         {
-            AppWindow.Resize(new SizeInt32(WindowWidth, WindowHeight));
             var presenter = (OverlappedPresenter)AppWindow.Presenter;
             presenter.IsResizable = false;
             presenter.IsMaximizable = false;
@@ -35,23 +44,34 @@ namespace LlamaApp
             // Don't appear in Alt-Tab / taskbar switcher — it's a child dialog
             // of the tray app, not a standalone top-level window.
             AppWindow.IsShownInSwitchers = false;
+
+            // Keep the border + titlebar (caption buttons) but let the Mica
+            // backdrop fill the titlebar area (ExtendsContentIntoTitleBar set
+            // in the ctor) — this is what drops the default white titlebar.
+            presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: true);
         }
 
         /// <summary>
-        /// Centers the window on the monitor the cursor is on — the natural
-        /// spot for a dialog spawned from a tray-only app (no owning window to
-        /// center on).
+        /// Sizes the window to WidthFraction × HeightFraction of the work area
+        /// of the monitor the cursor is on, then centers it there — the
+        /// natural spot for a dialog spawned from a tray-only app (no owning
+        /// window to center on).
         /// </summary>
-        private void CenterOnScreen()
+        private void SizeAndCenterOnScreen()
         {
-            var hwnd = WindowNative.GetWindowHandle(this);
             var cursor = GetCursorPos(out var pt) ? pt : new POINT();
             var hmon = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
             var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
             GetMonitorInfo(hmon, ref mi);
 
-            int x = mi.rcWork.Left + ((mi.rcWork.Right - mi.rcWork.Left) - WindowWidth) / 2;
-            int y = mi.rcWork.Top + ((mi.rcWork.Bottom - mi.rcWork.Top) - WindowHeight) / 2;
+            int workWidth = mi.rcWork.Right - mi.rcWork.Left;
+            int workHeight = mi.rcWork.Bottom - mi.rcWork.Top;
+            int width = (int)(workWidth * WidthFraction);
+            int height = (int)(workHeight * HeightFraction);
+
+            AppWindow.Resize(new SizeInt32(width, height));
+            int x = mi.rcWork.Left + (workWidth - width) / 2;
+            int y = mi.rcWork.Top + (workHeight - height) / 2;
             AppWindow.Move(new PointInt32(x, y));
         }
 
@@ -60,6 +80,10 @@ namespace LlamaApp
             var s = Settings.Current;
             TokenBox.Password = s.HuggingFaceToken ?? "";
             CacheBox.Text = s.CacheDirectory ?? "";
+            // The OS shortcut is the source of truth: a user may have toggled
+            // it via Task Manager > Startup outside this app, so read the real
+            // state rather than the persisted preference.
+            LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
         }
 
         private async void Browse_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
@@ -88,6 +112,22 @@ namespace LlamaApp
             var s = Settings.Current;
             s.HuggingFaceToken = TokenBox.Password;
             s.CacheDirectory = CacheBox.Text.Trim();
+
+            // Apply the startup preference to the OS (create/delete the .lnk)
+            // and mirror it into settings.json as a hint for the checkbox on
+            // next open (LoadCurrent still re-reads the real OS state).
+            var wantStartup = LaunchAtStartupBox.IsChecked == true;
+            s.LaunchAtStartup = wantStartup;
+            try
+            {
+                if (wantStartup) StartupHelper.Register();
+                else StartupHelper.Unregister();
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "startup shortcut update failed");
+            }
+
             s.Save();
             Close();
         }

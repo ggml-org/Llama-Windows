@@ -42,6 +42,15 @@ public sealed class Settings
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".cache", "huggingface", "hub");
 
+    /// <summary>
+    /// Whether LlamaApp should launch automatically when the user signs in to
+    /// Windows. The authoritative state is the presence of the startup
+    /// shortcut managed by <see cref="StartupHelper"/> (in the user's Startup
+    /// folder); this value is a persisted hint so the Settings checkbox can
+    /// reflect intent on first open before re-reading the OS state.
+    /// </summary>
+    public bool LaunchAtStartup { get; set; } = false;
+
     private static Settings Load()
     {
         try

@@ -7,9 +7,9 @@ namespace LlamaApp
     {
         private MainWindow? _window;
         private TrayIconManager? _trayIcon;
-        private Views.OverlayWindow? _overlay;
+        private OverlayWindow? _overlay;
         private GlobalHotkey? _hotkey;
-        
+
         /// <summary>
         /// Initializes the singleton application object.  This is the first line of authored code
         /// executed, and as such is the logical equivalent of main() or WinMain().
@@ -30,7 +30,7 @@ namespace LlamaApp
             Common.Log.Info("LlamaApp starting");
 
             _dispatcher = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()
-                ?? throw new InvalidOperationException("App must initialize on the UI thread.");
+                          ?? throw new InvalidOperationException("App must initialize on the UI thread.");
 
             InitializeComponent();
         }
@@ -69,7 +69,7 @@ namespace LlamaApp
             // hotkey. Created lazily on first press and reused thereafter; the
             // hotkey is registered for the app's lifetime only, so it stops
             // working the moment LlamaApp exits.
-            _overlay = new Views.OverlayWindow();
+            _overlay = new OverlayWindow();
             _hotkey = new GlobalHotkey();
             _hotkey.Register(() => _dispatcher.TryEnqueue(() => _overlay.Summon()));
         }
