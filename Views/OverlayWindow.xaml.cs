@@ -11,33 +11,46 @@ using WinRT.Interop;
 namespace LlamaApp.Views;
 
 /// <summary>
-/// A spotlight-style prompt overlay: a centered, borderless Mica window with a
-/// single text input that streams a chat completion from the running llama
-/// server's loaded model. Summoned by the global <c>Alt+Space</c> hotkey (see
-/// <see cref="GlobalHotkey"/>) while LlamaApp is running.
+/// A spotlight-style prompt overlay: a centered, borderless Mica window that
+/// hosts the running llama server's WebUI for the currently loaded model inside
+/// a <see cref="Microsoft.UI.Xaml.Controls.WebView2"/>. Summoned by the global
+/// <c>Alt+Space</c> hotkey (see <see cref="GlobalHotkey"/>) while LlamaApp is
+/// running.
 ///
 /// <para>The overlay is created lazily on first summon and reused thereafter:
 /// it hides rather than closes, mirroring the tray flyout's lifecycle, so
 /// re-summoning is instant. Esc and deactivation (clicking away) dismiss it.</para>
 ///
-/// <para>"Only works when the app is started" is enforced by the hotkey's
-/// lifetime (registered on app start, unregistered on exit) and by the input
-/// being disabled with a hint when no model is loaded yet.</para>
+/// <para>The embedded WebUI drives its own prompt + streaming chat against the
+/// loaded model — the overlay just points a WebView2 at the right model URL
+/// (<c>http://localhost:{ServerPort}?model={LoadedModelId}</c>, the same URL
+/// <c>MainWindow</c> opens in the system browser) and lets it run. When no
+/// model is loaded yet the base WebUI (router mode) is shown, which still lists
+/// models; the header chip flips to amber + "No model".</para>
 /// </summary>
 public sealed partial class OverlayWindow : Window
 {
-    private const int OverlayWidth = 760;
-    private const int OverlayHeight = 440;
+    // Overlay covers ~70% of the active monitor's work-area width and ~80% of
+    // its height so the embedded WebUI has room. Tunable: bump these toward 1.0
+    // (or set fixed constants) to taste.
+    private const double OverlayWidthFraction = 0.6;
+    private const double OverlayHeightFraction = 0.7;
+    // Clamp so the overlay never collapses to nothing on a tiny/rotated screen.
+    private const int OverlayMinWidth = 520;
+    private const int OverlayMinHeight = 360;
 
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int GWL_STYLE = -16;
     private const long WS_POPUP = 0x80000000L;
 
-    private CancellationTokenSource? _chatCts;
     private bool _configured;
-    private bool _streaming;
     private IntPtr _hwnd;
+
+    // URL the WebView2 is currently showing, so a re-summon re-navigates only
+    // when the model id actually changed (preserves an in-flight chat). Null
+    // until the first navigation lands.
+    private Uri? _currentUri;
 
     // Suppress the spurious deactivation that races ahead of (or lands just
     // after) the show sequence when Windows denies us foreground — without it
@@ -65,7 +78,6 @@ public sealed partial class OverlayWindow : Window
         presenter.IsMaximizable = false;
         presenter.IsMinimizable = false;
         AppWindow.IsShownInSwitchers = false; // keep out of Alt-Tab / taskbar
-        AppWindow.Resize(new SizeInt32(OverlayWidth, OverlayHeight));
 
         _hwnd = WindowNative.GetWindowHandle(this);
 
@@ -87,12 +99,11 @@ public sealed partial class OverlayWindow : Window
     public void Summon()
     {
         // Show the window FIRST, then populate content. Mutating a batch of
-        // control properties (Visibility / IsEnabled / Fill / Text) on a
-        // frameless WS_POPUP Mica window before it has been shown can trigger a
-        // layout pass on an un-shown window that faults in the native WinUI
-        // layer (0xC0000005). The original working version set only
-        // InputBox.IsEnabled before Show; we restore that order and do all
-        // content updates after the window is on screen.
+        // control properties on a frameless WS_POPUP Mica window before it has
+        // been shown can trigger a layout pass on an un-shown window that faults
+        // in the native WinUI layer (0xC0000005). The original working version
+        // set only InputBox.IsEnabled before Show; we restore that order and do
+        // all content updates after the window is on screen.
         Common.Log.Info("overlay summon: begin");
         CenterOnScreen();
         _lastShownMs = Environment.TickCount64;
@@ -103,14 +114,51 @@ public sealed partial class OverlayWindow : Window
         SetForegroundWindow(_hwnd);
         Common.Log.Info("overlay summon: window shown");
 
-        // Now that the window is on screen, refresh the chrome and content.
+        // Now that the window is on screen, refresh the chrome and navigate
+        // the WebView2 to the loaded model's WebUI.
         RefreshModelBadge();
-        ResponseText.Text = string.Empty;
-        SetResponseChrome(streaming: false, empty: true);
-        InputBox.Text = string.Empty;
+        NavigateToModel();
 
-        _ = InputBox.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
         Common.Log.Info("overlay summon: done");
+    }
+
+    /// <summary>
+    /// Builds the URL the WebView2 should show: the running llama server's
+    /// WebUI, scoped to the currently loaded model when one is resident. This
+    /// mirrors <c>MainWindow.LocalModelOpen_Click</c>'s
+    /// <c>?model=&lt;ServerModelId&gt;</c> pattern (passing <c>?model=</c> makes
+    /// the server auto-load that model). With no model loaded we fall back to
+    /// the bare WebUI — router mode hosts it even with no model, so the user
+    /// can browse/download models from inside the overlay too.
+    /// </summary>
+    private static Uri BuildModelUri()
+    {
+        var baseUrl = $"http://localhost:{LlamaManager.ServerPort}";
+        var id = LlamaManager.Shared.LoadedModelId;
+        return id is null
+            ? new Uri(baseUrl)
+            : new Uri($"{baseUrl}?model={Uri.EscapeDataString(id)}");
+    }
+
+    /// <summary>
+    /// Points the embedded WebView2 at <see cref="BuildModelUri"/>. The
+    /// initial Source assignment also lazily initializes the WebView2's
+    /// CoreWebView2 (setting Source is equivalent to EnsureCoreWebView2Async
+    /// + Navigate). Only re-navigates when the URL changes so a re-summon
+    /// mid-chat doesn't reset it.
+    /// </summary>
+    private void NavigateToModel()
+    {
+        var uri = BuildModelUri();
+        if (_currentUri is not null && _currentUri == uri)
+        {
+            Common.Log.Info($"overlay webview: URL unchanged ({uri}), keeping current page");
+            return;
+        }
+
+        _currentUri = uri;
+        ModelWebUi.Source = uri;
+        Common.Log.Info($"overlay webview: navigating to {uri}");
     }
 
     private void RefreshModelBadge()
@@ -121,41 +169,16 @@ public sealed partial class OverlayWindow : Window
         StatusDot.Fill = loaded
             ? new SolidColorBrush(Color.FromArgb(0xFF, 0x3F, 0xB9, 0x50))  // green
             : new SolidColorBrush(Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23)); // amber
-
-        InputBox.PlaceholderText = loaded ? "Ask the loaded model…" : "No model loaded";
-        InputBox.IsEnabled = loaded;
-        SendButton.IsEnabled = loaded && !_streaming;
-
-        // Empty-state copy reflects whether a model is available.
-        if (loaded)
-        {
-            PlaceholderTitle.Text = "Ask anything";
-            PlaceholderSubtitle.Text = "Your answer will stream here.";
-        }
-        else
-        {
-            PlaceholderTitle.Text = "No model loaded";
-            PlaceholderSubtitle.Text = "Load a model from the flyout to start asking.";
-        }
-    }
-
-    /// <summary>
-    /// Toggles the streaming indicator and the empty-state placeholder. The
-    /// streaming indicator wins when active; the placeholder shows only when
-    /// the response is empty and nothing is streaming.
-    /// </summary>
-    private void SetResponseChrome(bool streaming, bool empty)
-    {
-        StreamingIndicator.Visibility = streaming ? Visibility.Visible : Visibility.Collapsed;
-        ResponsePlaceholder.Visibility = (empty && !streaming) ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void CenterOnScreen()
     {
-        AppWindow.Resize(new SizeInt32(OverlayWidth, OverlayHeight));
         var area = GetCursorMonitorWorkArea();
-        var x = area.X + (area.Width - OverlayWidth) / 2;
-        var y = area.Y + (area.Height - OverlayHeight) / 2;
+        var w = Math.Max(OverlayMinWidth, (int)(area.Width * OverlayWidthFraction));
+        var h = Math.Max(OverlayMinHeight, (int)(area.Height * OverlayHeightFraction));
+        AppWindow.Resize(new SizeInt32(w, h));
+        var x = area.X + (area.Width - w) / 2;
+        var y = area.Y + (area.Height - h) / 2;
         AppWindow.Move(new PointInt32(x, y));
     }
 
@@ -172,93 +195,11 @@ public sealed partial class OverlayWindow : Window
             info.rcWork.Bottom - info.rcWork.Top);
     }
 
-    // ---- send / stream ----
-
-    private void InputBox_KeyDown(object sender, KeyRoutedEventArgs e)
+    /// <summary>Esc accelerator (bound in XAML) dismisses the overlay.</summary>
+    private void EscapeAccelerator_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
-        if (e.Key == Windows.System.VirtualKey.Escape)
-        {
-            Hide();
-            e.Handled = true;
-            return;
-        }
-        if (e.Key != Windows.System.VirtualKey.Enter) return;
-
-        var text = InputBox.Text.Trim();
-        if (string.IsNullOrEmpty(text) || _streaming) { e.Handled = true; return; }
-        if (LlamaManager.Shared.LoadedModelId is null) { e.Handled = true; return; }
-
-        e.Handled = true;
-        _ = SendAsync(text);
-    }
-
-    /// <summary>Send button = Enter. Same guards as the key handler.</summary>
-    private void SendButton_Click(object sender, RoutedEventArgs e)
-    {
-        var text = InputBox.Text.Trim();
-        if (string.IsNullOrEmpty(text) || _streaming) return;
-        if (LlamaManager.Shared.LoadedModelId is null) return;
-        _ = SendAsync(text);
-    }
-
-    private async Task SendAsync(string message)
-    {
-        _chatCts?.Cancel();
-        _chatCts = new CancellationTokenSource();
-        var token = _chatCts.Token;
-
-        _streaming = true;
-        SendButton.IsEnabled = false;
-        InputBox.IsEnabled = false;
-        ResponseText.Text = string.Empty;
-        SetResponseChrome(streaming: true, empty: false);
-        // The LlamaManager.StreamChatAsync call below logs the model id, the
-        // HTTP response status, and the final chunk count, so the overlay log
-        // only needs to record that a send started (for correlation).
-        Common.Log.Info("overlay send: " + message.Length + " chars");
-
-        try
-        {
-            var firstChunk = true;
-            await foreach (var chunk in LlamaManager.Shared.StreamChatAsync(message, token))
-            {
-                if (firstChunk)
-                {
-                    StreamingIndicator.Visibility = Visibility.Collapsed;
-                    firstChunk = false;
-                }
-                ResponseText.Text += chunk;
-                // Keep the latest content in view as it streams in. Scroll to
-                // the actual bottom (ScrollableHeight) rather than
-                // double.MaxValue, which can overflow native scroll math and
-                // fault (0xC0000005).
-                ResponseScroll.ChangeView(null, ResponseScroll.ScrollableHeight, null);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // User started a new prompt or dismissed the overlay. If the
-            // overlay is still visible and nothing was streamed, the
-            // cancellation was unexpected — surface it so it doesn't silently
-            // read as "nothing happened" (which was the original bug report).
-            if (ResponseText.Text.Length == 0 && AppWindow.IsVisible)
-            {
-                Common.Log.Warn("overlay chat cancelled before any text (overlay still visible)");
-                ResponseText.Text = "⚠ Request was cancelled before any response. Try again.";
-            }
-        }
-        catch (Exception ex)
-        {
-            ResponseText.Text = $"⚠ {ex.Message}";
-            Common.Log.Warn(ex, "overlay chat completion failed");
-        }
-        finally
-        {
-            _streaming = false;
-            RefreshModelBadge(); // re-enables SendButton/InputBox per model state
-            SetResponseChrome(streaming: false, empty: string.IsNullOrEmpty(ResponseText.Text));
-            InputBox.Text = string.Empty;
-        }
+        Hide();
+        args.Handled = true;
     }
 
     private void OverlayWindow_Activated(object sender, WindowActivatedEventArgs args)
@@ -282,7 +223,6 @@ public sealed partial class OverlayWindow : Window
 
     private void Hide()
     {
-        _chatCts?.Cancel();
         AppWindow.Hide();
         ShowWindow(_hwnd, SW_HIDE);
     }

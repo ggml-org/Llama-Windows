@@ -3,28 +3,43 @@
     x:Class="LlamaApp.Views.OverlayWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Microsoft.UI.Xaml.Controls"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
     <!--
         Spotlight-style prompt overlay. Borderless Mica backdrop, centered on
-        the active monitor. A header (brand + model chip), a streaming response
-        area with an empty state, a composer (input + send button), and a
-        keyboard-hint footer. Esc (or losing focus) dismisses it. Only useful
-        while the app is running and a model is loaded — otherwise the input
-        is disabled with an explanatory empty state.
+        the active monitor. A header (brand + model chip) followed by a WebView2
+        that hosts the running llama server's WebUI for the currently loaded
+        model — the WebUI provides its own prompt + streaming chat, so the old
+        native composer/response widgets are gone. Esc (or losing focus)
+        dismisses it.
+
+        The overlay grows to ~70% × ~80% of the active monitor's work area to
+        give the embedded WebUI room to breathe. Summoning refreshes the URL
+        (so a newly-loaded model is picked up) without reloading when the URL
+        is unchanged (so an in-flight chat isn't reset).
     -->
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="Base" />
     </Window.SystemBackdrop>
 
+    <!-- Esc dismisses the overlay (the old input box key handler is gone).
+         KeyboardAccelerators live on Control, not Window, so the Grid is wrapped
+         in a UserControl. Window-level accelerators defined here are processed by
+         the input system regardless of focus — they fire even when focus is inside
+         the nested WebView2 (a separate HWND), which a Grid/Window KeyDown handler
+         would miss. -->
+    <UserControl>
+        <UserControl.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Escape" Invoked="EscapeAccelerator_Invoked" />
+        </UserControl.KeyboardAccelerators>
+
     <Grid Padding="18" RowSpacing="12">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" /> <!-- Header -->
-            <RowDefinition Height="*" />    <!-- Response (scrolls) -->
-            <RowDefinition Height="Auto" /> <!-- Divider -->
-            <RowDefinition Height="Auto" /> <!-- Composer -->
+            <RowDefinition Height="Auto" /> <!-- Header (title bar) -->
+            <RowDefinition Height="*" />    <!-- WebView2 hosting the model WebUI -->
             <RowDefinition Height="Auto" /> <!-- Footer hint -->
         </Grid.RowDefinitions>
 
@@ -81,116 +96,31 @@
                                FontSize="12"
                                TextTrimming="CharacterEllipsis"
                                TextWrapping="NoWrap"
-                               MaxWidth="380"
+                               MaxWidth="560"
                                VerticalAlignment="Center" />
                 </StackPanel>
             </Border>
         </Grid>
 
-        <!-- ============ Response area ============ -->
-        <Grid Grid.Row="1">
-            <!-- Streaming indicator (centered, shown while waiting for the
-                 first chunk). Toggled in SendAsync. -->
-            <StackPanel x:Name="StreamingIndicator"
-                        Visibility="Collapsed"
-                        Spacing="10"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center">
-                <ProgressRing Width="28" Height="28"
-                              IsActive="True" />
-                <TextBlock Text="Thinking…"
-                           FontSize="12"
-                           Opacity="0.6"
-                           HorizontalAlignment="Center" />
-            </StackPanel>
-
-            <!-- Empty state (shown when there's no response yet). Toggled in
-                 RefreshModelBadge / Summon / SendAsync. -->
-            <StackPanel x:Name="ResponsePlaceholder"
-                        Spacing="8"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Center">
-                <Image Source="ms-appx:///Assets/llama-white.svg"
-                       Width="40" Height="40"
-                       Stretch="Uniform"
-                       Opacity="0.35"
-                       HorizontalAlignment="Center" />
-                <TextBlock x:Name="PlaceholderTitle"
-                           Text="Ask anything"
-                           FontSize="14"
-                           FontWeight="SemiBold"
-                           Opacity="0.7"
-                           HorizontalAlignment="Center" />
-                <TextBlock x:Name="PlaceholderSubtitle"
-                           Text="Your answer will stream here."
-                           FontSize="12"
-                           Opacity="0.5"
-                           TextWrapping="WrapWholeWords"
-                           MaxWidth="460"
-                           HorizontalAlignment="Center" />
-            </StackPanel>
-
-            <!-- Streaming response. -->
-            <ScrollViewer x:Name="ResponseScroll"
-                          VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Hidden"
-                          HorizontalScrollMode="Disabled">
-                <TextBlock x:Name="ResponseText"
-                           FontSize="14"
-                           TextWrapping="WrapWholeWords"
-                           IsTextSelectionEnabled="True" />
-            </ScrollViewer>
-        </Grid>
-
-        <!-- ============ Divider ============ -->
-        <Rectangle Grid.Row="2"
-                   Height="1"
-                   Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
-
-        <!-- ============ Composer: input + send button ============ -->
-        <Grid Grid.Row="3" ColumnSpacing="8">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-
-            <!-- The input field. Enter sends; Esc closes. -->
-            <TextBox x:Name="InputBox"
-                     Grid.Column="0"
-                     PlaceholderText="Ask the loaded model…"
-                     AcceptsReturn="False"
-                     TextWrapping="Wrap"
-                     MaxHeight="120"
-                     CornerRadius="8"
-                     KeyDown="InputBox_KeyDown" />
-
-            <!-- Send button (accent). Mirrors Enter; disabled while streaming
-                 or when no model is loaded. -->
-            <Button x:Name="SendButton"
-                    Grid.Column="1"
-                    Click="SendButton_Click"
-                    CornerRadius="8"
-                    Padding="14,10"
-                    MinWidth="44"
-                    MinHeight="44"
-                    Style="{ThemeResource AccentButtonStyle}"
-                    ToolTipService.ToolTip="Send (Enter)"
-                    VerticalAlignment="Stretch">
-                <FontIcon Glyph="&#xE724;"
-                          FontSize="16" />
-            </Button>
-        </Grid>
+        <!-- ============ WebView2: hosts the llama server WebUI for the loaded model ============ -->
+        <!-- DefaultBackgroundColor transparent lets the Mica backdrop show through
+             while the page is blank/loading. Source is assigned in Summon() from
+             BuildModelUri(); only re-navigated when the URL actually changes so a
+             re-summon during a chat doesn't reset it. -->
+        <controls:WebView2 x:Name="ModelWebUi"
+                            Grid.Row="1"
+                            DefaultBackgroundColor="Transparent"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Stretch" />
 
         <!-- ============ Footer: keyboard hint ============ -->
-        <TextBlock Grid.Row="4"
+        <TextBlock Grid.Row="2"
                    HorizontalAlignment="Center"
                    FontSize="11"
                    Opacity="0.45">
-            <Run Text="Enter" FontWeight="SemiBold" />
-            <Run Text=" to send" />
-            <Run Text="  ·  " />
             <Run Text="Esc" FontWeight="SemiBold" />
             <Run Text=" to dismiss" />
         </TextBlock>
     </Grid>
+    </UserControl>
 </Window>
