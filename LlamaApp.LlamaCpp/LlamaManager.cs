@@ -104,7 +104,6 @@ public sealed class LlamaManager
     // Model-state poller: a background loop that fetches /models every second
     // while the server is Running and publishes the snapshot via ModelsChanged.
     private CancellationTokenSource? _pollerCts;
-    private Task? _pollerTask;
 
     /// <summary>Current installation state.</summary>
     public InstallState State
@@ -476,7 +475,7 @@ public sealed class LlamaManager
         StopModelPoller();
         _pollerCts = new CancellationTokenSource();
         var token = _pollerCts.Token;
-        _pollerTask = Task.Run(() => PollModelsAsync(token), token);
+        Task.Run(() => PollModelsAsync(token), token);
         Log.Info("Model-state poller started (1s interval)");
     }
 
@@ -486,6 +485,7 @@ public sealed class LlamaManager
         try { _pollerCts?.Cancel(); } catch { /* best-effort */ }
         try { _pollerCts?.Dispose(); } catch { /* best-effort */ }
         _pollerCts = null;
+        
         // Don't await the loop: it exits on cancel within one delay interval;
         // awaiting would block the UI thread (the ServerStatus setter runs on it).
     }
@@ -506,12 +506,12 @@ public sealed class LlamaManager
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { Log.Debug($"model poll fetch failed: {ex.Message}"); /* transient — keep the previous snapshot in effect */ }
 
-            try { ModelsChanged?.Invoke(this, snapshot); }
+            try { _lastModelsSnapshot = snapshot; ModelsChanged?.Invoke(this, snapshot); }
             catch (Exception ex) { Log.Warn(ex, "ModelsChanged handler threw"); /* a handler error doesn't take down the poller */ }
 
             if (snapshot.Count > 0)
-                Log.Debug("poll: " + snapshot.Count + " model(s): " +
-                    string.Join(", ", snapshot.Select(m => m.Id + "=" + (m.Status ?? "?"))));
+                Log.Debug(
+                    $"poll: {snapshot.Count} model(s): {string.Join(", ", snapshot.Select(m => $"{m.Id}={(m.Status ?? "?")}"))}");
 
             try { await Task.Delay(1000, cancel); }
             catch (OperationCanceledException) { break; }
@@ -818,6 +818,137 @@ public sealed class LlamaManager
         CanRemove = d.CanRemove,
     };
 
+    // ---- Chat completion (POST /v1/chat/completions, SSE) ----
+
+    /// <summary>
+    /// The model the spotlight overlay should prompt: the first server-reported
+    /// <c>loaded</c> model, or <c>null</c> when none is resident (the overlay
+    /// shows its disabled hint in that case). Cached from the latest poller
+    /// snapshot so a hotkey press doesn't block on <c>GET /models</c>.
+    /// </summary>
+    private IReadOnlyList<ServerModel> _lastModelsSnapshot = [];
+
+    /// <summary>Latest known loaded model id, or <c>null</c> when none is loaded.</summary>
+    public string? LoadedModelId => (from m in _lastModelsSnapshot where m.IsLoaded select m.Id).FirstOrDefault();
+
+    /// <summary>
+    /// Streams an OpenAI-compatible chat completion for <paramref name="userMessage"/>
+    /// against the currently loaded model, yielding <c>delta.content</c> chunks as
+    /// they arrive from <c>POST /v1/chat/completions</c> (SSE). Throws if the
+    /// server isn't running or no model is loaded. The caller cancels to abort.
+    /// </summary>
+    public async IAsyncEnumerable<string> StreamChatAsync(
+        string userMessage,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancel)
+    {
+        if (ServerStatus != ServerState.Running)
+            throw new InvalidOperationException("llama server is not running.");
+
+        var model = LoadedModelId
+            ?? throw new InvalidOperationException("No model is loaded. Load one from the flyout first.");
+
+        var baseUrl = $"http://localhost:{ServerPort}";
+        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+
+        var body = $$"""{"model":"{{model}}","stream":true,"messages":[{"role":"user","content":{{JsonString(userMessage)}}}]}""";
+        // SendAsync with ResponseHeadersRead returns as soon as the response
+        // headers arrive, so we can read the SSE body incrementally below.
+        // PostAsync (the default ResponseContentRead) would buffer the entire
+        // response before completing — defeating streaming and making the
+        // overlay hang until the whole generation finished.
+        using var req = new HttpRequestMessage(HttpMethod.Post,
+            new Uri($"{baseUrl}/v1/chat/completions"))
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+        Log.Info($"chat completion → POST /v1/chat/completions (model={model}, prompt={userMessage.Length} chars)");
+        using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancel);
+        Log.Info($"chat completion ← HTTP {(int)resp.StatusCode} {resp.StatusCode}");
+        resp.EnsureSuccessStatusCode();
+
+        // Reuse the same SSE line framing as /models/sse: data: {json} lines,
+        // terminated by a blank line / "data: [DONE]". We parse incrementally so
+        // tokens surface as soon as the server flushes them.
+        // Default buffer size matches the working /models/sse path.
+        await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
+        using var reader = new StreamReader(stream);
+
+        var yielded = 0;
+        var loggedLines = 0;
+        Log.Info("chat completion: reading SSE stream");
+        while (await reader.ReadLineAsync(cancel) is { } line)
+        {
+            cancel.ThrowIfCancellationRequested();
+            // Log the first few raw lines verbatim (truncated) so we can see
+            // the exact framing the server uses — prefix, line breaks, JSON
+            // shape. Capped to avoid spamming the log on long generations.
+            if (loggedLines < 20)
+            {
+                var preview = line.Length > 200 ? line.Substring(0, 200) + "…" : line;
+                Log.Debug($"chat sse raw[{loggedLines}]: '{preview}'");
+                loggedLines++;
+            }
+            if (line.Length == 0) continue;
+            if (!line.StartsWith("data:", StringComparison.Ordinal)) continue;
+
+            var value = line[5..].TrimStart();
+            if (value == "[DONE]")
+            {
+                Log.Info($"chat completion done: {yielded} chunk(s) yielded");
+                yield break;
+            }
+            if (value.Length == 0) continue;
+
+            using var doc = JsonDocument.Parse(value);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("choices", out var choices) || choices.GetArrayLength() == 0)
+                continue;
+            
+            var delta = choices[0].TryGetProperty("delta", out var d) ? d : default;
+            if (delta.ValueKind != JsonValueKind.Object ||
+                !delta.TryGetProperty("content", out var c) ||
+                c.ValueKind != JsonValueKind.String) continue;
+            
+            var text = c.GetString();
+            if (!string.IsNullOrEmpty(text))
+            {
+                yielded++;
+                yield return text;
+            }
+        }
+        // ReadLineAsync returned null: the server closed the stream without
+        // sending [DONE]. Log so we can tell a hang (no log) from a clean
+        // close with zero parsed chunks (this line).
+        Log.Info($"chat completion stream ended without [DONE]: {yielded} chunk(s) yielded");
+    }
+
+    /// <summary>Minimal JSON string escaper for embedding user text in a raw body.</summary>
+    private static string JsonString(string s)
+    {
+        var sb = new StringBuilder(s.Length + 2);
+        sb.Append('"');
+        
+        foreach (var ch in s)
+        {
+            switch (ch)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                default:
+                    if (ch < 0x20) sb.Append($"\\u{(int)ch:X4}");
+                    else sb.Append(ch);
+                    break;
+            }
+        }
+        sb.Append('"');
+        return sb.ToString();
+    }
+
     // ---- /models JSON DTOs ----
 
     internal sealed class ModelsResponseDto
@@ -856,7 +987,6 @@ public sealed class LlamaManager
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancel)
     {
         var pendingData = new StringBuilder();
-
         while (!cancel.IsCancellationRequested)
         {
             var line = await reader.ReadLineAsync(cancel);
@@ -1033,7 +1163,7 @@ public sealed class LlamaManager
             psi.ArgumentList.Add("-File");
             psi.ArgumentList.Add(scriptPath);
 
-            Log.Info("Running install.ps1 from " + InstallScriptUrl);
+            Log.Info($"Running install.ps1 from {InstallScriptUrl}");
             using var proc = new Process();
             proc.StartInfo = psi;
             if (!proc.Start())
@@ -1043,12 +1173,12 @@ public sealed class LlamaManager
             var stdoutTask = proc.StandardOutput.ReadToEndAsync(cancel);
             var stderrTask = proc.StandardError.ReadToEndAsync(cancel);
             await proc.WaitForExitAsync(cancel);
-            Log.Debug("install.ps1 exit code " + proc.ExitCode);
+            Log.Debug($"install.ps1 exit code {proc.ExitCode}");
 
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
-            if (stdout.Length > 0) Log.Debug("install.ps1 stdout: " + stdout.Trim());
-            if (stderr.Length > 0) Log.Debug("install.ps1 stderr: " + stderr.Trim());
+            if (stdout.Length > 0) Log.Debug($"install.ps1 stdout: {stdout.Trim()}");
+            if (stderr.Length > 0) Log.Debug($"install.ps1 stderr: {stderr.Trim()}");
             if (proc.ExitCode != 0)
                 throw new IOException($"install.ps1 exited with code {proc.ExitCode}.\n{stderr}");
             
