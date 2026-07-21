@@ -101,6 +101,15 @@ public sealed class LlamaManager
 
     private Process? _serverProcess;
 
+    // Single-flight guard for EnsureLlamaOrDownloadAsync / StartServerAsync. Called
+    // fire-and-forget from App.OnLaunched and re-entrant via StateChanged
+    // handlers; without it, two concurrent callers can both pass the initial
+    // "no server reachable" probe and both spawn a `llama serve --port 2276`,
+    // leaking processes (one fails to bind and may linger; second binds and eats
+    // RAM). The gate serializes launches within one process; cross-instance
+    // races are handled by the retrying adoption probe (see WaitForReachableAsync).
+    private readonly SemaphoreSlim _ensureGate = new(1, 1);
+
     // Model-state poller: a background loop that fetches /models every second
     // while the server is Running and publishes the snapshot via ModelsChanged.
     private CancellationTokenSource? _pollerCts;
@@ -209,8 +218,28 @@ public sealed class LlamaManager
     /// </summary>
     public async Task<bool> EnsureLlamaOrDownloadAsync(CancellationToken cancel = default)
     {
+        // Single-flight: a prior or concurrent caller may already be bringing
+        // the server up (or about to). Waiting here means the second caller
+        // finds Running after the first releases the gate — no duplicate spawn.
+        await _ensureGate.WaitAsync(cancel);
+        try
+        {
+        // Re-check after acquiring: a prior caller just brought the server up.
+        if (ServerStatus == ServerState.Running)
+        {
+            Log.Info("llama server already running (gate re-check)");
+            return true;
+        }
+
         // 1. Adopt an already-running server (no binary/process needed).
-        if (await IsServerReachableAsync(cancel))
+        // Probe briefly (a few attempts over ~3s) rather than once: a sibling
+        // app instance / a manual launch / a server that's just binding won't
+        // answer the very first probe, and a single miss used to spawn a
+        // SECOND `llama serve --port 2276` here — leaving two processes eating
+        // RAM (the loser fails to bind, but the app would also abandon timed-
+        // out launches alive — see StartServerAsync). A short adoption window
+        // catches the in-flight server and adopts it instead.
+        if (await WaitForReachableAsync(TimeSpan.FromSeconds(3), cancel))
         {
             Log.Info("Adopted an already-running llama server");
             ServerStatus = ServerState.Running;
@@ -245,17 +274,21 @@ public sealed class LlamaManager
                     return await StartServerAsync(cancel);
                 return false;
         }
+        }
+        finally { _ensureGate.Release(); }
     }
 
     /// <summary>
-    /// Probes <c>GET /health</c> on the server port. Any HTTP response means a
-    /// server is already up and listening (a connection-refused means not).
+    /// Probes <c>GET /health</c> on the server port once. Any HTTP response
+    /// means a server is already listening (connection-refused means not). The
+    /// atomic unit used by the retrying <see cref="WaitForReachableAsync"/> and
+    /// by the last-chance re-probe in <see cref="StartServerAsync"/>.
     /// </summary>
-    private static async Task<bool> IsServerReachableAsync(CancellationToken cancel)
+    private static async Task<bool> ProbeHealthAsync(CancellationToken cancel)
     {
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };
             using var resp = await client.GetAsync($"http://localhost:{ServerPort}/health", cancel);
             return true;
         }
@@ -263,6 +296,29 @@ public sealed class LlamaManager
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Repeatedly probes <c>/health</c> for up to <paramref name="timeout"/>,
+    /// returning <c>true</c> as soon as a server responds. Used to ADOPT an
+    /// already-running server (a sibling app instance, a manual launch, or one
+    /// that's mid-bind) rather than spawning a duplicate on the same port — the
+    /// fix for several <c>llama serve --port 2276</c> processes piling up and
+    /// eating RAM. The window is short so a genuinely-absent server doesn't
+    /// delay startup by much (each refusal is near-instant; the 250ms cadence
+    /// is what bounds the worst case).
+    /// </summary>
+    private static async Task<bool> WaitForReachableAsync(TimeSpan timeout, CancellationToken cancel)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            cancel.ThrowIfCancellationRequested();
+            if (await ProbeHealthAsync(cancel)) return true;
+            try { await Task.Delay(250, cancel); }
+            catch (OperationCanceledException) { throw; }
+        }
+        return false;
     }
 
     /// <summary>
@@ -335,6 +391,19 @@ public sealed class LlamaManager
             return false;
         }
 
+        // Last-chance adoption: between EnsureLlamaOrDownloadAsync's probe and
+        // now (esp. after a slow install.ps1 download), a sibling instance or a
+        // manual launch may have brought up a server on our port. Adopting it
+        // here avoids spawning a duplicate that would fail to bind and orphan
+        // — the exact leak that left several servers eating RAM.
+        if (await ProbeHealthAsync(cancel))
+        {
+            Log.Info("Adopted an already-running llama server (pre-start re-probe)");
+            ServerStatus = ServerState.Running;
+            _ = ResolveAndReadVersionAsync(cancel);
+            return true;
+        }
+
         StopServer(); // reclaim any prior instance / port
 
         ServerStatus = ServerState.Starting;
@@ -392,15 +461,25 @@ public sealed class LlamaManager
             _serverProcess = proc;
 
             // Wait for the port to respond — the server takes a moment to bind.
-            if (await WaitForPortAsync(TimeSpan.FromSeconds(15), cancel))
+            // We pass `proc` so the wait fast-fails if the process exits before
+            // becoming ready (e.g. it couldn't bind the port because a sibling
+            // already did) instead of polling for the full 15s timeout.
+            if (await WaitForPortAsync(proc, TimeSpan.FromSeconds(15), cancel))
             {
                 Log.Info("llama server is reachable");
                 ServerStatus = ServerState.Running;
                 return true;
             }
 
-            // Timed out waiting for the port — the process may have exited.
-            Log.Error("llama server failed to bind within 15s (port probe timed out)");
+            // Timed out (or the process exited early). DON'T leave the spawned
+            // process running: a prior timeout-then-abandon left the server
+            // alive, and a later app start (or this same retry) spawned a
+            // second on the same port → two servers eating RAM. Kill ours so
+            // the port is free for the next attempt. StopServer sets Stopped
+            // before killing so the Exited handler logs an intentional stop,
+            // then we surface the failure.
+            Log.Error("llama server failed to become ready within 15s (port probe timed out)");
+            StopServer();
             ServerStatus = ServerState.Failed;
             return false;
         }
@@ -434,11 +513,15 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Polls <c>http://localhost:2276/health</c> until it responds or the timeout
-    /// elapses. The llama server exposes a health endpoint once it's bound and
-    /// ready; this confirms the port is actually serving rather than just
-    /// waiting a fixed delay.
+    /// elapses (or the spawned <paramref name="proc"/> exits first). The llama
+    /// server exposes a health endpoint once it's bound and ready; this confirms
+    /// the port is actually serving rather than just waiting a fixed delay.
+    /// Checking <c>proc.HasExited</c> each iteration fast-fails when the process
+    /// died right after launch (e.g. it couldn't bind the port because a
+    /// sibling already did) so we don't sit out the full timeout before tearing
+    /// down — and we don't keep around a dead-but-tracked process reference.
     /// </summary>
-    private static async Task<bool> WaitForPortAsync(TimeSpan timeout, CancellationToken cancel)
+    private static async Task<bool> WaitForPortAsync(Process proc, TimeSpan timeout, CancellationToken cancel)
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         var deadline = DateTime.UtcNow + timeout;
@@ -447,6 +530,11 @@ public sealed class LlamaManager
         while (DateTime.UtcNow < deadline)
         {
             cancel.ThrowIfCancellationRequested();
+            if (proc.HasExited)
+            {
+                Log.Warn($"llama server process exited before becoming ready (code={proc.ExitCode})");
+                return false;
+            }
             try
             {
                 // Any HTTP response (even an error code) means the server is
@@ -850,7 +938,7 @@ public sealed class LlamaManager
         var baseUrl = $"http://localhost:{ServerPort}";
         using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 
-        var body = $$"""{"model":"{{model}}","stream":true,"messages":[{"role":"user","content":{{JsonString(userMessage)}}}]}""";
+        var body = $$"""{"model":"{{model}}","stream":true, "return_progress": true, "messages":[{"role":"user","content":{{JsonString(userMessage)}}}]}""";
         // SendAsync with ResponseHeadersRead returns as soon as the response
         // headers arrive, so we can read the SSE body incrementally below.
         // PostAsync (the default ResponseContentRead) would buffer the entire
