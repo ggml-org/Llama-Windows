@@ -651,7 +651,11 @@ public sealed class LlamaManager
         // Open the SSE stream first so we don't miss the earliest progress events.
         // HttpCompletionOption.ResponseHeadersRead lets us read the body as it
         // arrives rather than buffering the whole (infinite) stream.
-        var sseResponse = await sseClient.GetAsync(
+        // `using` so the response (and its underlying connection / Content stream)
+        // is released on EVERY exit path — the early returns from a POST failure
+        // and the throw on cancellation used to skip the only Dispose() call,
+        // leaking an HTTP connection per failed/cancelled download.
+        using var sseResponse = await sseClient.GetAsync(
             $"{baseUrl}/models/sse",
             HttpCompletionOption.ResponseHeadersRead,
             cancel);
@@ -749,8 +753,9 @@ public sealed class LlamaManager
         }
         finally
         {
+            // sseResponse is disposed by its `using` at scope exit; only cancel
+            // the linked token here so an in-flight ReadLineAsync unwinds.
             await sseCts.CancelAsync();
-            try { sseResponse.Dispose(); } catch { /* best-effort */ }
         }
 
         return success;

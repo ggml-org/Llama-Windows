@@ -80,6 +80,18 @@ namespace LlamaApp.Views
         /// </summary>
         private Task<List<Repository>> _catalogTask = null!;
 
+        // <summary>
+        // The catalog reshaped into a bare-repo-id → <see cref="Repository"/>
+        // lookup, collapsing the per-quant duplicates. Built EXACTLY ONCE, as a
+        // continuation over <see cref="_catalogTask"/> — the awaiters (initial
+        // populate, the per-second poller reconcile, the download-row builders)
+        // all share the same projected task, so the GroupBy/ToDictionary runs
+        // once no matter how many callers race it or how often the 1s poller
+        // fires. Previously <see cref="GetCatalogByRepoAsync"/> re-projected the
+        // catalog on every call, allocating a fresh dictionary each second.
+        // </summary>
+        private Task<Dictionary<string, Repository>> _catalogByRepoTask = null!;
+
         // Re-entry guard for LoadLocalModelsAsync: 0 idle, 1 running.
         // StateChanged can re-trigger a load while an earlier invocation is
         // still waiting for the server, so we serialize population passes.
@@ -128,6 +140,17 @@ namespace LlamaApp.Views
         private void LoadModels()
         {
             _catalogTask = FetchCatalogAsync();
+            // Project the fetched catalog into a repo-id lookup exactly once — a
+            // continuation that runs when the fetch completes, shared by every
+            // caller of GetCatalogByRepoAsync. ContinueWith(NotOnFaulted,
+            // TaskScheduler.Default) so an (impossible — FetchCatalogAsync never
+            // faults) fault still yields a usable empty dictionary rather than
+            // a faulted task awaited by callers that don't expect a throw.
+            _catalogByRepoTask = _catalogTask.ContinueWith(
+                t => t.Result
+                    .GroupBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase),
+                TaskContinuationOptions.NotOnFaulted | TaskContinuationOptions.RunContinuationsAsynchronously);
             _ = LoadRecommendedModelsAsync();
             _ = LoadLocalModelsAsync();
         }
@@ -236,18 +259,16 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Resolves the remote catalog into a bare-repo-id to <see cref="Repository"/>
-        /// lookup, collapsing the per-quant duplicates (a repo can appear several
-        /// times in the flattened catalog). Shared by the initial populating and
-        /// the poller reconciled.
+        /// Returns the cached catalog reshaped into a bare-repo-id →
+        /// <see cref="Repository"/> lookup, collapsing the per-quant duplicates
+        /// (a repo can appear several times in the flattened catalog). The
+        /// projection is materialized once by a continuation over
+        /// <see cref="_catalogTask"/> in <see cref="LoadModels"/>; callers just
+        /// await the shared <see cref="_catalogByRepoTask"/> so a high-frequency
+        /// caller (the 1s <c>/models</c> poller via <see cref="ReconcileAsync"/>)
+        /// doesn’t re-GroupBy the catalog on every tick.
         /// </summary>
-        private async Task<Dictionary<string, Repository>> GetCatalogByRepoAsync()
-        {
-            var catalog = await _catalogTask;
-            return catalog
-                .GroupBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-        }
+        private Task<Dictionary<string, Repository>> GetCatalogByRepoAsync() => _catalogByRepoTask;
 
         /// <summary>
         /// Builds an enriched <see cref="ModelItem"/> for a server-reported

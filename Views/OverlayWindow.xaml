@@ -16,7 +16,7 @@
         native composer/response widgets are gone. Esc (or losing focus)
         dismisses it.
 
-        The overlay grows to ~70% × ~80% of the active monitor's work area to
+        The overlay grows to ~60% × ~70% of the active monitor's work area to
         give the embedded WebUI room to breathe. Summoning refreshes the URL
         (so a newly-loaded model is picked up) without reloading when the URL
         is unchanged (so an in-flight chat isn't reset).

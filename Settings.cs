@@ -11,12 +11,19 @@ namespace LlamaApp;
 /// </summary>
 public sealed class Settings
 {
-    /// <summary>Singleton instance; loaded lazily on first access and cached.</summary>
-    public static Settings Current { get; } = Load();
-
+    // Declared BEFORE <c>Current</c> so its static field initializer runs first.
+    // Static field initializers run in textual order, and <c>Current</c>'s
+    // initializer calls <see cref="Load"/> — if SettingsPath were declared
+    // below it, Load would see <c>SettingsPath == null</c> (still its default),
+    // <see cref="File.Exists"/> would return false, and every saved setting
+    // (HuggingFace token, cache directory, startup hint) would be silently
+    // discarded on every launch. Keep this above any member that calls Load.
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "LlamaApp", "settings.json");
+
+    /// <summary>Singleton instance; loaded lazily on first access and cached.</summary>
+    public static Settings Current { get; } = Load();
 
     static Settings()
     {

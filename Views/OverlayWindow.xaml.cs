@@ -30,7 +30,7 @@ namespace LlamaApp.Views;
 /// </summary>
 public sealed partial class OverlayWindow : Window
 {
-    // Overlay covers ~70% of the active monitor's work-area width and ~80% of
+    // Overlay covers ~60% of the active monitor's work-area width and ~70% of
     // its height so the embedded WebUI has room. Tunable: bump these toward 1.0
     // (or set fixed constants) to taste.
     private const double OverlayWidthFraction = 0.6;
