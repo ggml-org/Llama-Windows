@@ -51,7 +51,7 @@ internal sealed class TrayIconManager : IDisposable
         };
 
         _trayIcon.Create();
-        Common.Log.Info("Tray icon created");
+        Common.Log.Info("tray icon created");
         // The base class only auto-shows the context menu on right-click; we
         // additionally show the flyout on a left-click.
         _trayIcon.MessageWindow.SubscribeToMouseEventReceived(OnMouseEvent);
@@ -106,7 +106,7 @@ internal sealed class TrayIconManager : IDisposable
     /// </summary>
     public void RequestExit()
     {
-        Log.Info("App exit requested");
+        Log.Info("app exit requested");
         // Stop the llama server first so it doesn't outlive the app (and leave
         // the port-bound). Best-effort — if it hangs, Environment.Exit reaps it.
         try { Llama.LlamaManager.Shared.StopServer(); }

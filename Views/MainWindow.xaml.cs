@@ -202,7 +202,7 @@ namespace LlamaApp.Views
                 }
 
                 await PopulateLocalModelsAsync(serverModels);
-                Log.Info("Loaded " + serverModels.Count + " local model(s) from the server");
+                Log.Info("loaded " + serverModels.Count + " local model(s) from the server");
             }
             finally
             {
@@ -462,7 +462,7 @@ namespace LlamaApp.Views
         {
             if (sender is not FrameworkElement fe)
             {
-                Log.Warn("LocalModelPlay_Click: sender is not a FrameworkElement");
+                Log.Warn("sender is not a FrameworkElement");
                 return;
             }
             // x:Bind doesn't set DataContext on child elements inside a
@@ -471,18 +471,18 @@ namespace LlamaApp.Views
             // visual-tree walk.
             if (ResolveRowItem(fe) is not { } item)
             {
-                Log.Warn("LocalModelPlay_Click: could not resolve a ModelItem (Tag=" +
+                Log.Warn("could not resolve a ModelItem (Tag=" +
                     (fe.Tag?.GetType().FullName ?? "null") + ")");
                 return;
             }
             if (item.IsLoading || item.IsLoaded || item.IsDownloading)
             {
-                Log.Debug("LocalModelPlay_Click: ignored (isLoading=" + item.IsLoading +
+                Log.Debug("ignored (isLoading=" + item.IsLoading +
                     " isLoaded=" + item.IsLoaded + " isDownloading=" + item.IsDownloading + ")");
                 return;
             }
 
-            Log.Info("Play clicked: loading " + ((IModel)item).ServerModelId);
+            Log.Info("play clicked: loading " + ((IModel)item).ServerModelId);
             item.IsLoading = true;
             _ = LoadAndWatchAsync(item);
         }
@@ -497,12 +497,12 @@ namespace LlamaApp.Views
         {
             if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
             {
-                Log.Warn("LocalModelOpen_Click: could not resolve a ModelItem");
+                Log.Warn("could not resolve a ModelItem");
                 return;
             }
 
             var serverModelId = ((IModel)item).ServerModelId;
-            Log.Info("Open clicked for " + serverModelId);
+            Log.Info("open clicked for " + serverModelId);
             
             var url = $"http://localhost:{LlamaManager.ServerPort}?model={Uri.EscapeDataString(serverModelId)}";
             await Windows.System.Launcher.LaunchUriAsync(new Uri(url));
@@ -519,16 +519,16 @@ namespace LlamaApp.Views
         {
             if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
             {
-                Log.Warn("LocalModelUnload_Click: could not resolve a ModelItem");
+                Log.Warn("could not resolve a ModelItem");
                 return;
             }
             if (!item.IsLoaded)
             {
-                Log.Debug("LocalModelUnload_Click: ignored (not loaded)");
+                Log.Debug("ignored (not loaded)");
                 return;
             }
 
-            Log.Info("Unload clicked: unloading " + ((IModel)item).ServerModelId);
+            Log.Info("unload clicked: unloading " + ((IModel)item).ServerModelId);
             if (await LlamaManager.Shared.UnloadModelAsync(item))
             {
                 item.IsLoaded = false;
@@ -536,7 +536,7 @@ namespace LlamaApp.Views
             }
             else
             {
-                Log.Warn("Server rejected unload for " + ((IModel)item).ServerModelId);
+                Log.Warn("server rejected unload for " + ((IModel)item).ServerModelId);
             }
         }
 
@@ -699,19 +699,19 @@ namespace LlamaApp.Views
                     //              the server hasn't acknowledged yet)
                     if (sm.IsLoaded)
                     {
-                        if (!item.IsLoaded) Log.Info("Model loaded: " + sm.Id);
+                        if (!item.IsLoaded) Log.Info("model loaded: " + sm.Id);
                         item.IsLoaded = true;
                         item.IsLoading = false;
                     }
                     else if (sm.IsLoading)
                     {
-                        if (!item.IsLoading) Log.Info("Model loading: " + sm.Id);
+                        if (!item.IsLoading) Log.Info("model loading: " + sm.Id);
                         item.IsLoaded = false;
                         item.IsLoading = true;
                     }
                     else // "unloaded" (or unknown)
                     {
-                        if (item.IsLoaded) Log.Info("Model unloaded: " + sm.Id);
+                        if (item.IsLoaded) Log.Info("model unloaded: " + sm.Id);
                         item.IsLoaded = false;
                         // Leave IsLoading alone: a just-fired play click sets it
                         // optimistically before the server transitions to "loading";
@@ -726,7 +726,7 @@ namespace LlamaApp.Views
                     var newItem = BuildLocalItem(sm, byRepo);
                     _localByServerId[sm.Id] = newItem;
                     LocalModels.Add(newItem);
-                    Log.Info("Added new local row from poller: " + sm.Id);
+                    Log.Info("added new local row from poller: " + sm.Id);
                 }
             }
 

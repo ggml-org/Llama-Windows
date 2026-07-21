@@ -6,7 +6,7 @@ public class HubClient(string? token)
     
     public sealed class HubModelsClient(string baseUrl, string? token)
     {
-        string Url { get; } = $"{baseUrl}/models";
+        private string Url { get; } = $"{baseUrl}/models";
 
         public async Task<Repository?> GetRepository(string id)
         {

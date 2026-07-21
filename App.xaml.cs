@@ -62,7 +62,7 @@ namespace LlamaApp
             // binary via install.ps1 then launch. Fire-and-forget; once reachable the
             // MainWindow fetches the Available model list via GET /models.
             Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
-            Common.Log.Info($"Cache directory: {Settings.Current.CacheDirectory}");
+            Common.Log.Info($"cache directory: {Settings.Current.CacheDirectory}");
             _ = Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
 
             // Spotlight-style prompt overlay, summoned by a global Alt+Space

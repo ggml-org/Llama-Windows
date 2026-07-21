@@ -241,7 +241,7 @@ public sealed class LlamaManager
         // catches the in-flight server and adopts it instead.
         if (await WaitForReachableAsync(TimeSpan.FromSeconds(3), cancel))
         {
-            Log.Info("Adopted an already-running llama server");
+            Log.Info("adopted an already-running llama server");
             ServerStatus = ServerState.Running;
             // Best-effort: resolve the binary so Version is populated for display,
             // but don't block the client on it.
@@ -251,7 +251,7 @@ public sealed class LlamaManager
 
         // 2/3. Resolve the binary; install if missing; then launch the server.
         var resolved = Resolve();
-        Log.Info($"Resolved llama binary: kind={resolved.Kind} path={resolved.Path ?? "<none>"}");
+        Log.Info($"resolved llama binary: kind={resolved.Kind} path={resolved.Path ?? "<none>"}");
         switch (resolved.Kind)
         {
             case ResolutionKind.Managed:
@@ -398,7 +398,7 @@ public sealed class LlamaManager
         // — the exact leak that left several servers eating RAM.
         if (await ProbeHealthAsync(cancel))
         {
-            Log.Info("Adopted an already-running llama server (pre-start re-probe)");
+            Log.Info("adopted an already-running llama server (pre-start re-probe)");
             ServerStatus = ServerState.Running;
             _ = ResolveAndReadVersionAsync(cancel);
             return true;
@@ -431,7 +431,7 @@ public sealed class LlamaManager
             if (!string.IsNullOrEmpty(CacheDirectory) && Directory.Exists(CacheDirectory))
                 psi.EnvironmentVariables["HF_HUB_CACHE"] = CacheDirectory;
 
-            Log.Info($"Starting llama server: {BinaryPath} serve --port {ServerPort} --jinja");
+            Log.Info($"starting llama server: {BinaryPath} serve --port {ServerPort} --jinja");
 
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             proc.Exited += (_, _) =>
@@ -564,7 +564,7 @@ public sealed class LlamaManager
         _pollerCts = new CancellationTokenSource();
         var token = _pollerCts.Token;
         Task.Run(() => PollModelsAsync(token), token);
-        Log.Info("Model-state poller started (1s interval)");
+        Log.Info("model-state poller started (1s interval)");
     }
 
     /// <summary>Stops the poller and releases its cancellation token. Safe to call repeatedly.</summary>
@@ -635,7 +635,7 @@ public sealed class LlamaManager
     /// <c>false</c> on failure or cancellation.</returns>
     public async Task<bool> DownloadModelAsync(IModel model, IProgress<ModelDownloadProgress>? progress = null, CancellationToken cancel = default)
     {
-        Log.Info($"Downloading model {model.Name}");
+        Log.Info($"downloading model {model.Name}");
         if (ServerStatus != ServerState.Running)
         {
             progress?.Report(new ModelDownloadProgress(
@@ -683,7 +683,7 @@ public sealed class LlamaManager
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Log.Error(ex, "Download POST threw");
+            Log.Error(ex, "download POST threw");
             await sseCts.CancelAsync();
             progress?.Report(new ModelDownloadProgress(
                 modelName, 0, 0, Done: false, Failed: true, Message: ex.Message));
@@ -729,7 +729,7 @@ public sealed class LlamaManager
                         break;
 
                     case "download_failed":
-                        Log.Warn($"Server reported download_failed for {modelName}");
+                        Log.Warn($"server reported download_failed for {modelName}");
                         progress?.Report(new Common.ModelDownloadProgress(
                             modelName, 0, 0, Done: false, Failed: true, Message: "Download failed"));
                         completed = true;
@@ -779,20 +779,20 @@ public sealed class LlamaManager
 
         try
         {
-            Log.Info($"Loading model {model.ServerModelId}");
+            Log.Info($"loading model {model.ServerModelId}");
             
             var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await Client.PostAsync($"{baseUrl}/models/load", content, cancel);
             if (!resp.IsSuccessStatusCode)
             {
-                Log.Warn($"Server rejected model load ({(int)resp.StatusCode})");
+                Log.Warn($"server rejected model load ({(int)resp.StatusCode})");
             }
             return resp.IsSuccessStatusCode;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Log.Error(ex, "Model load request threw");
+            Log.Error(ex, "model load request threw");
             return false;
         }
     }
@@ -818,20 +818,20 @@ public sealed class LlamaManager
 
         try
         {
-            Log.Info($"Unloading model {model.ServerModelId}");
+            Log.Info($"unloading model {model.ServerModelId}");
             
             var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await Client.PostAsync($"{baseUrl}/models/unload", content, cancel);
             if (!resp.IsSuccessStatusCode)
             {
-                Log.Warn($"Server rejected model unload ({(int)resp.StatusCode})");
+                Log.Warn($"server rejected model unload ({(int)resp.StatusCode})");
             }
             return resp.IsSuccessStatusCode;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Log.Error(ex, "Model unload request threw");
+            Log.Error(ex, "model unload request threw");
             return false;
         }
     }
@@ -1251,7 +1251,7 @@ public sealed class LlamaManager
             psi.ArgumentList.Add("-File");
             psi.ArgumentList.Add(scriptPath);
 
-            Log.Info($"Running install.ps1 from {InstallScriptUrl}");
+            Log.Info($"running install.ps1 from {InstallScriptUrl}");
             using var proc = new Process();
             proc.StartInfo = psi;
             if (!proc.Start())

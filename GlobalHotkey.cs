@@ -56,9 +56,9 @@ internal sealed class GlobalHotkey : IDisposable
         _hwnd = CreateMessageOnlyWindow();
         _registered = RegisterHotKey(_hwnd, HotkeyId, Modifier, Vk);
         if (!_registered)
-            Log.Warn("Global hotkey registration failed (Alt+Space may already be taken by another app).");
+            Log.Warn("global hotkey registration failed (Alt+Space may already be taken by another app).");
         else
-            Log.Info("Global hotkey registered: Alt+Space");
+            Log.Info("global hotkey registered: Alt+Space");
     }
 
     public void Dispose()
