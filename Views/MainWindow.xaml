@@ -44,28 +44,39 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <Border Grid.Column="0"
-                            Width="32" Height="32"
-                            CornerRadius="6"
-                            Background="{ThemeResource ControlFillColorSecondaryBrush}">
-                        <Image Source="{x:Bind Logo, Mode=OneWay}"
-                               Stretch="Uniform"
-                               Margin="4" />
-                    </Border>
+                    <!-- Logo tile with a "running" status badge pinned to its
+                         bottom-right corner. -->
+                    <Grid Grid.Column="0" Width="32" Height="32">
+                        <Border CornerRadius="6"
+                                Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                            <Image Source="{x:Bind Logo, Mode=OneWay}"
+                                   Stretch="Uniform"
+                                   Margin="4" />
+                        </Border>
+                        <!-- Running badge: a green dot shown when the server
+                             reports this model as loaded (running). Bound to
+                             OpenGlyphVisible so it appears in lockstep with the
+                             Open/Unload action glyphs. Centered on the tile's
+                             bottom-right corner (negative right/bottom margin
+                             = the circle's radius, so half the dot overhangs
+                             the tile). The stroke matches the tile background
+                             on the inside and reads as a thin ring on the
+                             outside where the dot sits over the row gap. -->
+                        <Ellipse Visibility="{x:Bind OpenGlyphVisible, Mode=OneWay}"
+                                 Width="10" Height="10"
+                                 Fill="#3FB950"
+                                 Stroke="{ThemeResource ControlFillColorSecondaryBrush}"
+                                 StrokeThickness="1.5"
+                                 HorizontalAlignment="Right"
+                                 VerticalAlignment="Bottom"
+                                 Margin="0,0,-5,-5"
+                                 ToolTipService.ToolTip="Running" />
+                    </Grid>
 
                     <StackPanel Grid.Column="1"
                                 VerticalAlignment="Center"
                                 Spacing="1">
                         <StackPanel Orientation="Horizontal" Spacing="4">
-                            <!-- Running badge: a green dot shown when the server
-                                 reports this model as loaded (running). Bound to
-                                 OpenGlyphVisible so it appears in lockstep with
-                                 the Open/Unload action glyphs. -->
-                            <Ellipse Visibility="{x:Bind OpenGlyphVisible, Mode=OneWay}"
-                                     Width="8" Height="8"
-                                     Fill="#3FB950"
-                                     VerticalAlignment="Center"
-                                     ToolTipService.ToolTip="Running" />
                             <TextBlock Text="{x:Bind DisplayName}"
                                        FontSize="13"
                                        FontWeight="SemiBold"
