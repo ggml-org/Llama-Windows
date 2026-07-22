@@ -1164,6 +1164,7 @@ public sealed class LlamaManager
             var root = doc.RootElement;
             var evt = root.TryGetProperty("event", out var e) ? e.GetString() ?? "" : "";
             var mdl = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
+            
             // Clone detaches the element from the JsonDocument so callers
             // can safely consume it after the enumerator is disposed.
             var data = root.TryGetProperty("data", out var d) ? d.Clone() : default;
@@ -1208,10 +1209,7 @@ public sealed class LlamaManager
         {
             using var resp = await client.DeleteAsync($"{baseUrl}/models/{Uri.EscapeDataString(modelName)}");
         }
-        catch
-        {
-            // Best-effort — don't surface cancel cleanup failures.
-        }
+        catch { /* Best-effort — don't surface cancel cleanup failures. */ }
     }
 
     // ---- Resolution ----
