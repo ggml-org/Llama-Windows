@@ -117,6 +117,24 @@
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center">
+                        <!-- Delete button: remove the model from the server's
+                             cache (DELETE /models/{name}). Sits to the left of
+                             the play glyph; shown only while the model is
+                             unloaded (PlayGlyphVisible) so a loaded/loading
+                             row isn't accidentally deleted mid-use. -->
+                        <Button Visibility="{x:Bind PlayGlyphVisible, Mode=OneWay}"
+                                Click="LocalModelDelete_Click"
+                                Tag="{x:Bind}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                ToolTipService.ToolTip="Delete model">
+                            <FontIcon Glyph="&#xE74D;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
                         <!-- Play button: model is unloaded, click to load it. -->
                         <Button Visibility="{x:Bind PlayGlyphVisible, Mode=OneWay}"
                                 Click="LocalModelPlay_Click"
@@ -292,6 +310,7 @@
             <StackPanel Grid.Column="1"
                         Orientation="Horizontal"
                         Spacing="2"
+                        Margin="0,0,-2,0"
                         VerticalAlignment="Center">
                 <Button Click="Settings_Click"
                         Padding="6"
@@ -322,7 +341,8 @@
                     Margin="16,12,16,12" Spacing="8">
             <!-- Section title + link to the running server's API. The link is
                  styled gray/non-bold (not white/bold) to read as a subtle href. -->
-            <StackPanel Orientation="Horizontal" Spacing="8">
+            <StackPanel Orientation="Horizontal" Spacing="8"
+                        Margin="0,0,-2,0">
                 <TextBlock Text="Available"
                            FontSize="13"
                            FontWeight="SemiBold"
@@ -379,6 +399,7 @@
 
             <TextBlock Grid.Row="0"
                        Text="Recommended Models"
+                       Margin="0,0,-2,0"
                        FontSize="13"
                        FontWeight="SemiBold"
                        Opacity="0.7" />

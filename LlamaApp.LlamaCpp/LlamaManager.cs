@@ -22,7 +22,8 @@ namespace LlamaApp.Llama;
 /// running server, launches one, or downloads the binary on demand, and reports
 /// progress/state via <see cref="StateChanged"/>. Once the server is reachable,
 /// <see cref="GetModelsAsync"/> lists locally available models via the
-/// <c>GET /models</c> REST endpoint.</para>
+/// <c>GET /models</c> REST endpoint.
+/// </para>
 /// </summary>
 public sealed class LlamaManager
 {
@@ -180,6 +181,7 @@ public sealed class LlamaManager
         {
             if (field == value) return;
             field = value;
+            
             // The model-state poller runs only while the server is up: start it
             // on Running, tear it down on any other state (Stopped/Failed).
             if (value == ServerState.Running) StartModelPoller();
@@ -224,56 +226,55 @@ public sealed class LlamaManager
         await _ensureGate.WaitAsync(cancel);
         try
         {
-        // Re-check after acquiring: a prior caller just brought the server up.
-        if (ServerStatus == ServerState.Running)
-        {
-            Log.Info("llama server already running (gate re-check)");
-            return true;
-        }
+            // Re-check after acquiring: a prior caller just brought the server up.
+            if (ServerStatus == ServerState.Running)
+            {
+                Log.Info("llama server already running (gate re-check)");
+                return true;
+            }
 
-        // 1. Adopt an already-running server (no binary/process needed).
-        // Probe briefly (a few attempts over ~3s) rather than once: a sibling
-        // app instance / a manual launch / a server that's just binding won't
-        // answer the very first probe, and a single has misused to spawn a
-        // SECOND `llama serve --port 2276` here — leaving two processes eating
-        // RAM (the loser fails to bind, but the app would also abandon timed-
-        // out launches alive — see StartServerAsync). A short adoption window
-        // catches the in-flight server and adopts it instead.
-        if (await WaitForReachableAsync(TimeSpan.FromSeconds(3), cancel))
-        {
-            Log.Info("adopted an already-running llama server");
-            ServerStatus = ServerState.Running;
-            // Best-effort: resolve the binary so Version is populated for display,
-            // but don't block the client on it.
-            _ = ResolveAndReadVersionAsync(cancel);
-            return true;
-        }
+            // 1. Adopt an already-running server (no binary/process needed).
+            // Probe briefly (a few attempts over ~3s) rather than once: a sibling
+            // app instance / a manual launch / a server that's just binding won't
+            // answer the very first probe, and a single has misused to spawn a
+            // SECOND `llama serve --port 2276` here — leaving two processes eating
+            // RAM (the loser fails to bind, but the app would also abandon timed-
+            // out launches alive — see StartServerAsync). A short adoption window
+            // catches the in-flight server and adopts it instead.
+            if (await WaitForReachableAsync(TimeSpan.FromSeconds(3), cancel))
+            {
+                Log.Info("adopted an already-running llama server");
+                ServerStatus = ServerState.Running;
+                // Best-effort: resolve the binary so Version is populated for display,
+                // but don't block the client on it.
+                _ = ResolveAndReadVersionAsync(cancel);
+                return true;
+            }
 
-        // 2/3. Resolve the binary; install if missing; then launch the server.
-        var resolved = Resolve();
-        Log.Info($"resolved llama binary: kind={resolved.Kind} path={resolved.Path ?? "<none>"}");
-        switch (resolved.Kind)
-        {
-            case ResolutionKind.Managed:
-                BinaryPath = resolved.Path;
-                CurrentOrigin = Origin.Managed;
-                Version = await ReadVersionAsync(resolved.Path!, cancel);
-                State = InstallState.Idle;
-                return await StartServerAsync(cancel);
-
-            case ResolutionKind.External:
-                BinaryPath = resolved.Path;
-                CurrentOrigin = Origin.External;
-                Version = await ReadVersionAsync(resolved.Path!, cancel);
-                State = InstallState.Idle;
-                return await StartServerAsync(cancel);
-
-            default: // Missing — download then launch.
-                var installed = await InstallAsync(cancel);
-                if (installed)
+            // 2/3. Resolve the binary; install if missing; then launch the server.
+            var resolved = Resolve();
+            Log.Info($"resolved llama binary: kind={resolved.Kind} path={resolved.Path ?? "<none>"}");
+            switch (resolved.Kind)
+            {
+                case ResolutionKind.Managed:
+                    BinaryPath = resolved.Path;
+                    CurrentOrigin = Origin.Managed;
+                    Version = await ReadVersionAsync(resolved.Path!, cancel);
+                    State = InstallState.Idle;
                     return await StartServerAsync(cancel);
-                return false;
-        }
+
+                case ResolutionKind.External:
+                    BinaryPath = resolved.Path;
+                    CurrentOrigin = Origin.External;
+                    Version = await ReadVersionAsync(resolved.Path!, cancel);
+                    State = InstallState.Idle;
+                    return await StartServerAsync(cancel);
+
+                default: // Missing — download then launch.
+                    if (await InstallAsync(cancel))
+                        return await StartServerAsync(cancel);
+                    return false;
+            }
         }
         finally { _ensureGate.Release(); }
     }
@@ -315,8 +316,8 @@ public sealed class LlamaManager
         {
             cancel.ThrowIfCancellationRequested();
             if (await ProbeHealthAsync(cancel)) return true;
-            try { await Task.Delay(250, cancel); }
-            catch (OperationCanceledException) { throw; }
+            
+            await Task.Delay(250, cancel);
         }
         return false;
     }
@@ -654,7 +655,7 @@ public sealed class LlamaManager
         // `using` so the response (and its underlying connection / Content stream)
         // is released on EVERY exit path — the early returns from a POST failure
         // and the throw on cancellation used to skip the only Dispose() call,
-        // leaking an HTTP connection per failed/cancelled download.
+        // leaking an HTTP connection per failed/canceled download.
         using var sseResponse = await sseClient.GetAsync(
             $"{baseUrl}/models/sse",
             HttpCompletionOption.ResponseHeadersRead,
@@ -721,20 +722,20 @@ public sealed class LlamaManager
                 {
                     case "download_progress":
                         var (downloaded, total) = SumProgress(data);
-                        progress?.Report(new Common.ModelDownloadProgress(
+                        progress?.Report(new ModelDownloadProgress(
                             modelName, downloaded, total, Done: false, Failed: false));
                         break;
 
                     case "download_finished":
                         success = true;
-                        progress?.Report(new Common.ModelDownloadProgress(
+                        progress?.Report(new ModelDownloadProgress(
                             modelName, 0, 0, Done: true, Failed: false, Message: "Download complete"));
                         completed = true;
                         break;
 
                     case "download_failed":
                         Log.Warn($"server reported download_failed for {modelName}");
-                        progress?.Report(new Common.ModelDownloadProgress(
+                        progress?.Report(new ModelDownloadProgress(
                             modelName, 0, 0, Done: false, Failed: true, Message: "Download failed"));
                         completed = true;
                         break;
@@ -842,6 +843,45 @@ public sealed class LlamaManager
     }
 
     // ---- Model listing (GET /models) ----
+
+    /// <summary>
+    /// Asks the running llama server to remove a model from its cache via
+    /// <c>DELETE /models?model={name}</c> (the model name is passed as a query
+    /// param, not in the path — only cached, non-preset models can be deleted).
+    /// The server deletes the on-disk GGUF and drops it from the model list;
+    /// the <see cref="ModelsChanged"/> poller will surface the removal on its
+    /// next tick (the server also emits a <c>model_remove</c> SSE event).
+    /// Returns <c>false</c> (without throwing) when the server isn't running or
+    /// rejects the request.
+    /// </summary>
+    /// <param name="model">The model to delete; <see cref="Common.IModel.ServerModelId"/>
+    /// is the canonical id the server knows.</param>
+    /// <param name="cancel">Cancellation token.</param>
+    /// <returns><c>true</c> if the server accepted the delete request.</returns>
+    public async Task<bool> DeleteModelAsync(IModel model, CancellationToken cancel = default)
+    {
+        if (ServerStatus != ServerState.Running)
+            return false;
+
+        var baseUrl = $"http://localhost:{ServerPort}";
+
+        try
+        {
+            Log.Info($"deleting model {model.ServerModelId}");
+            var url = $"{baseUrl}/models?model={Uri.EscapeDataString(model.ServerModelId)}";
+            using var resp = await Client.DeleteAsync(url, cancel);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Log.Warn($"server rejected model delete ({(int)resp.StatusCode})");
+            }
+            return resp.IsSuccessStatusCode;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Error(ex, "model delete request threw");
+            return false;
+        }
+    }
 
     /// <summary>
     /// A model the running llama server knows about (router <c>/models</c> list):

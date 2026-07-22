@@ -509,6 +509,42 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
+        /// Deletes a model from the running llama server's cache — the action
+        /// behind the trash glyph to the left of the play button on an unloaded
+        /// Available row. Sends <c>DELETE /models/{name}</c>; on success the row
+        /// is removed from <see cref="LocalModels"/> immediately (the poller's
+        /// next tick would drop it too, but removing now avoids a stale row
+        /// lingering for up to one poll interval). No-op if the row is loaded or
+        /// loading — a resident model must be unloaded first.
+        /// </summary>
+        private async void LocalModelDelete_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
+            {
+                Log.Warn("could not resolve a ModelItem");
+                return;
+            }
+            if (item.IsLoaded || item.IsLoading || item.IsDownloading)
+            {
+                Log.Debug("ignored delete (isLoading=" + item.IsLoading +
+                    " isLoaded=" + item.IsLoaded + " isDownloading=" + item.IsDownloading + ")");
+                return;
+            }
+
+            Log.Info("delete clicked: removing " + ((IModel)item).ServerModelId);
+            if (await LlamaManager.Shared.DeleteModelAsync(item))
+            {
+                _localByServerId.Remove(((IModel)item).ServerModelId);
+                LocalModels.Remove(item);
+                UpdateEmptyState();
+            }
+            else
+            {
+                Log.Warn("server rejected delete for " + ((IModel)item).ServerModelId);
+            }
+        }
+
+        /// <summary>
         /// Opens the running llama server's WebUI in the system browser for the
         /// selected model — the action behind the OpenInNewWindow glyph on a
         /// loaded Available row. Passes <c>?model=&lt;ServerModelId&gt;</c> so the
