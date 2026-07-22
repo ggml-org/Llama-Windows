@@ -78,28 +78,34 @@
                     <StackPanel Grid.Column="1"
                                 VerticalAlignment="Center"
                                 Spacing="1">
+                        <TextBlock Text="{x:Bind DisplayName}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
                         <StackPanel Orientation="Horizontal" Spacing="4">
-                            <TextBlock Text="{x:Bind DisplayName}"
-                                       FontSize="13"
-                                       FontWeight="SemiBold"
-                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock FontSize="11"
+                                       Opacity="0.6"
+                                       TextTrimming="CharacterEllipsis">
+                                <Run Text="{x:Bind Parameters}" />
+                                <Run Text=" · " />
+                                <Run Text="{x:Bind Size}" />
+                            </TextBlock>
                             <!-- Vision marker: shown when the server reports
                                  image input (architecture.input_modalities).
                                  A small “glass” glyph, dimmed so it reads as a
-                                 capability hint rather than part of the name. -->
-                            <FontIcon Glyph="&#xEB25;"
-                                      FontSize="11"
-                                      Opacity="0.55"
-                                      VerticalAlignment="Center"
-                                      Visibility="{x:Bind Vision, Mode=OneWay}" />
+                                 capability hint rather than part of the name.
+                                 Tiled in the same gray rounded background as
+                                 the logo so it reads as a small chip. -->
+                            <Border CornerRadius="3"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="2"
+                                    Visibility="{x:Bind Vision, Mode=OneWay}">
+                                <FontIcon Glyph="&#xEB25;"
+                                          FontSize="10"
+                                          Opacity="0.55"
+                                          VerticalAlignment="Center" />
+                            </Border>
                         </StackPanel>
-                        <TextBlock FontSize="11"
-                                   Opacity="0.6"
-                                   TextTrimming="CharacterEllipsis">
-                            <Run Text="{x:Bind Parameters}" />
-                            <Run Text=" · " />
-                            <Run Text="{x:Bind Size}" />
-                        </TextBlock>
                     </StackPanel>
 
                     <!-- Action cell: exactly one of play / download ring /
@@ -201,25 +207,29 @@
                     <StackPanel Grid.Column="1"
                                 VerticalAlignment="Center"
                                 Spacing="1">
+                        <TextBlock Text="{x:Bind DisplayName}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
                         <StackPanel Orientation="Horizontal" Spacing="4">
-                            <TextBlock Text="{x:Bind DisplayName}"
-                                       FontSize="13"
-                                       FontWeight="SemiBold"
-                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock FontSize="11"
+                                       Opacity="0.6"
+                                       TextTrimming="CharacterEllipsis">
+                                <Run Text="{x:Bind Parameters}" />
+                                <Run Text=" · " />
+                                <Run Text="{x:Bind License}" />
+                            </TextBlock>
                             <!-- Vision marker (same as the Available rows). -->
-                            <FontIcon Glyph="&#xE7B3;"
-                                      FontSize="11"
-                                      Opacity="0.55"
-                                      VerticalAlignment="Center"
-                                      Visibility="{x:Bind Vision, Mode=OneWay}" />
+                            <Border CornerRadius="3"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="2"
+                                    Visibility="{x:Bind Vision, Mode=OneWay}">
+                                <FontIcon Glyph="&#xE7B3;"
+                                          FontSize="10"
+                                          Opacity="0.55"
+                                          VerticalAlignment="Center" />
+                            </Border>
                         </StackPanel>
-                        <TextBlock FontSize="11"
-                                   Opacity="0.6"
-                                   TextTrimming="CharacterEllipsis">
-                            <Run Text="{x:Bind Parameters}" />
-                            <Run Text=" · " />
-                            <Run Text="{x:Bind License}" />
-                        </TextBlock>
                     </StackPanel>
 
                     <FontIcon Grid.Column="2"
