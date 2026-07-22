@@ -780,13 +780,12 @@ public sealed class LlamaManager
     {
         if (ServerStatus != ServerState.Running)
             return false;
-
-        var baseUrl = $"http://localhost:{ServerPort}";
-
+        
         try
         {
             Log.Info($"loading model {model.ServerModelId}");
-            
+        
+            var baseUrl = $"http://localhost:{ServerPort}";
             var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await Client.PostAsync($"{baseUrl}/models/load", content, cancel);
@@ -820,19 +819,17 @@ public sealed class LlamaManager
         if (ServerStatus != ServerState.Running)
             return false;
 
-        var baseUrl = $"http://localhost:{ServerPort}";
-
         try
         {
             Log.Info($"unloading model {model.ServerModelId}");
-            
+
+            var baseUrl = $"http://localhost:{ServerPort}";
             var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await Client.PostAsync($"{baseUrl}/models/unload", content, cancel);
             if (!resp.IsSuccessStatusCode)
-            {
                 Log.Warn($"server rejected model unload ({(int)resp.StatusCode})");
-            }
+            
             return resp.IsSuccessStatusCode;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
