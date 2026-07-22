@@ -14,8 +14,8 @@ namespace LlamaApp.Llama;
 ///
 /// <para>Mirrors the macOS app's <c>LlamaInstallManager</c> + <c>LlamaBinaries</c>:
 /// the app manages the install-script path (<c>%USERPROFILE%\.llama-app\llama.exe</c>,
-/// what <c>install.ps1</c> produces) and may install/update it; any other install
-/// (e.g. a manually built binary on PATH) is treated as unmanaged and left alone.
+/// what <c>install.ps1</c> produces) and may install/update it; any other installation
+/// (e.g., a manually built binary on PATH) is treated as unmanaged and left alone.
 /// The installation is silent (writes under the user profile, no elevation needed).</para>
 ///
 /// <para>Call <see cref="EnsureLlamaOrDownloadAsync"/> at startup; it adopts a
@@ -105,12 +105,12 @@ public sealed class LlamaManager
     // fire-and-forget from App.OnLaunched and re-entrant via StateChanged
     // handlers; without it, two concurrent callers can both pass the initial
     // "no server reachable" probe and both spawn a `llama serve --port 2276`,
-    // leaking processes (one fails to bind and may linger; second binds and eats
+    // leaking processes (one fails to bind and may linger; the second binds and eats
     // RAM). The gate serializes launches within one process; cross-instance
     // races are handled by the retrying adoption probe (see WaitForReachableAsync).
     private readonly SemaphoreSlim _ensureGate = new(1, 1);
 
-    // Model-state poller: a background loop that fetches /models every second
+    // Model-state poller: a background loop that fetches /models every 500ms
     // while the server is Running and publishes the snapshot via ModelsChanged.
     private CancellationTokenSource? _pollerCts;
 
@@ -234,7 +234,7 @@ public sealed class LlamaManager
         // 1. Adopt an already-running server (no binary/process needed).
         // Probe briefly (a few attempts over ~3s) rather than once: a sibling
         // app instance / a manual launch / a server that's just binding won't
-        // answer the very first probe, and a single miss used to spawn a
+        // answer the very first probe, and a single has misused to spawn a
         // SECOND `llama serve --port 2276` here — leaving two processes eating
         // RAM (the loser fails to bind, but the app would also abandon timed-
         // out launches alive — see StartServerAsync). A short adoption window
@@ -304,7 +304,7 @@ public sealed class LlamaManager
     /// already-running server (a sibling app instance, a manual launch, or one
     /// that's mid-bind) rather than spawning a duplicate on the same port — the
     /// fix for several <c>llama serve --port 2276</c> processes piling up and
-    /// eating RAM. The window is short so a genuinely-absent server doesn't
+    /// eating RAM. The window is short, so a genuinely absent server doesn't
     /// delay startup by much (each refusal is near-instant; the 250ms cadence
     /// is what bounds the worst case).
     /// </summary>
@@ -322,7 +322,7 @@ public sealed class LlamaManager
     }
 
     /// <summary>
-    /// Best-effort binary resolution + version read for an adopted (external)
+    /// Best-effort binary resolution and version read for an adopted (external)
     /// server — populates <see cref="BinaryPath"/>/<see cref="Version"/> for
     /// display without blocking the client. Fire-and-forget.
     /// </summary>
@@ -515,9 +515,9 @@ public sealed class LlamaManager
     /// Polls <c>http://localhost:2276/health</c> until it responds or the timeout
     /// elapses (or the spawned <paramref name="proc"/> exits first). The llama
     /// server exposes a health endpoint once it's bound and ready; this confirms
-    /// the port is actually serving rather than just waiting a fixed delay.
+    /// the port is actually serving rather than just waiting for a fixed delay.
     /// Checking <c>proc.HasExited</c> each iteration fast-fails when the process
-    /// died right after launch (e.g. it couldn't bind the port because a
+    /// died right after launch (e.g., it couldn't bind the port because a
     /// sibling already did) so we don't sit out the full timeout before tearing
     /// down — and we don't keep around a dead-but-tracked process reference.
     /// </summary>
@@ -553,7 +553,7 @@ public sealed class LlamaManager
     // ---- Model-state poller ----
 
     /// <summary>
-    /// Starts the background <c>GET /models</c> poller (every 1s) that publishes
+    /// Starts the background <c>GET /models</c> poller (every 500ms) that publishes
     /// fresh snapshots via <see cref="ModelsChanged"/>. Idempotent — restarts the
     /// loop if one is already running. Torn down automatically when the server
     /// leaves <see cref="ServerState.Running"/> (see <see cref="ServerStatus"/> setter).
@@ -564,7 +564,7 @@ public sealed class LlamaManager
         _pollerCts = new CancellationTokenSource();
         var token = _pollerCts.Token;
         Task.Run(() => PollModelsAsync(token), token);
-        Log.Info("model-state poller started (1s interval)");
+        Log.Info("model-state poller started (500ms interval)");
     }
 
     /// <summary>Stops the poller and releases its cancellation token. Safe to call repeatedly.</summary>
@@ -579,7 +579,7 @@ public sealed class LlamaManager
     }
 
     /// <summary>
-    /// The poll loop: fetch <c>/models</c> every second and raise
+    /// The poll loop: fetch <c>/models</c> every 500ms and raise
     /// <see cref="ModelsChanged"/> with the snapshot. Transient errors are
     /// swallowed — the UI reconcile is additive and never clears rows on an
     /// empty/error fetch, so a network blip doesn't flicker the list. Exits
@@ -601,7 +601,7 @@ public sealed class LlamaManager
                 Log.Debug(
                     $"poll: {snapshot.Count} model(s): {string.Join(", ", snapshot.Select(m => $"{m.Id}={(m.Status ?? "?")}"))}");
 
-            try { await Task.Delay(1000, cancel); }
+            try { await Task.Delay(500, cancel); }
             catch (OperationCanceledException) { break; }
         }
     }
@@ -917,7 +917,7 @@ public sealed class LlamaManager
     /// The model the spotlight overlay should prompt: the first server-reported
     /// <c>loaded</c> model, or <c>null</c> when none is resident (the overlay
     /// shows its disabled hint in that case). Cached from the latest poller
-    /// snapshot so a hotkey press doesn't block on <c>GET /models</c>.
+    /// snapshot, so a hotkey press doesn't block on <c>GET /models</c>.
     /// </summary>
     private IReadOnlyList<ServerModel> _lastModelsSnapshot = [];
 
@@ -949,12 +949,13 @@ public sealed class LlamaManager
         // PostAsync (the default ResponseContentRead) would buffer the entire
         // response before completing — defeating streaming and making the
         // overlay hang until the whole generation finished.
-        using var req = new HttpRequestMessage(HttpMethod.Post,
-            new Uri($"{baseUrl}/v1/chat/completions"))
+        using var req = new HttpRequestMessage(HttpMethod.Post, new Uri($"{baseUrl}/v1/chat/completions"))
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
+        
         Log.Info($"chat completion → POST /v1/chat/completions (model={model}, prompt={userMessage.Length} chars)");
+        
         using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancel);
         Log.Info($"chat completion ← HTTP {(int)resp.StatusCode} {resp.StatusCode}");
         resp.EnsureSuccessStatusCode();
@@ -962,7 +963,7 @@ public sealed class LlamaManager
         // Reuse the same SSE line framing as /models/sse: data: {json} lines,
         // terminated by a blank line / "data: [DONE]". We parse incrementally so
         // tokens surface as soon as the server flushes them.
-        // Default buffer size matches the working /models/sse path.
+        // The default buffer size matches the working /models/sse path.
         await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
         using var reader = new StreamReader(stream);
 
@@ -977,7 +978,7 @@ public sealed class LlamaManager
             // shape. Capped to avoid spamming the log on long generations.
             if (loggedLines < 20)
             {
-                var preview = line.Length > 200 ? line.Substring(0, 200) + "…" : line;
+                var preview = line.Length > 200 ? string.Concat(line.AsSpan(0, 200), "…") : line;
                 Log.Debug($"chat sse raw[{loggedLines}]: '{preview}'");
                 loggedLines++;
             }
@@ -1003,11 +1004,10 @@ public sealed class LlamaManager
                 c.ValueKind != JsonValueKind.String) continue;
             
             var text = c.GetString();
-            if (!string.IsNullOrEmpty(text))
-            {
-                yielded++;
-                yield return text;
-            }
+            if (string.IsNullOrEmpty(text)) continue;
+           
+            yielded++;
+            yield return text;
         }
         // ReadLineAsync returned null: the server closed the stream without
         // sending [DONE]. Log so we can tell a hang (no log) from a clean
@@ -1270,6 +1270,7 @@ public sealed class LlamaManager
 
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
+            
             if (stdout.Length > 0) Log.Debug($"install.ps1 stdout: {stdout.Trim()}");
             if (stderr.Length > 0) Log.Debug($"install.ps1 stderr: {stderr.Trim()}");
             if (proc.ExitCode != 0)
