@@ -100,8 +100,10 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-nuget-
 
+      # Restore with the RID and PublishReadyToRun=true so the ReadyToRun
+      # optimizer can find the RID-specific runtime package at publish time.
       - name: Restore solution
-        run: dotnet restore LlamaApp.sln -p:Platform=${{ matrix.platform }}
+        run: dotnet restore LlamaApp.sln -p:Platform=${{ matrix.platform }} -r ${{ matrix.rid }} -p:PublishReadyToRun=true
 
       - name: Build solution (Release, ${{ matrix.platform }})
         run: dotnet build LlamaApp.sln -c Release -p:Platform=${{ matrix.platform }} --no-restore
@@ -117,6 +119,7 @@ jobs:
           -p:AppxPackageSigningEnabled=false
           -p:AppxPackageDir=${{ github.workspace }}/packages/${{ matrix.rid }}/
           -o publish/${{ matrix.rid }}
+          --no-restore
 
       - name: Upload unsigned MSIX
         uses: actions/upload-artifact@v4
