@@ -96,7 +96,7 @@ jobs:
       # compiles the assemblies but never triggers the Appx pack target, so no
       # .msix is produced. Use setup-msbuild to put VS msbuild on PATH.
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
 
       - name: Cache NuGet
         uses: actions/cache@v5
