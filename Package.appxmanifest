@@ -26,7 +26,7 @@
   <Properties>
     <DisplayName>LlamaApp</DisplayName>
     <PublisherDisplayName>Morgan Funtowicz</PublisherDisplayName>
-    <Logo>Assets\llama.svg</Logo>
+    <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
   <Dependencies>
