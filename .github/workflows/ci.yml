@@ -106,6 +106,10 @@ jobs:
           restore-keys: windows-nuget-
 
       # Restore + build + package in one msbuild invocation.
+      # GenerateAppxPackageOnBuild=true is the actual switch that fires the
+      # `GenerateMsixPackage` target (which runs MakeAppx via
+      # `_GenerateAppxPackageFile`). The legacy `GenerateAppxPackage=true` is a
+      # no-op passthrough in WinAppSDK 1.6 and produces NO .msix.
       # PublishTrimmed/PublishReadyToRun are forced off because the app uses
       # reflection-based JsonSerializer.Deserialize<TValue> and `dynamic`
       # (StartupHelper) which trim/R2R would remove -> runtime breakage.
@@ -116,7 +120,7 @@ jobs:
           -p:Configuration=Release
           -p:Platform=${{ matrix.platform }}
           -p:RuntimeIdentifier=${{ matrix.rid }}
-          -p:GenerateAppxPackage=true
+          -p:GenerateAppxPackageOnBuild=true
           -p:AppxPackageSigningEnabled=false
           -p:PublishTrimmed=false
           -p:PublishReadyToRun=false
