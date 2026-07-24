@@ -112,26 +112,22 @@ jobs:
             Set-Content Package.appxmanifest
           Write-Host "Package version set to $v4"
 
-      # Restore with the RID and PublishReadyToRun=true so the ReadyToRun
-      # optimizer can find the RID-specific runtime package at publish time.
-      - name: Restore solution
-        run: dotnet restore LlamaApp.sln -p:Platform=${{ matrix.platform }} -r ${{ matrix.rid }} -p:PublishReadyToRun=true
-
-      - name: Build solution (Release, ${{ matrix.platform }})
-        run: dotnet build LlamaApp.sln -c Release -p:Platform=${{ matrix.platform }} --no-restore
-
-      - name: Package MSIX (unsigned, ${{ matrix.rid }})
+      # Generate the unsigned MSIX. For a WinUI 3 single-project MSIX app,
+      # `dotnet publish` does NOT run the GenerateAppxPackage target — it only
+      # does a loose-file publish. MSIX packaging must be driven by msbuild
+      # `-t:Build` with GenerateAppxPackage=true (the documented CI approach).
+      # Restore + build + package happen in a single msbuild invocation.
+      - name: Build & package unsigned MSIX (${{ matrix.rid }})
         run: >
-          dotnet publish LlamaApp.csproj
-          -c Release
-          -r ${{ matrix.rid }}
-          --self-contained false
+          dotnet msbuild LlamaApp.csproj
+          -t:Build -restore -bl:msbuild.binlog
+          -p:Configuration=Release
           -p:Platform=${{ matrix.platform }}
+          -p:RuntimeIdentifier=${{ matrix.rid }}
           -p:GenerateAppxPackage=true
           -p:AppxPackageSigningEnabled=false
           -p:AppxPackageDir=${{ github.workspace }}/packages/${{ matrix.rid }}/
-          -o publish/${{ matrix.rid }}
-          --no-restore
+          -p:PublishDir=${{ github.workspace }}/publish/${{ matrix.rid }}/
 
       - name: Upload unsigned MSIX
         uses: actions/upload-artifact@v7
@@ -139,6 +135,14 @@ jobs:
           name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
           path: ${{ github.workspace }}/packages/${{ matrix.rid }}
           if-no-files-found: error
+
+      - name: Upload MSBuild binlog (debug)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: msix-binlog-${{ matrix.rid }}-${{ github.sha }}
+          path: msbuild.binlog
+          if-no-files-found: warn
 
   sign:
     name: Sign MSIX (Trusted Signing, ${{ matrix.rid }})
