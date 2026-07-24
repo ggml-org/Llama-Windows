@@ -190,6 +190,15 @@ jobs:
           timestamp-rfc3161:            https://timestamp.acs.microsoft.com/
           timestamp-digest:             SHA256
 
+      - name: Locate MakeAppx
+        id: makeappx
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\MakeAppx.exe" |
+                 Sort-Object FullName -Descending |
+                 Select-Object -First 1 -ExpandProperty FullName
+          "path=$exe" >> $env:GITHUB_OUTPUT
+
       - name: Upload signed MSIX
         uses: actions/upload-artifact@v4
         with:
@@ -208,15 +217,6 @@ jobs:
           pattern: LlamaApp-msix-*-${{ github.sha }}
           path: signed
           merge-multiple: true
-
-      - name: Locate MakeAppx
-        id: makeappx
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\MakeAppx.exe" |
-                 Sort-Object FullName -Descending |
-                 Select-Object -First 1 -ExpandProperty FullName
-          "path=$exe" >> $env:GITHUB_OUTPUT
 
       - name: Build .msixbundle
         shell: pwsh
