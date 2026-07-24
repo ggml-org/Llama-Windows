@@ -1,0 +1,276 @@
+name: Release
+
+# Triggered by version tags (v1.2.3). Builds + signs per-architecture MSIX,
+# bundles them into a single .msixbundle, signs the bundle, and attaches
+# everything to a GitHub Release (auto-generated notes).
+#
+# Signing uses Azure Trusted Signing. Required repo secrets:
+#   AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+#   AZURE_TS_ENDPOINT, AZURE_TS_ACCOUNT_NAME, AZURE_TS_PROFILE_NAME
+#
+# NOTE: the Publisher in Package.appxmanifest MUST exactly match the subject of
+# the certificate issued by your Trusted Signing certificate profile, otherwise
+# the MSIX signature is invalid and install will fail.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required to create the GitHub Release & upload assets
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x64
+            runner: windows-latest
+          - label: arm64
+            runner: windows-11-arm
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-nuget-
+
+      - name: Restore (test project)
+        run: dotnet restore LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj
+
+      - name: Build (test project + dependencies)
+        run: dotnet build LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj -c Release --no-restore
+
+      - name: Test
+        run: >
+          dotnet test LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj
+          -c Release
+          --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --logger "console;verbosity=normal"
+
+  build:
+    name: Build MSIX (${{ matrix.rid }})
+    needs: test
+    runs-on: windows-latest   # VS MSBuild + ARM64 cross-pack on x64 host is fine
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            platform: x64
+          - rid: win-x86
+            platform: x86
+          - rid: win-arm64
+            platform: ARM64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # setup-msbuild adds Visual Studio's MSBuild to PATH. The
+      # GenerateAppxPackage target is only wired into the Build target chain by
+      # VS MSBuild — `dotnet msbuild` compiles but never packs the Appx, so no
+      # .msix is produced.
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Cache NuGet
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: windows-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
+          restore-keys: windows-nuget-
+
+      # Derive a 4-part package version from the git tag (v1.2.3 -> 1.2.3.0) and
+      # patch Package.appxmanifest so all architectures share one identity.
+      - name: Set package version from tag
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}' -replace '^v',''
+          $parts = $tag.Split('.')
+          while ($parts.Count -lt 4) { $parts += '0' }
+          $v4 = ($parts[0..3] -join '.')
+          (Get-Content Package.appxmanifest) `
+            -replace '<Version>[^<]*</Version>', "<Version>$v4</Version>" |
+            Set-Content Package.appxmanifest
+          Write-Host "Package version set to $v4"
+
+      # Restore + build + package in one msbuild invocation.
+      # GenerateAppxPackageOnBuild=true is the actual switch that fires the
+      # `GenerateMsixPackage` target (which runs MakeAppx via
+      # `_GenerateAppxPackageFile`). The legacy `GenerateAppxPackage=true` is a
+      # no-op passthrough in WinAppSDK 1.6 and produces NO .msix.
+      # PublishTrimmed/PublishReadyToRun are forced off because the app uses
+      # reflection-based JsonSerializer.Deserialize<TValue> and `dynamic`
+      # (StartupHelper) which trim/R2R would remove -> runtime breakage.
+      - name: Build & package unsigned MSIX (${{ matrix.rid }})
+        run: >
+          msbuild LlamaApp.csproj
+          -t:Build -restore -bl:msbuild.binlog
+          -p:Configuration=Release
+          -p:Platform=${{ matrix.platform }}
+          -p:RuntimeIdentifier=${{ matrix.rid }}
+          -p:GenerateAppxPackageOnBuild=true
+          -p:AppxPackageSigningEnabled=false
+          -p:PublishTrimmed=false
+          -p:PublishReadyToRun=false
+          -p:PublishSingleFile=false
+          -p:AppxPackageDir="${{ github.workspace }}\packages\${{ matrix.rid }}\"
+        
+      - name: Locate generated packages
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path . -Recurse -File |
+            Where-Object { $_.Extension -in '.msix', '.msixbundle', '.appx', '.appxbundle' } |
+            Select-Object FullName
+
+      - name: Upload unsigned MSIX
+        uses: actions/upload-artifact@v7
+        with:
+          name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
+          path: packages/win-x64/**
+          if-no-files-found: error
+
+      - name: Upload MSBuild binlog (debug)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: msix-binlog-${{ matrix.rid }}-${{ github.sha }}
+          path: msbuild.binlog
+          if-no-files-found: warn
+
+  sign:
+    name: Sign MSIX (Trusted Signing, ${{ matrix.rid }})
+    needs: build
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+          - rid: win-x86
+          - rid: win-arm64
+    steps:
+      - name: Download unsigned MSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
+          path: unsigned/${{ matrix.rid }}
+
+      - name: Sign MSIX (Azure Trusted Signing)
+        uses: azure/trusted-signing-action@v2
+        with:
+          azure-tenant-id:              ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:              ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret:          ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint:                     ${{ secrets.AZURE_TS_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TS_ACCOUNT_NAME }}
+          certificate-profile-name:     ${{ secrets.AZURE_TS_PROFILE_NAME }}
+          files-folder:                 unsigned/${{ matrix.rid }}
+          files-folder-filter:          msix,appx
+          files-folder-recurse:         true
+          file-digest:                  SHA256
+          timestamp-rfc3161:            https://timestamp.acs.microsoft.com/
+          timestamp-digest:             SHA256
+
+      - name: Locate MakeAppx
+        id: makeappx
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\MakeAppx.exe" |
+                 Sort-Object FullName -Descending |
+                 Select-Object -First 1 -ExpandProperty FullName
+          "path=$exe" >> $env:GITHUB_OUTPUT
+
+      - name: Upload signed MSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: LlamaApp-msix-${{ matrix.rid }}-${{ github.sha }}
+          path: unsigned/${{ matrix.rid }}/**/*.msix
+          if-no-files-found: error
+
+  bundle:
+    name: Create & sign .msixbundle
+    needs: sign
+    runs-on: windows-latest
+    steps:
+      - name: Download signed MSIX (all architectures)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: LlamaApp-msix-*-${{ github.sha }}
+          path: signed
+          merge-multiple: true
+
+      - name: Build .msixbundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force bundle-input,bundle | Out-Null
+          Get-ChildItem signed -Recurse -Filter *.msix |
+            Copy-Item -Destination bundle-input
+          & "${{ steps.makeappx.outputs.path }}" bundle /d bundle-input /p "bundle/LlamaApp-${{ github.ref_name }}.msixbundle" /v
+
+      - name: Sign .msixbundle (Azure Trusted Signing)
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id:              ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id:              ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret:          ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint:                     ${{ secrets.AZURE_TS_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TS_ACCOUNT_NAME }}
+          certificate-profile-name:     ${{ secrets.AZURE_TS_PROFILE_NAME }}
+          files-folder:                 bundle
+          files-folder-filter:          msixbundle
+          files-folder-recurse:         false
+          file-digest:                  SHA256
+          timestamp-rfc3161:            https://timestamp.acs.microsoft.com/
+          timestamp-digest:             SHA256
+
+      - name: Upload .msixbundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: LlamaApp-msixbundle-${{ github.sha }}
+          path: bundle/*.msixbundle
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: LlamaApp-msix*-${{ github.sha }}
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/**/*.msix
+            artifacts/**/*.msixbundle

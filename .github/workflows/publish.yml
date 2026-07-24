@@ -1,0 +1,117 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      self-contained:
+        description: 'Self-contained publish (bundle .NET runtime)'
+        type: boolean
+        default: true
+      make-release:
+        description: 'Create/update a GitHub Release (tag pushes always do)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish ${{ matrix.rid }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            platform: x64
+          - rid: win-x86
+            platform: x86
+          - rid: win-arm64
+            platform: ARM64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Resolve self-contained flag
+        id: sc
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "self-contained=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "self-contained=${{ inputs.self-contained }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore
+        run: >
+          dotnet restore LlamaApp.csproj
+          -p:RuntimeIdentifier=${{ matrix.rid }}
+          -p:Platform=${{ matrix.platform }}
+
+      - name: Publish (${{ matrix.rid }})
+        run: >
+          dotnet publish LlamaApp.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained ${{ steps.sc.outputs.self-contained }}
+          -p:Platform=${{ matrix.platform }}
+          -p:PublishReadyToRun=false
+          -p:PublishSingleFile=false
+          -o publish/${{ matrix.rid }}
+
+      - name: Compress artifact
+        shell: pwsh
+        run: |
+          $rid = '${{ matrix.rid }}'
+          $dest = "LlamaApp-$rid"
+          Compress-Archive -Path "publish/$rid/*" -DestinationPath "$dest.zip" -Force
+          Get-Item "$dest.zip" | Select-Object FullName, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LlamaApp-${{ matrix.rid }}
+          path: LlamaApp-${{ matrix.rid }}.zip
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.make-release)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all publish artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: LlamaApp-win-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: List release assets
+        run: ls -lh release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/*.zip
+          fail_on_unmatched_files: true

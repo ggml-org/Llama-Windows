@@ -7,9 +7,18 @@
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   IgnorableNamespaces="uap rescap">
 
+  <!-- IMPORTANT: For Azure Trusted Signing the Publisher MUST exactly match the
+       subject of the signing certificate issued by your Trusted Signing
+       certificate profile (see the profile in the Azure portal after org
+       validation). A mismatch makes the MSIX signature invalid and the package
+       will refuse to install. Replace the placeholder below with that subject,
+       e.g. "CN=Contoso, O=Contoso Ltd, L=Redmond, S=Washington, C=US".
+       Keep the existing Name/Version unless you are intentionally changing the
+       package identity (doing so creates a new app identity and breaks
+       upgrades from previously installed copies). -->
   <Identity
     Name="4e440e29-8151-4465-b20f-fb3acb283925"
-    Publisher="CN=Morgan Funtowicz"
+    Publisher="CN=Hugging Face, O=Hugging Face, L=Brooklyn, S=New York, C=US, PostalCode=11201"
     Version="1.0.0.0" />
 
   <mp:PhoneIdentity PhoneProductId="4e440e29-8151-4465-b20f-fb3acb283925" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
@@ -17,7 +26,7 @@
   <Properties>
     <DisplayName>LlamaApp</DisplayName>
     <PublisherDisplayName>Morgan Funtowicz</PublisherDisplayName>
-    <Logo>Assets\llama.svg</Logo>
+    <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
   <Dependencies>
