@@ -1,8 +1,8 @@
 using System.Diagnostics;
-using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 
 namespace LlamaApp.Common;
 
@@ -21,7 +21,7 @@ public enum LogLevel { Trace, Debug, Info, Warn, Error, None }
 public static class Log
 {
     public static LogLevel Level { get; set; } = LogLevel.Info;
-    public static int RetentionDays { get; set; } = 7;
+    private static int RetentionDays { get; set; } = 7;
 
     private static readonly object Gate = new();
     private static string? _logDir;
@@ -238,8 +238,10 @@ public static class Log
         if (enableColor && GetConsoleMode(handle, out var mode))
             _colorEnabled = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 
+        // wrapsHandle=false: the console handle is owned/freed by our console
+        // management (FreeConsole), not by the FileStream.
         _consoleWriter = new StreamWriter(
-            new FileStream(handle, FileAccess.Write),
+            new FileStream(new SafeFileHandle(handle, ownsHandle: false), FileAccess.Write),
             new UTF8Encoding(false)) { AutoFlush = false };
     }
 

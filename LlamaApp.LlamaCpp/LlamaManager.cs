@@ -1239,10 +1239,7 @@ public sealed class LlamaManager
                 if (File.Exists(candidate))
                     return new Resolution(ResolutionKind.External, candidate);
             }
-            catch
-            {
-                // Malformed PATH entry — skip.
-            }
+            catch { /* Malformed PATH entry — skip. */ }
         }
 
         return new Resolution(ResolutionKind.Missing, null);

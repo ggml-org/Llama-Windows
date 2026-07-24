@@ -77,8 +77,6 @@ jobs:
         include:
           - rid: win-x64
             platform: x64
-          - rid: win-x86
-            platform: x86
           - rid: win-arm64
             platform: ARM64
     steps:
@@ -94,7 +92,7 @@ jobs:
       # VS MSBuild — `dotnet msbuild` compiles but never packs the Appx, so no
       # .msix is produced.
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
 
       - name: Cache NuGet
         uses: actions/cache@v5
@@ -150,7 +148,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
-          path: packages/win-x64/**
+          path: packages/${{ matrix.rid }}/**
           if-no-files-found: error
 
       - name: Upload MSBuild binlog (debug)
@@ -170,7 +168,6 @@ jobs:
       matrix:
         include:
           - rid: win-x64
-          - rid: win-x86
           - rid: win-arm64
     steps:
       - name: Download unsigned MSIX
@@ -194,15 +191,6 @@ jobs:
           file-digest:                  SHA256
           timestamp-rfc3161:            https://timestamp.acs.microsoft.com/
           timestamp-digest:             SHA256
-
-      - name: Locate MakeAppx
-        id: makeappx
-        shell: pwsh
-        run: |
-          $exe = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\MakeAppx.exe" |
-                 Sort-Object FullName -Descending |
-                 Select-Object -First 1 -ExpandProperty FullName
-          "path=$exe" >> $env:GITHUB_OUTPUT
 
       - name: Upload signed MSIX
         uses: actions/upload-artifact@v4

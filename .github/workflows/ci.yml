@@ -79,8 +79,6 @@ jobs:
         include:
           - rid: win-x64
             platform: x64
-          - rid: win-x86
-            platform: x86
           - rid: win-arm64
             platform: ARM64
     steps:
