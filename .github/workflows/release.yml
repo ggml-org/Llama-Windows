@@ -132,13 +132,20 @@ jobs:
           -p:PublishTrimmed=false
           -p:PublishReadyToRun=false
           -p:PublishSingleFile=false
-          -p:AppxPackageDir=${{ github.workspace }}/packages/${{ matrix.rid }}/
+          -p:AppxPackageDir="${{ github.workspace }}\packages\${{ matrix.rid }}\"
+        
+      - name: Locate generated packages
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path . -Recurse -File |
+            Where-Object { $_.Extension -in '.msix', '.msixbundle', '.appx', '.appxbundle' } |
+            Select-Object FullName
 
       - name: Upload unsigned MSIX
         uses: actions/upload-artifact@v7
         with:
           name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
-          path: ${{ github.workspace }}/packages/${{ matrix.rid }}
+          path: packages/win-x64/**
           if-no-files-found: error
 
       - name: Upload MSBuild binlog (debug)
