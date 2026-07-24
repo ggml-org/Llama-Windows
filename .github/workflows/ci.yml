@@ -36,12 +36,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
       - name: Cache NuGet
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
@@ -63,7 +63,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-${{ matrix.label }}-${{ github.run_id }}
           path: '**/TestResults/*.trx'
@@ -86,7 +86,7 @@ jobs:
             platform: ARM64
             runner: windows-11-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -94,7 +94,7 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Cache NuGet
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
@@ -122,7 +122,7 @@ jobs:
           --no-restore
 
       - name: Upload unsigned MSIX
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
           path: ${{ github.workspace }}/packages/${{ matrix.rid }}

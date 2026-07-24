@@ -38,7 +38,7 @@ jobs:
             runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -46,7 +46,7 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Cache NuGet
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
@@ -84,15 +84,15 @@ jobs:
             platform: ARM64
             runner: windows-11-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
 
       - name: Cache NuGet
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
@@ -134,7 +134,7 @@ jobs:
           --no-restore
 
       - name: Upload unsigned MSIX
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
           path: ${{ github.workspace }}/packages/${{ matrix.rid }}
@@ -153,7 +153,7 @@ jobs:
           - rid: win-arm64
     steps:
       - name: Download unsigned MSIX
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
           path: unsigned/${{ matrix.rid }}
@@ -223,7 +223,7 @@ jobs:
           files-folder-filter:          msixbundle
           files-folder-recurse:         false
           file-digest:                  SHA256
-          timestamp-rfc3161:            http://timestamp.acs.microsoft.com/
+          timestamp-rfc3161:            https://timestamp.acs.microsoft.com/
           timestamp-digest:             SHA256
 
       - name: Upload .msixbundle
