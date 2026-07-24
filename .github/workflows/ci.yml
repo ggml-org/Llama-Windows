@@ -1,0 +1,126 @@
+name: CI
+
+# Continuous integration: build & test on every push/PR to main.
+# Produces UNSIGNED MSIX artifacts for review. Signing only happens in
+# release.yml (on version tags) to conserve the Trusted Signing quota and to
+# keep signing secrets away from forked PR builds.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x64
+            runner: windows-latest
+          - label: arm64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-nuget-
+
+      - name: Restore (test project)
+        run: dotnet restore LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj
+
+      - name: Build (test project + dependencies)
+        run: dotnet build LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj -c Release --no-restore
+
+      - name: Test
+        run: >
+          dotnet test LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj
+          -c Release
+          --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --logger "console;verbosity=normal"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.label }}-${{ github.run_id }}
+          path: '**/TestResults/*.trx'
+          if-no-files-found: warn
+
+  build:
+    name: Build MSIX (${{ matrix.rid }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            platform: x64
+            runner: windows-latest
+          - rid: win-x86
+            platform: x86
+            runner: windows-latest
+          - rid: win-arm64
+            platform: ARM64
+            runner: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-nuget-
+
+      - name: Restore solution
+        run: dotnet restore LlamaApp.sln -p:Platform=${{ matrix.platform }}
+
+      - name: Build solution (Release, ${{ matrix.platform }})
+        run: dotnet build LlamaApp.sln -c Release -p:Platform=${{ matrix.platform }} --no-restore
+
+      - name: Package MSIX (unsigned, ${{ matrix.rid }})
+        run: >
+          dotnet publish LlamaApp.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained false
+          -p:Platform=${{ matrix.platform }}
+          -p:GenerateAppxPackage=true
+          -p:AppxPackageSigningEnabled=false
+          -p:AppxPackageDir=${{ github.workspace }}/packages/${{ matrix.rid }}/
+          -o publish/${{ matrix.rid }}
+
+      - name: Upload unsigned MSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
+          path: ${{ github.workspace }}/packages/${{ matrix.rid }}
+          if-no-files-found: error
