@@ -71,20 +71,17 @@ jobs:
 
   build:
     name: Build MSIX (${{ matrix.rid }})
-    runs-on: ${{ matrix.runner }}
+    runs-on: windows-latest   # VS MSBuild + ARM64 cross-pack on x64 host is fine
     strategy:
       fail-fast: false
       matrix:
         include:
           - rid: win-x64
             platform: x64
-            runner: windows-latest
           - rid: win-x86
             platform: x86
-            runner: windows-latest
           - rid: win-arm64
             platform: ARM64
-            runner: windows-11-arm
     steps:
       - uses: actions/checkout@v7
 
@@ -93,29 +90,37 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Single-project MSIX packaging (GenerateAppxPackage) is only wired into
+      # the Build target chain by Visual Studio's MSBuild — `dotnet msbuild`
+      # compiles the assemblies but never triggers the Appx pack target, so no
+      # .msix is produced. Use setup-msbuild to put VS msbuild on PATH.
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
       - name: Cache NuGet
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
-          key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-nuget-
+          key: windows-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
+          restore-keys: windows-nuget-
 
-      # Generate the unsigned MSIX. For a WinUI 3 single-project MSIX app,
-      # `dotnet publish` does NOT run the GenerateAppxPackage target — it only
-      # does a loose-file publish. MSIX packaging must be driven by msbuild
-      # `-t:Build` with GenerateAppxPackage=true (the documented CI approach).
-      # Restore + build + package happen in a single msbuild invocation.
+      # Restore + build + package in one msbuild invocation.
+      # PublishTrimmed/PublishReadyToRun are forced off because the app uses
+      # reflection-based JsonSerializer.Deserialize<TValue> and `dynamic`
+      # (StartupHelper) which trim/R2R would remove -> runtime breakage.
       - name: Build & package unsigned MSIX (${{ matrix.rid }})
         run: >
-          dotnet msbuild LlamaApp.csproj
+          msbuild LlamaApp.csproj
           -t:Build -restore -bl:msbuild.binlog
           -p:Configuration=Release
           -p:Platform=${{ matrix.platform }}
           -p:RuntimeIdentifier=${{ matrix.rid }}
           -p:GenerateAppxPackage=true
           -p:AppxPackageSigningEnabled=false
+          -p:PublishTrimmed=false
+          -p:PublishReadyToRun=false
+          -p:PublishSingleFile=false
           -p:AppxPackageDir=${{ github.workspace }}/packages/${{ matrix.rid }}/
-          -p:PublishDir=${{ github.workspace }}/publish/${{ matrix.rid }}/
 
       - name: Upload MSIX
         uses: actions/upload-artifact@v7
