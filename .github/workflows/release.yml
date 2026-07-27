@@ -148,7 +148,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
-          path: packages/${{ matrix.rid }}/**
+          # Only the main package — NOT the _Test/Dependencies/** tree, which
+          # contains Microsoft's already-signed framework .appx files
+          # (WindowsAppRuntime, VCLibs, UI.Xaml). Re-signing those with your
+          # cert fails with SignerSign() 0x8007000b ERROR_BAD_FORMAT.
+          path: packages/${{ matrix.rid }}/**/*.msix
           if-no-files-found: error
 
       - name: Upload MSBuild binlog (debug)
@@ -211,6 +215,21 @@ jobs:
           path: signed
           merge-multiple: true
 
+      - name: Locate MakeAppx.exe
+        id: makeappx
+        shell: pwsh
+        run: |
+          # Pick the highest-versioned makeappx.exe from the Windows SDK bin
+          # tree (windows-latest ships several side-by-side).
+          $exe = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Directory |
+            Sort-Object Name -Descending |
+            Get-ChildItem -Path { $_.FullName } -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq 'x64' } |
+            Select-Object -First 1
+          if (-not $exe) { throw "makeappx.exe not found under Windows Kits" }
+          Write-Host "Using: $($exe.FullName)"
+          "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
       - name: Build .msixbundle
         shell: pwsh
         run: |
@@ -220,7 +239,7 @@ jobs:
           & "${{ steps.makeappx.outputs.path }}" bundle /d bundle-input /p "bundle/LlamaApp-${{ github.ref_name }}.msixbundle" /v
 
       - name: Sign .msixbundle (Azure Trusted Signing)
-        uses: azure/trusted-signing-action@v0
+        uses: azure/trusted-signing-action@v2
         with:
           azure-tenant-id:              ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id:              ${{ secrets.AZURE_CLIENT_ID }}
