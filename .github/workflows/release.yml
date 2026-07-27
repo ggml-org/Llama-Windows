@@ -137,22 +137,27 @@ jobs:
           -p:PublishSingleFile=false
           -p:AppxPackageDir="${{ github.workspace }}\packages\${{ matrix.rid }}\"
         
-      - name: Locate generated packages
+      - name: Stage main MSIX (exclude Microsoft framework packages)
         shell: pwsh
         run: |
-          Get-ChildItem -Path . -Recurse -File |
-            Where-Object { $_.Extension -in '.msix', '.msixbundle', '.appx', '.appxbundle' } |
-            Select-Object FullName
+          # The build also emits Microsoft.* framework packages
+          # (WindowsAppRuntime.1.x.msix, VCLibs, UI.Xaml) under
+          # AppPackages/..._Test/Dependencies/. These are already signed by
+          # Microsoft; feeding them to signtool fails with SignerSign()
+          # 0x8007000b (ERROR_BAD_FORMAT). Stage only our own main package.
+          New-Item -ItemType Directory -Force staging | Out-Null
+          $pkg = Get-ChildItem -Path "packages/${{ matrix.rid }}" -Recurse -Filter *.msix |
+            Where-Object { $_.Name -notlike 'Microsoft.*' } |
+            Select-Object -First 1
+          if (-not $pkg) { throw "Main MSIX not found under packages/${{ matrix.rid }}" }
+          Copy-Item $pkg.FullName -Destination staging
+          Get-ChildItem staging | Select-Object FullName
 
       - name: Upload unsigned MSIX
         uses: actions/upload-artifact@v7
         with:
           name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
-          # Only the main package — NOT the _Test/Dependencies/** tree, which
-          # contains Microsoft's already-signed framework .appx files
-          # (WindowsAppRuntime, VCLibs, UI.Xaml). Re-signing those with your
-          # cert fails with SignerSign() 0x8007000b ERROR_BAD_FORMAT.
-          path: packages/${{ matrix.rid }}/**/*.msix
+          path: staging/*.msix
           if-no-files-found: error
 
       - name: Upload MSBuild binlog (debug)
@@ -190,8 +195,8 @@ jobs:
           trusted-signing-account-name: ${{ secrets.AZURE_TS_ACCOUNT_NAME }}
           certificate-profile-name:     ${{ secrets.AZURE_TS_PROFILE_NAME }}
           files-folder:                 unsigned/${{ matrix.rid }}
-          files-folder-filter:          msix,appx
-          files-folder-recurse:         true
+          files-folder-filter:          msix
+          files-folder-recurse:         false
           file-digest:                  SHA256
           timestamp-rfc3161:            http://timestamp.acs.microsoft.com/
           timestamp-digest:             SHA256
