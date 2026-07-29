@@ -765,40 +765,130 @@ public sealed class LlamaManager
     /// <summary>
     /// Asks the running llama server to load (launch) a model into memory via
     /// <c>POST /models/load</c>. In router mode, the server spawns a child
-    /// process for the model; this returns once the load request is accepted —
-    /// the model isn't necessarily <c>loaded</c> yet. Track the transition via
-    /// the <see cref="ModelsChanged"/> poller, which reports the server's
-    /// <c>status</c> field flipping from <c>unloaded</c> to <c>loaded</c>.
+    /// process for the model.
     /// </summary>
     /// <param name="model">The model to load; <see cref="Common.IModel.ServerModelId"/>
     /// is the canonical id the server knows (the HF repo id with its
     /// <c>:&lt;quant&gt;</c> suffix, e.g. <c>ggml-org/gemma-3-4b-it-GGUF:Q4_K_M</c>) —
     /// <c>/models/load</c> requires the quant suffix, so the bare repo id won't do.</param>
+    /// <param name="progress">Optional sink for the load fraction (0..1). When
+    /// provided, the <c>/models/sse</c> stream is opened BEFORE the POST (a small
+    /// model can finish loading in under a second — opening it after would miss
+    /// the whole load) and <c>status_change</c> events are watched until the
+    /// model reaches a terminal state, reporting each event's fraction. When
+    /// <c>null</c>, the method is fire-and-forget: it returns as soon as the
+    /// load request is accepted.</param>
     /// <param name="cancel">Cancellation token.</param>
-    /// <returns><c>true</c> if the server accepted the load request.</returns>
-    public async Task<bool> LoadModelAsync(IModel model, CancellationToken cancel = default)
+    /// <returns><c>false</c> only when the load definitely didn't happen — the
+    /// POST was rejected, or the server rolled the model back to <c>unloaded</c>
+    /// (a failed load). <c>true</c> means accepted; the <see cref="ModelsChanged"/>
+    /// poller confirms the final <c>loaded</c> transition.</returns>
+    public async Task<bool> LoadModelAsync(IModel model, IProgress<double>? progress = null, CancellationToken cancel = default)
     {
         if (ServerStatus != ServerState.Running)
             return false;
-        
+
+        var baseUrl = $"http://localhost:{ServerPort}";
+        var modelId = model.ServerModelId;
+
+        // Open the SSE stream before the POST when progress is wanted. If it
+        // can't be opened (older server without /models/sse), degrade to
+        // fire-and-forget — the /models poller still reconciles the state.
+        using var sseClient = progress is null ? null : new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        using var sseResponse = await TryOpenSseAsync(sseClient, baseUrl, cancel);
+        using var reader = sseResponse is null
+            ? null
+            : new StreamReader(await sseResponse.Content.ReadAsStreamAsync(cancel));
+
         try
         {
-            Log.Info($"loading model {model.ServerModelId}");
-        
-            var baseUrl = $"http://localhost:{ServerPort}";
-            var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
+            Log.Info($"loading model {modelId}");
+            var payload = $$"""{"model":"{{modelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await Client.PostAsync($"{baseUrl}/models/load", content, cancel);
             if (!resp.IsSuccessStatusCode)
             {
                 Log.Warn($"server rejected model load ({(int)resp.StatusCode})");
+                return false;
             }
-            return resp.IsSuccessStatusCode;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Error(ex, "model load request threw");
             return false;
+        }
+
+        if (reader is null || progress is null)
+            return true; // accepted; the poller takes it from here
+
+        // Watch status_change events until the model reaches a terminal state.
+        // The timeout only guards against a server that never sends one (a hung
+        // child process): the request WAS accepted, so a timeout still returns
+        // true and leaves the state to the poller.
+        using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        watchCts.CancelAfter(LoadWatchTimeout);
+        try
+        {
+            await foreach (var (evt, evtModel, data) in ParseSseStreamAsync(reader, watchCts.Token))
+            {
+                if (evt != "status_change" ||
+                    !string.Equals(evtModel, modelId, StringComparison.OrdinalIgnoreCase))
+                    continue; // another model's event
+
+                var (status, fraction) = ParseStatusChange(data);
+                switch (status)
+                {
+                    case "loading":
+                        progress.Report(fraction);
+                        break;
+                    case "loaded":
+                        progress.Report(1.0);
+                        return true;
+                    case "unloaded":
+                        // Rolled back — the load failed server-side (e.g. the
+                        // child process died while mmapping the weights).
+                        Log.Warn($"load of {modelId} rolled back to unloaded");
+                        return false;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+        {
+            Log.Warn($"timed out waiting for load events for {modelId}");
+        }
+
+        return true;
+    }
+
+    // How long the load-progress SSE watch waits for a terminal status_change
+    // before deferring to the /models poller. Generous because mmapping a very
+    // large model from a slow disk can take minutes.
+    private static readonly TimeSpan LoadWatchTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Opens the <c>/models/sse</c> event stream for load-progress watching.
+    /// Returns <c>null</c> (and logs) when the stream can't be opened — the
+    /// caller then degrades to poller-only state tracking.
+    /// </summary>
+    private static async Task<HttpResponseMessage?> TryOpenSseAsync(HttpClient? client, string baseUrl, CancellationToken cancel)
+    {
+        if (client is null) return null;
+        try
+        {
+            var resp = await client.GetAsync(
+                $"{baseUrl}/models/sse", HttpCompletionOption.ResponseHeadersRead, cancel);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Log.Warn($"SSE stream rejected ({(int)resp.StatusCode}); load progress falls back to the poller");
+                resp.Dispose();
+                return null;
+            }
+            return resp;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Warn(ex, "SSE stream unavailable; load progress falls back to the poller");
+            return null;
         }
     }
 
@@ -1202,6 +1292,64 @@ public sealed class LlamaManager
         }
 
         return (downloaded, total);
+    }
+
+    /// <summary>
+    /// Parses a <c>status_change</c> data payload into the model's new
+    /// <c>status</c> (<c>loading</c>/<c>loaded</c>/<c>unloaded</c>) and, for
+    /// <c>loading</c>, an overall 0..1 fraction. The server's progress object
+    /// carries the load <c>stages</c>, the <c>current</c> stage, and that
+    /// stage's 0..1 <c>value</c>; the overall fraction weights the value by
+    /// the current stage's position — <c>(stageIndex + value) / stageCount</c>,
+    /// which reduces to <c>value</c> for the common single-stage load.
+    /// </summary>
+    internal static (string status, double fraction) ParseStatusChange(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object ||
+            !data.TryGetProperty("status", out var s) ||
+            s.ValueKind != JsonValueKind.String)
+            return ("", 0);
+
+        var status = s.GetString() ?? "";
+        double fraction = 0;
+
+        // TryGetDouble throws InvalidOperationException on a non-Number element
+        // (same as TryGetInt64), so the ValueKind guard must come first.
+        if (data.TryGetProperty("progress", out var progress) &&
+            progress.ValueKind == JsonValueKind.Object &&
+            progress.TryGetProperty("value", out var v) &&
+            v.ValueKind == JsonValueKind.Number &&
+            v.TryGetDouble(out var value))
+        {
+            fraction = value;
+
+            // Multi-stage load (e.g. text_model + mmproj): weight the current
+            // stage's value by how many stages are already behind it.
+            if (progress.TryGetProperty("stages", out var stages) &&
+                stages.ValueKind == JsonValueKind.Array &&
+                stages.GetArrayLength() > 1 &&
+                progress.TryGetProperty("current", out var cur) &&
+                cur.ValueKind == JsonValueKind.String)
+            {
+                var current = cur.GetString();
+                var index = -1;
+                var i = 0;
+                foreach (var stage in stages.EnumerateArray())
+                {
+                    if (stage.ValueKind == JsonValueKind.String &&
+                        string.Equals(stage.GetString(), current, StringComparison.Ordinal))
+                    {
+                        index = i;
+                        break;
+                    }
+                    i++;
+                }
+                if (index >= 0)
+                    fraction = (index + value) / stages.GetArrayLength();
+            }
+        }
+
+        return (status, Math.Clamp(fraction, 0, 1));
     }
 
     /// <summary>

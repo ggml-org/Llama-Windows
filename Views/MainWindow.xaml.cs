@@ -519,8 +519,8 @@ namespace LlamaApp.Views
                     if (ok)
                     {
                         // Download done — load it. The row now shows the
-                        // indeterminate load ring until the poller reports the
-                        // model as loaded.
+                        // load ring until the poller reports the model as
+                        // loaded.
                         item.IsLoading = true;
                         _ = LoadAndWatchAsync(item);
                     }
@@ -811,22 +811,44 @@ namespace LlamaApp.Views
         /// <summary>
         /// Sends a <c>POST /models/load</c> for <paramref name="item"/> and, on
         /// rejection, clears the optimistic <see cref="ModelItem.IsLoading"/> so
-        /// the row falls back to the play glyph. On acceptance the load ring
-        /// stays up until the <see cref="LlamaManager.ModelsChanged"/> poller
-        /// reports the model as <c>loaded</c> (which sets <see cref="ModelItem.IsLoaded"/>
-        /// and clears <see cref="ModelItem.IsLoading"/> via <see cref="ReconcileAsync"/>).
+        /// the row falls back to the play glyph. While the load runs, the
+        /// server's <c>status_change</c> SSE events drive the row's load ring
+        /// via <see cref="ModelItem.LoadFraction"/>; the
+        /// <see cref="LlamaManager.ModelsChanged"/> poller owns the final
+        /// transition (setting <see cref="ModelItem.IsLoaded"/> and clearing
+        /// <see cref="ModelItem.IsLoading"/> via <see cref="ReconcileAsync"/>).
         /// </summary>
         private async Task LoadAndWatchAsync(ModelItem item)
         {
             var mgr = LlamaManager.Shared;
             var queue = DispatcherQueue;
-            var ok = await mgr.LoadModelAsync(item);
+
+            item.LoadFraction = 0;
+            // Progress<T> captures the UI thread's SynchronizationContext at
+            // construction, so reports land on the UI thread unaided. Throttle
+            // to ~10 updates/sec like the download ring (the server can stream
+            // a status_change per mmap chunk); the terminal 100% always lands.
+            long lastApplyMs = 0;
+            var progress = new Progress<double>(f =>
+            {
+                var now = Environment.TickCount64;
+                if (f < 1.0 && now - lastApplyMs < 100) return;
+                lastApplyMs = now;
+                item.LoadFraction = f;
+            });
+
+            var ok = await mgr.LoadModelAsync(item, progress);
             if (!ok)
             {
-                if (queue is null || queue.HasThreadAccess)
+                void Rejected()
+                {
                     item.IsLoading = false;
+                    item.LoadFraction = 0;
+                }
+                if (queue is null || queue.HasThreadAccess)
+                    Rejected();
                 else
-                    queue.TryEnqueue(() => item.IsLoading = false);
+                    queue.TryEnqueue(Rejected);
                 return;
             }
 

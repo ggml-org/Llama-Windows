@@ -18,6 +18,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private double _downloadFraction;
     private bool _downloadFailed;
     private bool _isLoading;
+    private double _loadFraction;
     private bool _isLoaded;
 
     /// <summary>Display label (e.g. "GPT-OSS 20B (mxfp4)").</summary>
@@ -128,10 +129,11 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     // to loading once the download finishes and the load request is sent.
 
     /// <summary>
-    /// True while a load request is in flight — the row shows an indeterminate
-    /// progress ring. Set optimistically by the play-click handler; cleared by
-    /// the model-state poller once the server reports the model as <c>loaded</c>
-    /// (or by the load caller on rejection).
+    /// True while a load request is in flight — the row shows a load ring
+    /// (indeterminate until the server's <c>status_change</c> events report a
+    /// fraction via <see cref="LoadFraction"/>). Set optimistically by the
+    /// play-click handler; cleared by the model-state poller once the server
+    /// reports the model as <c>loaded</c> (or by the load caller on rejection).
     /// </summary>
     public bool IsLoading
     {
@@ -145,6 +147,30 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(PlayGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
+            OnPropertyChanged(nameof(IsIndeterminateLoad));
+            OnPropertyChanged(nameof(LoadPercentTextVisible));
+        }
+    }
+
+    /// <summary>
+    /// Load completion fraction (0..1), fed by the server's <c>status_change</c>
+    /// SSE events while the model loads; 0 until the first event arrives (the
+    /// load ring spins indeterminately until then — also the steady state for
+    /// externally-triggered loads, which only the poller observes).
+    /// </summary>
+    public double LoadFraction
+    {
+        get => _loadFraction;
+        set
+        {
+            if (!(Math.Abs(_loadFraction - value) > 0.001)) return;
+            
+            _loadFraction = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(LoadProgressPercent));
+            OnPropertyChanged(nameof(LoadProgressText));
+            OnPropertyChanged(nameof(LoadPercentTextVisible));
+            OnPropertyChanged(nameof(IsIndeterminateLoad));
         }
     }
 
@@ -171,8 +197,8 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     // ---- Derived UI state (avoids needing XAML value converters) ----
 
     // The Available-row action cell shows exactly one of: play (unloaded),
-    // download ring (downloading from the Hub), indeterminate load ring
-    // (load request sent), or OpenInNewWindow (loaded). Download takes
+    // download ring (downloading from the Hub), load ring (load request
+    // sent), or OpenInNewWindow (loaded). Download takes
     // priority over a load (a row can't load until it's downloaded).
 
     /// <summary>
@@ -185,7 +211,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>True when the download progress ring should be visible.</summary>
     public bool ProgressRingVisible => IsDownloading;
 
-    /// <summary>True when the indeterminate load ring should be visible.</summary>
+    /// <summary>True when the load ring should be visible.</summary>
     public bool LoadingRingVisible => IsLoading && !IsDownloading;
 
     /// <summary>True when the OpenInNewWindow glyph should be visible (loaded).</summary>
@@ -205,6 +231,21 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// a known byte count (an indeterminate ring shows no caption).
     /// </summary>
     public bool DownloadPercentTextVisible => IsDownloading && DownloadFraction > 0;
+
+    /// <summary>True when the load ring should spin indeterminately (no progress reported yet).</summary>
+    public bool IsIndeterminateLoad => IsLoading && LoadFraction <= 0;
+
+    /// <summary>Load completion as a percentage (0..100) for ProgressRing.Value.</summary>
+    public double LoadProgressPercent => LoadFraction * 100;
+
+    /// <summary>Load completion as a short label (e.g. "42%") shown under the load ring.</summary>
+    public string LoadProgressText => $"{LoadProgressPercent:0}%";
+
+    /// <summary>
+    /// True when the load percent caption should be visible — while the load
+    /// ring is up and a progress fraction has been reported.
+    /// </summary>
+    public bool LoadPercentTextVisible => LoadingRingVisible && LoadFraction > 0;
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? prop = null)

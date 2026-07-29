@@ -221,12 +221,26 @@
                                        HorizontalAlignment="Center" />
                         </StackPanel>
 
-                        <!-- Indeterminate load ring: load request sent, waiting
-                             for the poller to report the model as loaded. -->
-                        <ProgressRing Visibility="{x:Bind LoadingRingVisible, Mode=OneWay}"
-                                      Width="20" Height="20"
-                                      IsIndeterminate="True"
-                                      VerticalAlignment="Center" />
+                        <!-- Load ring: load request sent. Determinate once the
+                             server's status_change SSE events report a progress
+                             fraction (with a percent caption, like the download
+                             ring); spins indeterminately until the first event
+                             — and for externally-triggered loads, which only
+                             the poller observes. -->
+                        <StackPanel Visibility="{x:Bind LoadingRingVisible, Mode=OneWay}"
+                                    VerticalAlignment="Center"
+                                    Spacing="2">
+                            <ProgressRing Width="20" Height="20"
+                                          Value="{x:Bind LoadProgressPercent, Mode=OneWay}"
+                                          Maximum="100"
+                                          IsIndeterminate="{x:Bind IsIndeterminateLoad, Mode=OneWay}"
+                                          HorizontalAlignment="Center" />
+                            <TextBlock Text="{x:Bind LoadProgressText, Mode=OneWay}"
+                                       Visibility="{x:Bind LoadPercentTextVisible, Mode=OneWay}"
+                                       FontSize="10"
+                                       Opacity="0.6"
+                                       HorizontalAlignment="Center" />
+                        </StackPanel>
 
                         <!-- Open in new window: model is loaded, click to open
                              the running server's WebUI in the browser. -->
