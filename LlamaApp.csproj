@@ -33,6 +33,13 @@
              Package.appxmanifest — single-project MSIX takes the package
              version from the manifest, not from here. -->
         <Version>0.6.0.0</Version>
+        <!-- Never emit a .msixbundle from the per-arch build. Shipping assets
+             at several scales (Square44x44Logo.scale-*.png etc.) makes MakePri
+             split resources into scale-* resource packages, and the default
+             AppxBundle=Auto then packs main+resources as a .msixbundle in
+             AppxPackageDir — the release workflow stages per-arch *.msix and
+             would find nothing. A flat .msix carries all scales inline. -->
+        <AppxBundle>Never</AppxBundle>
         <PublishProfile>win-$(Platform).pubxml</PublishProfile>
         <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)')) >= 8">win-x86;win-x64;win-arm64</RuntimeIdentifiers>
         <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)')) &lt; 8">win10-x86;win10-x64;win10-arm64</RuntimeIdentifiers>

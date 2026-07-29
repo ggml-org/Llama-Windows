@@ -103,16 +103,30 @@ jobs:
 
       # Derive a 4-part package version from the git tag (v1.2.3 -> 1.2.3.0) and
       # patch Package.appxmanifest so all architectures share one identity.
+      # MSIX versions are numeric-only: any SemVer prerelease suffix
+      # (v0.0.6-alpha) must be dropped or MakeAppx schema validation fails.
       - name: Set package version from tag
         shell: pwsh
         run: |
-          $tag = '${{ github.ref_name }}' -replace '^v',''
+          $tag = '${{ github.ref_name }}' -replace '^v','' -replace '-.*$',''
           $parts = $tag.Split('.')
           while ($parts.Count -lt 4) { $parts += '0' }
           $v4 = ($parts[0..3] -join '.')
-          (Get-Content Package.appxmanifest) `
-            -replace '<Version>[^<]*</Version>', "<Version>$v4</Version>" |
-            Set-Content Package.appxmanifest
+          # The package version is the Identity *attribute* (Version="..."),
+          # not a <Version> element. Scope the replace to the Identity tag so
+          # the TargetDeviceFamily Min/MaxVersionTested attributes (which also
+          # contain the substring 'Version="') are left untouched, and fail
+          # loudly if the attribute isn't found instead of shipping the
+          # committed version by mistake.
+          $manifest = Get-Content Package.appxmanifest -Raw
+          if ($manifest -notmatch '<Identity[^>]*Version="[0-9.]+"') {
+            throw 'Identity Version attribute not found in Package.appxmanifest'
+          }
+          # ${1} brace syntax is mandatory: '$1' + a digit-leading version
+          # would parse as capture group $10 (undefined -> empty) and delete
+          # the Identity tag opening, corrupting the manifest.
+          $manifest = [regex]::Replace($manifest, '(<Identity[^>]*Version=")[0-9.]+(")', "`${1}$v4`${2}")
+          Set-Content Package.appxmanifest $manifest
           Write-Host "Package version set to $v4"
 
       # Restore + build + package in one msbuild invocation.
