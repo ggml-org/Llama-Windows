@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Runtime.InteropServices;
 using H.NotifyIcon.Core;
 using LlamaApp.Common;
 using Microsoft.UI.Dispatching;
@@ -101,12 +102,38 @@ internal sealed class TrayIconManager : IDisposable
     }
 
     /// <summary>
+    /// Shows the flyout pinned to the monitor the cursor is currently on — for
+    /// activations that carry no position of their own (toast-notification
+    /// clicks, single-instance redirects).
+    /// </summary>
+    public void ShowFlyout()
+    {
+        Enqueue(() => _window.ShowAsFlyout(CurrentCursorPoint()));
+    }
+
+    private static Point CurrentCursorPoint()
+    {
+        GetCursorPos(out var p);
+        return new Point(p.X, p.Y);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X, Y; }
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
+    /// <summary>
     /// Shuts the app down: removes the tray icon (so it doesn't linger in the
     /// notification area), then closes the window, and exits.
     /// </summary>
     public void RequestExit()
     {
         Log.Info("app exit requested");
+
+        // Unregister the toast-notification activator before going down.
+        Notifications.Unregister();
         // Stop the llama server first so it doesn't outlive the app (and leave
         // the port-bound). Best-effort — if it hangs, Environment.Exit reaps it.
         try { Llama.LlamaManager.Shared.StopServer(); }

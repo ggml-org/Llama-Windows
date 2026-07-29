@@ -42,8 +42,31 @@ namespace LlamaApp
         /// will be used, such as when the application is launched to open a specific file.
         /// </summary>
         /// <param name="e">Details about the launch request and process.</param>
-        protected override void OnLaunched(LaunchActivatedEventArgs e)
+        protected override async void OnLaunched(LaunchActivatedEventArgs e)
         {
+            // Single-instance: a second launch redirects its activation to the
+            // already-running instance (which re-opens the flyout — see the
+            // Activated handler below) and exits, instead of creating a
+            // duplicate tray icon and a second /models poller fighting over
+            // the same server port.
+            var instance = Microsoft.Windows.AppLifecycle.AppInstance
+                .FindOrRegisterForKey("LlamaApp");
+            if (!instance.IsCurrent)
+            {
+                Common.Log.Info("another instance is already running; redirecting activation and exiting");
+                try
+                {
+                    await instance.RedirectActivationToAsync(
+                        instance.GetActivatedEventArgs());
+                }
+                catch (Exception ex)
+                {
+                    Common.Log.Warn(ex, "activation redirect failed");
+                }
+                Environment.Exit(0);
+                return;
+            }
+
             // The app is tray-only: the main window is created but never shown
             // on launch. It is revealed on demand as a flyout anchored to the
             // system-tray icon (see TrayIconManager / MainWindow.ShowAsFlyout),
@@ -56,6 +79,13 @@ namespace LlamaApp
 
             // Add the system-tray icon with its right-click context menu.
             _trayIcon = new TrayIconManager(_window);
+
+            // Toast notifications for background events (model loaded, download
+            // failed) while the flyout is hidden. Clicking a toast re-opens the
+            // flyout; so does a redirected second-launch activation.
+            Notifications.Initialize();
+            Notifications.Invoked += () => _dispatcher.TryEnqueue(() => _trayIcon?.ShowFlyout());
+            instance.Activated += (_, _) => _dispatcher.TryEnqueue(() => _trayIcon?.ShowFlyout());
 
             // Ensure a llama.cpp server is reachable at localhost:2276: adopt an
             // already-running one, launch one from a found binary, or download the

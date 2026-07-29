@@ -31,13 +31,18 @@
 
     <Grid>
         <Grid.Resources>
-            <!-- Local model row: icon + name/params·size + play glyph or progress ring. -->
+            <!-- Local model row: icon + name/params·size + play glyph or progress ring.
+                 The row lights up on hover and shows the full (possibly ellipsized)
+                 model name as a tooltip. -->
             <DataTemplate x:Key="LocalModelRowTemplate"
                           x:DataType="local:ModelItem">
                 <Grid Padding="8,6"
                       ColumnSpacing="10"
                       CornerRadius="6"
-                      Background="Transparent">
+                      Background="Transparent"
+                      PointerEntered="Row_PointerEntered"
+                      PointerExited="Row_PointerExited"
+                      ToolTipService.ToolTip="{x:Bind Name}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -79,12 +84,15 @@
                                 VerticalAlignment="Center"
                                 Spacing="1">
                         <TextBlock Text="{x:Bind DisplayName}"
-                                   FontSize="13"
+                                   FontSize="14"
                                    FontWeight="SemiBold"
                                    TextTrimming="CharacterEllipsis" />
-                        <StackPanel Orientation="Horizontal" Spacing="4">
-                            <TextBlock FontSize="11"
+                        <StackPanel Orientation="Horizontal"
+                                    Spacing="6"
+                                    VerticalAlignment="Center">
+                            <TextBlock FontSize="12"
                                        Opacity="0.6"
+                                       VerticalAlignment="Center"
                                        TextTrimming="CharacterEllipsis">
                                 <Run Text="{x:Bind Parameters}" />
                                 <Run Text=" · " />
@@ -96,32 +104,59 @@
                                  capability hint rather than part of the name.
                                  Tiled in the same gray rounded background as
                                  the logo so it reads as a small chip. -->
-                            <Border CornerRadius="3"
+                            <Border CornerRadius="4"
                                     Background="{ThemeResource ControlFillColorSecondaryBrush}"
-                                    Padding="2"
+                                    Padding="4,1"
+                                    VerticalAlignment="Center"
                                     Visibility="{x:Bind Vision, Mode=OneWay}">
                                 <FontIcon Glyph="&#xEB25;"
                                           FontSize="10"
                                           Opacity="0.55"
+                                          HorizontalAlignment="Center"
                                           VerticalAlignment="Center" />
                             </Border>
                         </StackPanel>
                     </StackPanel>
 
                     <!-- Action cell: exactly one of play / download ring /
-                         load ring / open glyph, driven by the ModelItem
-                         load/download state. Mutually exclusive via Visibility.
-                         When loaded, the Open and Power/unload glyphs appear
-                         side by side. -->
+                         load ring / open glyph / failure affordance, driven by
+                         the ModelItem load/download state. Mutually exclusive
+                         via Visibility. When loaded, the Open and Power/unload
+                         glyphs appear side by side. -->
                     <StackPanel Grid.Column="2"
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center">
+                        <!-- Download failed: warning dot + retry button. Shown
+                             instead of the play glyph (PlayGlyphVisible excludes
+                             failed rows) so a broken download can't be "loaded". -->
+                        <FontIcon Visibility="{x:Bind DownloadFailed, Mode=OneWay}"
+                                  Glyph="&#xE7BA;"
+                                  FontSize="13"
+                                  Foreground="#F85149"
+                                  VerticalAlignment="Center"
+                                  Margin="0,0,2,0"
+                                  ToolTipService.ToolTip="Download failed" />
+                        <Button Visibility="{x:Bind DownloadFailed, Mode=OneWay}"
+                                Click="LocalModelRetryDownload_Click"
+                                Tag="{x:Bind}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                AutomationProperties.Name="Retry download"
+                                ToolTipService.ToolTip="Retry download">
+                            <FontIcon Glyph="&#xE72C;"
+                                      FontSize="13"
+                                      Opacity="0.6" />
+                        </Button>
+
                         <!-- Delete button: remove the model from the server's
                              cache (DELETE /models/{name}). Sits to the left of
                              the play glyph; shown only while the model is
                              unloaded (PlayGlyphVisible) so a loaded/loading
-                             row isn't accidentally deleted mid-use. -->
+                             row isn't accidentally deleted mid-use. Opens a
+                             confirmation flyout — deleting re-downloads GBs. -->
                         <Button Visibility="{x:Bind PlayGlyphVisible, Mode=OneWay}"
                                 Click="LocalModelDelete_Click"
                                 Tag="{x:Bind}"
@@ -129,7 +164,25 @@
                                 MinWidth="0" MinHeight="0"
                                 Background="Transparent"
                                 BorderThickness="0"
+                                AutomationProperties.Name="Delete model"
                                 ToolTipService.ToolTip="Delete model">
+                            <Button.Flyout>
+                                <Flyout Placement="Bottom">
+                                    <StackPanel Spacing="10" MaxWidth="240">
+                                        <TextBlock Text="Delete this model?"
+                                                   FontSize="13"
+                                                   FontWeight="SemiBold" />
+                                        <TextBlock Text="The downloaded files are removed from disk. You can download the model again at any time."
+                                                   FontSize="12"
+                                                   Opacity="0.7"
+                                                   TextWrapping="Wrap" />
+                                        <Button Content="Delete"
+                                                Click="LocalModelDeleteConfirm_Click"
+                                                Foreground="#F85149"
+                                                HorizontalAlignment="Right" />
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
                             <FontIcon Glyph="&#xE74D;"
                                       FontSize="16"
                                       Opacity="0.5" />
@@ -143,19 +196,30 @@
                                 MinWidth="0" MinHeight="0"
                                 Background="Transparent"
                                 BorderThickness="0"
+                                AutomationProperties.Name="Load model"
                                 ToolTipService.ToolTip="Load model">
                             <FontIcon Glyph="&#xE768;"
                                       FontSize="16"
                                       Opacity="0.5" />
                         </Button>
 
-                        <!-- Download progress ring (downloading from the Hub). -->
-                        <ProgressRing Visibility="{x:Bind ProgressRingVisible, Mode=OneWay}"
-                                      Width="20" Height="20"
-                                      Value="{x:Bind DownloadProgressPercent, Mode=OneWay}"
-                                      Maximum="100"
-                                      IsIndeterminate="{x:Bind IsIndeterminateDownload, Mode=OneWay}"
-                                      VerticalAlignment="Center" />
+                        <!-- Download progress ring (downloading from the Hub)
+                             with a percent caption once the byte count is known
+                             — multi-GB downloads need real progress feedback. -->
+                        <StackPanel Visibility="{x:Bind ProgressRingVisible, Mode=OneWay}"
+                                    VerticalAlignment="Center"
+                                    Spacing="2">
+                            <ProgressRing Width="20" Height="20"
+                                          Value="{x:Bind DownloadProgressPercent, Mode=OneWay}"
+                                          Maximum="100"
+                                          IsIndeterminate="{x:Bind IsIndeterminateDownload, Mode=OneWay}"
+                                          HorizontalAlignment="Center" />
+                            <TextBlock Text="{x:Bind DownloadProgressText, Mode=OneWay}"
+                                       Visibility="{x:Bind DownloadPercentTextVisible, Mode=OneWay}"
+                                       FontSize="10"
+                                       Opacity="0.6"
+                                       HorizontalAlignment="Center" />
+                        </StackPanel>
 
                         <!-- Indeterminate load ring: load request sent, waiting
                              for the poller to report the model as loaded. -->
@@ -173,6 +237,7 @@
                                 MinWidth="0" MinHeight="0"
                                 Background="Transparent"
                                 BorderThickness="0"
+                                AutomationProperties.Name="Open WebUI"
                                 ToolTipService.ToolTip="Open WebUI">
                             <FontIcon Glyph="&#xE8A7;"
                                       FontSize="16"
@@ -188,6 +253,7 @@
                                 MinWidth="0" MinHeight="0"
                                 Background="Transparent"
                                 BorderThickness="0"
+                                AutomationProperties.Name="Unload model"
                                 ToolTipService.ToolTip="Unload model">
                             <FontIcon Glyph="&#xE7E8;"
                                       FontSize="16"
@@ -198,7 +264,9 @@
             </DataTemplate>
 
             <!-- Recommended model row: icon + name/params·license + download glyph.
-                 The whole row is tappable — clicking starts a download. -->
+                 The whole row is tappable — clicking starts a download. The row
+                 lights up on hover to communicate that it's clickable, and shows
+                 the full (possibly ellipsis) model name as a tooltip. -->
             <DataTemplate x:Key="RecommendedModelRowTemplate"
                           x:DataType="local:ModelItem">
                 <Grid Padding="8,6"
@@ -206,7 +274,10 @@
                       CornerRadius="6"
                       Background="Transparent"
                       Tag="{x:Bind}"
-                      Tapped="RecommendedModel_Tapped">
+                      Tapped="RecommendedModel_Tapped"
+                      PointerEntered="Row_PointerEntered"
+                      PointerExited="Row_PointerExited"
+                      ToolTipService.ToolTip="{x:Bind Name}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -306,7 +377,9 @@
                 </StackPanel>
             </StackPanel>
 
-            <!-- Right: action icons (replace the old footer buttons) -->
+            <!-- Right: action icons (replace the old footer buttons). Transparent
+                 chrome to match the row icon buttons; the default button visual
+                 states still paint a hover/pressed fill. -->
             <StackPanel Grid.Column="1"
                         Orientation="Horizontal"
                         Spacing="2"
@@ -316,6 +389,9 @@
                         Padding="6"
                         MinWidth="0" MinHeight="0"
                         VerticalAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        AutomationProperties.Name="Settings"
                         ToolTipService.ToolTip="Settings">
                     <FontIcon Glyph="&#xE713;"
                               FontSize="14" />
@@ -324,6 +400,9 @@
                         Padding="6"
                         MinWidth="0" MinHeight="0"
                         VerticalAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        AutomationProperties.Name="Quit"
                         ToolTipService.ToolTip="Quit">
                     <FontIcon Glyph="&#xE7E8;"
                               FontSize="14" />
@@ -360,12 +439,16 @@
                 </Button>
             </StackPanel>
 
-            <!-- Empty state — shown when there are no local models. -->
+            <!-- Empty state — shown when there are no local models. The text
+                 is set from code: "Starting the llama server…" while the server
+                 comes up, then an actionable hint once it's running. -->
             <TextBlock x:Name="NoLocalModelsText"
-                       Text="No model yet"
+                       Text="Starting the llama server…"
                        FontSize="13"
                        Opacity="0.45"
                        HorizontalAlignment="Center"
+                       TextAlignment="Center"
+                       TextWrapping="Wrap"
                        Margin="0,8,0,8" />
 
             <!-- Local model rows (run on click). Capped at ~4 rows so the
@@ -405,7 +488,9 @@
                        Opacity="0.7" />
 
             <!-- Scrolls internally when the list outgrows the stretched row. -->
-            <ScrollViewer Grid.Row="1"
+            <ScrollViewer x:Name="RecommendedScroll"
+                          Grid.Row="1"
+                          Visibility="Collapsed"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Hidden"
                           HorizontalScrollMode="Disabled">
@@ -417,6 +502,30 @@
                     </ItemsRepeater.Layout>
                 </ItemsRepeater>
             </ScrollViewer>
+
+            <!-- Catalog status: "Loading…" while the remote catalog is being
+                 fetched; an error + Retry button if the fetch fails (previously
+                 the section just stayed silently blank). -->
+            <StackPanel x:Name="RecommendedStatusPanel"
+                        Grid.Row="1"
+                        VerticalAlignment="Center"
+                        Spacing="10">
+                <TextBlock x:Name="RecommendedStatusText"
+                           Text="Loading models…"
+                           FontSize="12"
+                           Opacity="0.5"
+                           HorizontalAlignment="Center"
+                           TextAlignment="Center"
+                           TextWrapping="Wrap" />
+                <Button x:Name="RetryCatalogButton"
+                        Content="Retry"
+                        Click="RetryCatalog_Click"
+                        HorizontalAlignment="Center"
+                        Visibility="Collapsed"
+                        FontSize="12"
+                        Padding="12,4"
+                        MinHeight="0" />
+            </StackPanel>
         </Grid>
 
         <Rectangle Grid.Row="5"

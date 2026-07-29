@@ -104,6 +104,21 @@ namespace LlamaApp.Views
         private readonly Dictionary<string, ModelItem> _localByServerId =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // Delete-confirmation context: the trash button's attached Flyout opens
+        // automatically on click; LocalModelDelete_Click captures the row's model
+        // and the flyout here so the flyout's Delete button (which carries no
+        // Tag of its own) can act on them and dismiss itself.
+        private ModelItem? _pendingDelete;
+        private Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase? _deleteConfirmFlyout;
+
+        // Hover fill for the model rows, resolved lazily from the theme resources.
+        // Rows must keep a non-null Background at all times — a null Background
+        // makes the Grid transparent to hit-testing, so PointerEntered would
+        // never fire again after the first exit.
+        private static Microsoft.UI.Xaml.Media.Brush? _rowHoverBrush;
+        private static readonly Microsoft.UI.Xaml.Media.Brush RowRestBrush =
+            new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
+
         public MainWindow()
         {
             InitializeComponent();
@@ -139,6 +154,18 @@ namespace LlamaApp.Views
         /// </summary>
         private void LoadModels()
         {
+            StartCatalogFetch();
+            _ = LoadRecommendedModelsAsync();
+            _ = LoadLocalModelsAsync();
+        }
+
+        /// <summary>
+        /// (Re)fetches the remote catalog and re-projects the repo-id lookup.
+        /// Split out of <see cref="LoadModels"/> so the Recommended section's
+        /// Retry button can refetch without touching the Available list.
+        /// </summary>
+        private void StartCatalogFetch()
+        {
             _catalogTask = FetchCatalogAsync();
             // Project the fetched catalog into a repo-id lookup exactly once — a
             // continuation that runs when the fetch completes, shared by every
@@ -151,8 +178,6 @@ namespace LlamaApp.Views
                     .GroupBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase),
                 TaskContinuationOptions.NotOnFaulted | TaskContinuationOptions.RunContinuationsAsynchronously);
-            _ = LoadRecommendedModelsAsync();
-            _ = LoadLocalModelsAsync();
         }
 
         /// <summary>
@@ -330,7 +355,21 @@ namespace LlamaApp.Views
         {
             List<Repository> repos;
             try { repos = await _catalogTask; }
-            catch (Exception ex) { Log.Warn(ex, "recommended models load failed"); return; } // network/parse failure — Recommended stays empty
+            catch (Exception ex) { Log.Warn(ex, "recommended models load failed"); repos = []; }
+
+            // An empty catalog after the fetch means it couldn't be loaded
+            // (network/parse failure) — say so and offer a retry instead of
+            // leaving the section silently blank.
+            if (repos.Count == 0)
+            {
+                RecommendedScroll.Visibility = Visibility.Collapsed;
+                RecommendedStatusPanel.Visibility = Visibility.Visible;
+                RecommendedStatusText.Text = "Couldn't load the model catalog. Check your connection and try again.";
+                RetryCatalogButton.Visibility = Visibility.Visible;
+                return;
+            }
+
+            RecommendedModels.Clear(); // idempotent — safe on catalog retry
 
             // Build a display name that disambiguate quants: "GPT-OSS 20B (mxfp4)".
             foreach (var repo in repos)
@@ -355,6 +394,23 @@ namespace LlamaApp.Views
                     Logo = ModelItem.ResolveLogo(repo.Brand),
                 });
             }
+
+            RecommendedStatusPanel.Visibility = Visibility.Collapsed;
+            RetryCatalogButton.Visibility = Visibility.Collapsed;
+            RecommendedScroll.Visibility = Visibility.Visible;
+        }
+
+        /// <summary>
+        /// Retry button shown when the catalog fetch fails: refetches the catalog
+        /// and repopulates the Recommended section. The Available list is left
+        /// alone — it comes from the running server, not the catalog.
+        /// </summary>
+        private void RetryCatalog_Click(object sender, RoutedEventArgs e)
+        {
+            RecommendedStatusText.Text = "Loading models…";
+            RetryCatalogButton.Visibility = Visibility.Collapsed;
+            StartCatalogFetch();
+            _ = LoadRecommendedModelsAsync();
         }
 
         /// <summary>
@@ -366,6 +422,15 @@ namespace LlamaApp.Views
             var empty = LocalModels.Count == 0;
             NoLocalModelsText.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
             LocalModelsList.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
+            if (empty)
+            {
+                // While the server is still coming up the list may fill shortly —
+                // say so; once it's running, point the user at the Recommended
+                // section instead of a dead-end "No model yet".
+                NoLocalModelsText.Text = LlamaManager.Shared.ServerStatus == LlamaManager.ServerState.Running
+                    ? "No models yet — pick one below to get started"
+                    : "Starting the llama server…";
+            }
         }
 
         // ---- Model download + launch ----
@@ -415,8 +480,25 @@ namespace LlamaApp.Views
         {
             var mgr = LlamaManager.Shared;
             var queue = DispatcherQueue; // marshal progress back to the UI thread
+
+            // Per-download cancellation: the row's cancel button cancels this
+            // source. DownloadModelAsync closes the SSE stream and asks the
+            // server to abort the download when the token fires.
+            using var cts = new CancellationTokenSource();
+            item.DownloadCancellation = cts;
+
+            // Throttle UI updates: the server streams an SSE progress event per
+            // chunk (potentially hundreds/sec), and each one would otherwise
+            // enqueue a UI-thread callback. The ring + percent caption only need
+            // ~10 updates/sec. Terminal events (Done/Failed) always pass through
+            // so the final state lands immediately.
+            long lastProgressApplyMs = 0;
             var progress = new Progress<ModelDownloadProgress>(p =>
             {
+                var now = Environment.TickCount64;
+                if (!p.Done && !p.Failed && now - lastProgressApplyMs < 100) return;
+                lastProgressApplyMs = now;
+
                 void Apply()
                 {
                     if (p.TotalBytes > 0)
@@ -430,7 +512,7 @@ namespace LlamaApp.Views
 
             try
             {
-                var ok = await mgr.DownloadModelAsync(item, progress);
+                var ok = await mgr.DownloadModelAsync(item, progress, cts.Token);
                 void Complete()
                 {
                     item.IsDownloading = false;
@@ -443,7 +525,11 @@ namespace LlamaApp.Views
                         _ = LoadAndWatchAsync(item);
                     }
                     else
+                    {
                         item.DownloadFailed = true;
+                        NotifyWhenHidden("Download failed",
+                            $"{item.DisplayName} couldn't be downloaded. Tap retry to try again.");
+                    }
                 }
                 if (queue is null || queue.HasThreadAccess)
                     Complete();
@@ -452,6 +538,10 @@ namespace LlamaApp.Views
             }
             catch (OperationCanceledException)
             {
+                // User canceled from the row's cancel button — the server has
+                // already been asked to abort (see DownloadModelAsync). Return
+                // the row to the play glyph; a partial download resumes on the
+                // next attempt.
                 if (queue is null || queue.HasThreadAccess)
                     item.IsDownloading = false;
                 else
@@ -463,11 +553,19 @@ namespace LlamaApp.Views
                 {
                     item.IsDownloading = false;
                     item.DownloadFailed = true;
+                    NotifyWhenHidden("Download failed",
+                        $"{item.DisplayName} couldn't be downloaded. Tap retry to try again.");
                 }
                 if (queue is null || queue.HasThreadAccess)
                     Fail();
                 else
                     queue.TryEnqueue(Fail);
+            }
+            finally
+            {
+                // Clear before the `using` disposes so a late cancel click can
+                // never touch a disposed source.
+                item.DownloadCancellation = null;
             }
         }
 
@@ -509,21 +607,75 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Deletes a model from the running llama server's cache — the action
-        /// behind the trash glyph to the left of the play button on an unloaded
-        /// Available row. Sends <c>DELETE /models/{name}</c>; on success the row
-        /// is removed from <see cref="LocalModels"/> immediately (the poller's
-        /// next tick would drop it too, but removing now avoids a stale row
-        /// lingering for up to one poll interval). No-op if the row is loaded or
-        /// loading — a resident model must be unloaded first.
+        /// Fired when the cancel glyph next to the download ring is tapped:
+        /// cancels the in-flight download. The server is asked to abort too
+        /// (see <see cref="LlamaManager.DownloadModelAsync"/>); the row returns
+        /// to the play glyph and a partial download resumes on the next attempt.
         /// </summary>
-        private async void LocalModelDelete_Click(object sender, RoutedEventArgs e)
+        private void LocalModelCancelDownload_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
             {
                 Log.Warn("could not resolve a ModelItem");
                 return;
             }
+
+            Log.Info("cancel clicked: cancelling download of " + ((IModel)item).ServerModelId);
+            try { item.DownloadCancellation?.Cancel(); }
+            catch (ObjectDisposedException) { /* download finished between check and click */ }
+        }
+
+        /// <summary>
+        /// Fired when the retry glyph on a failed-download row is tapped: clears
+        /// the failure state and restarts the download → load lifecycle. (A
+        /// failed row shows warning + retry instead of the play glyph — the
+        /// model isn't fully cached, so loading it would just be rejected.)
+        /// </summary>
+        private void LocalModelRetryDownload_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
+            {
+                Log.Warn("could not resolve a ModelItem");
+                return;
+            }
+            if (item.IsDownloading || !item.DownloadFailed) return;
+
+            Log.Info("retry clicked: re-downloading " + ((IModel)item).ServerModelId);
+            item.DownloadFailed = false;
+            item.IsDownloading = true;
+            _ = DownloadAndLaunchAsync(item);
+        }
+
+        /// <summary>
+        /// Fired when the trash glyph on an Available row is tapped. The button's
+        /// attached confirmation Flyout opens automatically on the click; this
+        /// just captures the row's model and the flyout so
+        /// <see cref="LocalModelDeleteConfirm_Click"/> can act on them. Deleting
+        /// means re-downloading GBs, so it never happens on a single misclick.
+        /// </summary>
+        private void LocalModelDelete_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement fe) return;
+            _pendingDelete = ResolveRowItem(fe);
+            _deleteConfirmFlyout =
+                Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase.GetAttachedFlyout(fe);
+        }
+
+        /// <summary>
+        /// The Delete button inside the trash glyph's confirmation flyout:
+        /// deletes the model from the running llama server's cache — sends
+        /// <c>DELETE /models/{name}</c>; on success the row is removed from
+        /// <see cref="LocalModels"/> immediately (the poller's next tick would
+        /// drop it too, but removing now avoids a stale row lingering for up to
+        /// one poll interval). No-op if the row is loaded or loading — a
+        /// resident model must be unloaded first.
+        /// </summary>
+        private async void LocalModelDeleteConfirm_Click(object sender, RoutedEventArgs e)
+        {
+            _deleteConfirmFlyout?.Hide();
+            if (_pendingDelete is not { } item) return;
+            _pendingDelete = null;
+
             if (item.IsLoaded || item.IsLoading || item.IsDownloading)
             {
                 Log.Debug("ignored delete (isLoading=" + item.IsLoading +
@@ -531,7 +683,7 @@ namespace LlamaApp.Views
                 return;
             }
 
-            Log.Info("delete clicked: removing " + ((IModel)item).ServerModelId);
+            Log.Info("delete confirmed: removing " + ((IModel)item).ServerModelId);
             if (await LlamaManager.Shared.DeleteModelAsync(item))
             {
                 _localByServerId.Remove(((IModel)item).ServerModelId);
@@ -595,6 +747,45 @@ namespace LlamaApp.Views
             {
                 Log.Warn("server rejected unload for " + ((IModel)item).ServerModelId);
             }
+        }
+
+        // ---- Toast notifications ----
+
+        /// <summary>
+        /// Shows a toast for a background event the user is likely waiting on,
+        /// but only when the flyout is hidden — when they're watching the panel,
+        /// the row state already tells the story and a toast would be noise.
+        /// </summary>
+        private void NotifyWhenHidden(string title, string body)
+        {
+            if (!IsFlyoutVisible)
+                Notifications.Show(title, body);
+        }
+
+        // ---- Row hover feedback ----
+
+        /// <summary>
+        /// Paints the hovered model row with the theme's subtle fill so rows read
+        /// as interactive (the Recommended rows are fully tappable; the Available
+        /// rows host small icon buttons). The brush is resolved once from the app
+        /// resources, which consult the active theme dictionary.
+        /// </summary>
+        private void Row_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (sender is not Grid row) return;
+            _rowHoverBrush ??= (Microsoft.UI.Xaml.Media.Brush)Application.Current
+                .Resources["SubtleFillColorSecondaryBrush"];
+            row.Background = _rowHoverBrush;
+        }
+
+        /// <summary>
+        /// Restores the row's resting background. Transparent, not null — a null
+        /// Background makes the Grid invisible to hit-testing, so the next
+        /// PointerEntered would never fire.
+        /// </summary>
+        private void Row_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (sender is Grid row) row.Background = RowRestBrush;
         }
 
         /// <summary>
@@ -692,6 +883,10 @@ namespace LlamaApp.Views
             {
                 LoadVersionInfo();
 
+                // Keep the empty-state text in step with the server state
+                // ("Starting the llama server…" → "No models yet — …").
+                UpdateEmptyState();
+
                 // (Re)populate the Available list once the server is actually
                 // running — covers the startup race where the initial fetch ran
                 // before the server was ready (or /models was momentarily empty).
@@ -756,7 +951,12 @@ namespace LlamaApp.Views
                     //              the server hasn't acknowledged yet)
                     if (sm.IsLoaded)
                     {
-                        if (!item.IsLoaded) Log.Info("model loaded: " + sm.Id);
+                        if (!item.IsLoaded)
+                        {
+                            Log.Info("model loaded: " + sm.Id);
+                            NotifyWhenHidden("Model ready",
+                                $"{item.DisplayName} is loaded and ready to chat.");
+                        }
                         item.IsLoaded = true;
                         item.IsLoading = false;
                     }

@@ -63,6 +63,19 @@ public class LlamaManagerSchemaTests
     }
 
     [Fact]
+    public void Map_Null_Status_And_Architecture_Default_To_Unloaded()
+    {
+        var model = LlamaManager.Map(new LlamaManager.ServerModelDto());
+
+        Assert.Equal("", model.Id);
+        Assert.Equal("", model.Status);
+        Assert.False(model.IsLoaded);
+        Assert.False(model.IsLoading);
+        Assert.False(model.SupportsImage);
+        Assert.Empty(model.InputModalities);
+    }
+
+    [Fact]
     public void Deserialize_ModelsResponse_And_Map_All_Entries()
     {
         const string json = """
@@ -126,6 +139,93 @@ public class LlamaManagerSchemaTests
     }
 
     [Fact]
+    public async Task ParseSseStream_Dispatches_Multiple_Events_On_Blank_Lines()
+    {
+        const string payload = """
+            data: {"model":"a/b","event":"download_started","data":{}}
+
+            data: {"model":"a/b","event":"download_finished","data":{}}
+
+            """;
+
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        using var reader = new StreamReader(stream);
+
+        var events = await CollectAsync(reader);
+
+        Assert.Equal(2, events.Count);
+        Assert.Equal("download_started", events[0].Event);
+        Assert.Equal("download_finished", events[1].Event);
+    }
+
+    [Fact]
+    public async Task ParseSseStream_Flushes_Trailing_Event_At_Eof()
+    {
+        // No trailing blank line — a server that drops the connection
+        // mid-stream must not silently lose the last event.
+        const string payload = "data: {\"model\":\"a/b\",\"event\":\"download_finished\",\"data\":{}}";
+
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        using var reader = new StreamReader(stream);
+
+        var events = await CollectAsync(reader);
+
+        Assert.Single(events);
+        Assert.Equal("download_finished", events[0].Event);
+    }
+
+    [Fact]
+    public async Task ParseSseStream_Handles_Crlf_Line_Endings()
+    {
+        const string payload = "data: {\"model\":\"a/b\",\"event\":\"download_finished\",\"data\":{}}\r\n\r\n";
+
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        using var reader = new StreamReader(stream);
+
+        var events = await CollectAsync(reader);
+
+        Assert.Single(events);
+        Assert.Equal("download_finished", events[0].Event);
+    }
+
+    [Fact]
+    public async Task ParseSseStream_Joins_Multi_Line_Data()
+    {
+        // SSE allows one event's data to span several data: lines; they are
+        // joined with '\n' before parsing.
+        const string payload = """
+            data: {"model":"a/b","event":"download_progress",
+            data: "data":{}}
+
+            """;
+
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        using var reader = new StreamReader(stream);
+
+        var events = await CollectAsync(reader);
+
+        Assert.Single(events);
+        Assert.Equal("download_progress", events[0].Event);
+        Assert.Equal("a/b", events[0].Model);
+    }
+
+    [Fact]
+    public async Task ParseSseStream_Skips_Payload_Without_Event_Field()
+    {
+        const string payload = """
+            data: {"model":"a/b","data":{}}
+
+            """;
+
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes(payload));
+        using var reader = new StreamReader(stream);
+
+        var events = await CollectAsync(reader);
+
+        Assert.Empty(events);
+    }
+
+    [Fact]
     public void SumProgress_Sums_Per_Url_Done_And_Total()
     {
         const string dataJson = """
@@ -150,6 +250,25 @@ public class LlamaManagerSchemaTests
 
         Assert.Equal(0, done);
         Assert.Equal(0, total);
+    }
+
+    [Fact]
+    public void SumProgress_Skips_Non_Object_Entries_And_Missing_Fields()
+    {
+        const string dataJson = """
+            {"progress":{
+                "url1":{"done":10},
+                "url2":"not-an-object",
+                "url3":{"total":100},
+                "url4":{"done":"oops","total":50}
+            }}
+            """;
+
+        using var doc = JsonDocument.Parse(dataJson);
+        var (done, total) = LlamaManager.SumProgress(doc.RootElement);
+
+        Assert.Equal(10, done);
+        Assert.Equal(150, total);
     }
 
     [Fact]

@@ -77,6 +77,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
             OnPropertyChanged(nameof(IsIndeterminateDownload));
+            OnPropertyChanged(nameof(DownloadPercentTextVisible));
         }
     }
 
@@ -91,9 +92,20 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _downloadFraction = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(DownloadProgressPercent));
+            OnPropertyChanged(nameof(DownloadProgressText));
+            OnPropertyChanged(nameof(DownloadPercentTextVisible));
             OnPropertyChanged(nameof(IsIndeterminateDownload));
         }
     }
+
+    /// <summary>
+    /// Cancels an in-flight download. Created by the download driver
+    /// (MainWindow.DownloadAndLaunchAsync) when the download starts and cleared
+    /// when it ends; the row's cancel button calls
+    /// <see cref="CancellationTokenSource.Cancel"/> on it. Not a UI property —
+    /// no change notification.
+    /// </summary>
+    public CancellationTokenSource? DownloadCancellation { get; set; }
 
     /// <summary>True if the download failed; the row shows an error indicator.</summary>
     public bool DownloadFailed
@@ -102,7 +114,10 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         set
         {
             if (_downloadFailed == value) return;
-            _downloadFailed = value; OnPropertyChanged();
+            _downloadFailed = value;
+            OnPropertyChanged();
+            // A failed row swaps the play glyph for the warning + retry affordance.
+            OnPropertyChanged(nameof(PlayGlyphVisible));
         }
     }
 
@@ -160,8 +175,12 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     // (load request sent), or OpenInNewWindow (loaded). Download takes
     // priority over a load (a row can't load until it's downloaded).
 
-    /// <summary>True when the play glyph should be visible (unloaded, idle).</summary>
-    public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded;
+    /// <summary>
+    /// True when the play glyph should be visible (unloaded, idle). A failed
+    /// download shows the warning + retry affordance instead of play — the
+    /// model isn't (fully) cached, so loading it would just be rejected.
+    /// </summary>
+    public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed;
 
     /// <summary>True when the download progress ring should be visible.</summary>
     public bool ProgressRingVisible => IsDownloading;
@@ -178,20 +197,57 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>Download completion as a percentage (0..100) for ProgressRing.Value.</summary>
     public double DownloadProgressPercent => DownloadFraction * 100;
 
+    /// <summary>Download completion as a short label (e.g. "42%") shown under the ring.</summary>
+    public string DownloadProgressText => $"{DownloadProgressPercent:0}%";
+
+    /// <summary>
+    /// True when the percent caption should be visible — while downloading with
+    /// a known byte count (an indeterminate ring shows no caption).
+    /// </summary>
+    public bool DownloadPercentTextVisible => IsDownloading && DownloadFraction > 0;
+
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? prop = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(prop));
+
+    // Resolved-logo cache: parsing an SVG into an SvgImageSource isn't free,
+    // and the same few brands repeat across every row — the Recommended list
+    // alone can hold dozens of rows sharing ~6 brands, and the Available list
+    // is rebuilt from scratch on every full populate. ImageSources are
+    // shareable across Image elements, so one instance per brand serves all
+    // rows. Callers are on the UI thread; the lock is belt-and-suspenders.
+    private static readonly object LogoCacheLock = new();
+    private static readonly Dictionary<string, ImageSource?> LogoCache = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Resolves a <see cref="Brand"/> to a bundled brand-logo ImageSource
     /// (Assets/Logos/&lt;logo&gt;.svg), using the brand→logo mapping. Returns
     /// null when the brand is unknown — the XAML Image then stays empty, and the
-    /// row shows the background tile alone.
+    /// row shows the background tile alone. Instances are cached per brand (see
+    /// <see cref="LogoCache"/>).
     /// </summary>
     public static ImageSource? ResolveLogo(string? brand)
     {
         var logo = BrandToLogo(brand);
-        return logo is null ? null : new SvgImageSource(new Uri($"ms-appx:///Assets/Logos/{logo}.svg"));
+        if (logo is null) return null;
+
+        lock (LogoCacheLock)
+        {
+            if (LogoCache.TryGetValue(logo, out var cached))
+                return cached;
+
+            // Rasterize at a bounded 64px width rather than the SVG's natural
+            // size: the tile renders the logo at 24px logical (48px physical at
+            // 200% scale), so a small raster keeps per-image memory down while
+            // staying crisp on high-DPI displays. Setting only the width
+            // preserves the aspect ratio.
+            var source = new SvgImageSource(new Uri($"ms-appx:///Assets/Logos/{logo}.svg"))
+            {
+                RasterizePixelWidth = 64,
+            };
+            LogoCache[logo] = source;
+            return source;
+        }
     }
 
     /// <summary>

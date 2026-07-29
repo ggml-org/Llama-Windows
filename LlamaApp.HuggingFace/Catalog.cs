@@ -43,9 +43,10 @@ public sealed class Catalog : IModelSource
 
     /// <summary>
     /// Flattens the nested family → size → build structure into a flat list of
-    /// <see cref="Repository"/> records, one per build (quant).
+    /// <see cref="Repository"/> records, one per build (quant). Internal for
+    /// unit tests.
     /// </summary>
-    private static List<Repository> Flatten(CatalogFamily[] families)
+    internal static List<Repository> Flatten(CatalogFamily[] families)
     {
         var repos = new List<Repository>(families.Length * 4);
         repos.AddRange(
@@ -220,8 +221,8 @@ public sealed class Catalog : IModelSource
         }
     }
 
-    /// <summary>Extracts a quant label from a GGUF filename, e.g. "model-Q4_K_M.gguf" → "Q4_K_M".</summary>
-    private static string? ExtractQuant(string fileName)
+    /// <summary>Extracts a quant label from a GGUF filename, e.g. "model-Q4_K_M.gguf" → "Q4_K_M". Internal for unit tests.</summary>
+    internal static string? ExtractQuant(string fileName)
     {
         var parts = fileName.Split('-');
         return parts.Select(p => p.Trim()).FirstOrDefault(
@@ -229,8 +230,8 @@ public sealed class Catalog : IModelSource
         );
     }
 
-    /// <summary>Formats a byte count as a human-readable size string, e.g. 2526080992 → "2.5 GB".</summary>
-    private static string FormatBytes(ulong bytes)
+    /// <summary>Formats a byte count as a human-readable size string, e.g. 2526080992 → "2.4 GB". Internal for unit tests.</summary>
+    internal static string FormatBytes(ulong bytes)
     {
         string[] units = ["B", "KB", "MB", "GB", "TB"];
         double size = bytes;
@@ -245,7 +246,7 @@ public sealed class Catalog : IModelSource
 
     // ---- JSON DTOs matching the catalog.json schema ----
 
-    private sealed class CatalogFamily
+    internal sealed class CatalogFamily
     {
         [JsonPropertyName("name")] public string Name { get; set; } = "";
         [JsonPropertyName("brand")] public string Brand { get; set; } = "";
@@ -257,7 +258,7 @@ public sealed class Catalog : IModelSource
         [JsonPropertyName("sizes")] public CatalogSize[] Sizes { get; set; } = [];
     }
 
-    private sealed class CatalogSize
+    internal sealed class CatalogSize
     {
         [JsonPropertyName("name")] public string Name { get; set; } = "";
         [JsonPropertyName("params")] public string Params { get; set; } = "";
@@ -265,7 +266,7 @@ public sealed class Catalog : IModelSource
         [JsonPropertyName("builds")] public CatalogBuild[] Builds { get; set; } = [];
     }
 
-    private sealed class CatalogBuild
+    internal sealed class CatalogBuild
     {
         [JsonPropertyName("quant")] public string Quant { get; set; } = "";
         [JsonPropertyName("size")] public string Size { get; set; } = "";

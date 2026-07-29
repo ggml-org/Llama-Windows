@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <!-- Windows TFM: the app project (WinUI 3) is referenced for the
+             ModelItem state-machine tests. The tests only exercise pure
+             managed logic — no XAML objects are instantiated. -->
+        <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+        <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <Platforms>x64</Platforms>
+    </PropertyGroup>
+
+    <!-- The referenced app project is MSIX-packaged and cannot build as
+         AnyCPU — coerce to x64 (mirrors the app's own Platform coercion). -->
+    <PropertyGroup Condition="'$(Platform)' != 'x64'">
+        <Platform>x64</Platform>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+        <PackageReference Include="xunit" Version="2.9.3" />
+        <PackageReference Include="xunit.runner.visualstudio" Version="3.0.2">
+            <PrivateAssets>all</PrivateAssets>
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
+        </PackageReference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- SetPlatform: the app is MSIX-packaged and rejects neutral builds;
+             build the reference as x64 regardless of this project's platform.
+             AdditionalProperties: the test host is unpackaged, so the WindowsAppRuntime
+             auto-initializer baked into the app assembly would fail at module load —
+             disable it for this reference build (the tests only exercise managed logic). -->
+        <ProjectReference Include="..\LlamaApp.csproj"
+                          SetPlatform="Platform=x64"
+                          AdditionalProperties="WindowsAppSdkBootstrapInitialize=false;WindowsAppSdkDeploymentManagerInitialize=false;WindowsAppSdkUndockedRegFreeWinRTInitialize=false;WindowsAppSdkCompatibilityInitialize=false" />
+        <ProjectReference Include="..\LlamaApp.HuggingFace\LlamaApp.HuggingFace.csproj" />
+    </ItemGroup>
+
+</Project>
