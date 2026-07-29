@@ -104,6 +104,14 @@ namespace LlamaApp.Views
         private readonly Dictionary<string, ModelItem> _localByServerId =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // Progress watches for downloads the app did not start itself (WebUI /
+        // CLI), keyed by the row they feed. Such a row has no download driver
+        // wiring byte progress, so without a watch it would sit on the
+        // indeterminate ring for the whole download. The poller owns each
+        // watch's lifetime: started when a row enters the downloading state,
+        // canceled when it leaves it. All access happens on the UI thread.
+        private readonly Dictionary<ModelItem, CancellationTokenSource> _externalDownloadWatches = new();
+
         // Delete-confirmation context: the trash button's attached Flyout opens
         // automatically on click; LocalModelDelete_Click captures the row's model
         // and the flyout here so the flyout's Delete button (which carries no
@@ -128,6 +136,7 @@ namespace LlamaApp.Views
 
             LoadModels();
             LoadVersionInfo();
+            UpdateServerStatusUI();
             UpdateEmptyState();
 
             // Refresh the footer's llama.cpp version as the binary is
@@ -319,6 +328,7 @@ namespace LlamaApp.Views
                 Brand = matched?.Brand,
                 Logo = ModelItem.ResolveLogo(matched?.Brand),
                 IsLoaded = sm.IsLoaded,
+                IsDownloading = sm.IsDownloading,
             };
         }
 
@@ -519,8 +529,8 @@ namespace LlamaApp.Views
                     if (ok)
                     {
                         // Download done — load it. The row now shows the
-                        // indeterminate load ring until the poller reports the
-                        // model as loaded.
+                        // load ring until the poller reports the model as
+                        // loaded.
                         item.IsLoading = true;
                         _ = LoadAndWatchAsync(item);
                     }
@@ -811,22 +821,57 @@ namespace LlamaApp.Views
         /// <summary>
         /// Sends a <c>POST /models/load</c> for <paramref name="item"/> and, on
         /// rejection, clears the optimistic <see cref="ModelItem.IsLoading"/> so
-        /// the row falls back to the play glyph. On acceptance the load ring
-        /// stays up until the <see cref="LlamaManager.ModelsChanged"/> poller
-        /// reports the model as <c>loaded</c> (which sets <see cref="ModelItem.IsLoaded"/>
-        /// and clears <see cref="ModelItem.IsLoading"/> via <see cref="ReconcileAsync"/>).
+        /// the row falls back to the play glyph. While the load runs, the
+        /// server's <c>status_change</c> SSE events drive the row's load ring
+        /// via <see cref="ModelItem.LoadFraction"/>; the
+        /// <see cref="LlamaManager.ModelsChanged"/> poller owns the final
+        /// transition (setting <see cref="ModelItem.IsLoaded"/> and clearing
+        /// <see cref="ModelItem.IsLoading"/> via <see cref="ReconcileAsync"/>).
         /// </summary>
         private async Task LoadAndWatchAsync(ModelItem item)
         {
             var mgr = LlamaManager.Shared;
             var queue = DispatcherQueue;
-            var ok = await mgr.LoadModelAsync(item);
+
+            item.LoadFraction = 0;
+            // Progress<T> captures the UI thread's SynchronizationContext at
+            // construction, so reports land on the UI thread unaided. Throttle
+            // to ~10 updates/sec like the download ring (the server can stream
+            // a status_change per mmap chunk); the terminal 100% always lands.
+            long lastApplyMs = 0;
+            var progress = new Progress<double>(f =>
+            {
+                var now = Environment.TickCount64;
+                if (f < 1.0 && now - lastApplyMs < 100) return;
+                lastApplyMs = now;
+                item.LoadFraction = f;
+            });
+
+            bool ok;
+            try
+            {
+                ok = await mgr.LoadModelAsync(item, progress);
+            }
+            catch (Exception ex)
+            {
+                // The server dying mid-load faults the SSE watch with an
+                // IOException; LoadModelAsync already maps that to false, but
+                // don't let anything else escape this fire-and-forget call
+                // either — a stuck IsLoading would spin the row's ring forever.
+                Log.Warn(ex, "load watch threw");
+                ok = false;
+            }
             if (!ok)
             {
-                if (queue is null || queue.HasThreadAccess)
+                void Rejected()
+                {
                     item.IsLoading = false;
+                    item.LoadFraction = 0;
+                }
+                if (queue is null || queue.HasThreadAccess)
+                    Rejected();
                 else
-                    queue.TryEnqueue(() => item.IsLoading = false);
+                    queue.TryEnqueue(Rejected);
                 return;
             }
 
@@ -864,6 +909,51 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
+        /// Re-renders the footer's server-status dot and relaunch button from
+        /// <see cref="LlamaManager.ServerStatus"/> (mapping rules live in
+        /// <see cref="ServerStatusPresentation"/> so they stay unit-testable).
+        /// Called on every <see cref="LlamaManager.StateChanged"/> and once at
+        /// startup.
+        /// </summary>
+        private void UpdateServerStatusUI()
+        {
+            var d = ServerStatusPresentation.Describe(
+                LlamaManager.Shared.ServerStatus, LlamaManager.Shared.State);
+            ServerStatusDot.Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(d.Dot);
+            Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(ServerStatusDot, d.ToolTip);
+            ServerRestartButton.Visibility = d.CanRelaunch
+                ? Microsoft.UI.Xaml.Visibility.Visible
+                : Microsoft.UI.Xaml.Visibility.Collapsed;
+        }
+
+        /// <summary>
+        /// Relaunch button (footer, visible only when the server is down):
+        /// re-runs the full ensure pipeline — adopt a server if one reappeared,
+        /// otherwise resolve/install the binary and launch it. Single-flighted
+        /// inside <see cref="LlamaManager.EnsureLlamaOrDownloadAsync"/>, so a
+        /// double-click can't spawn two servers.
+        /// </summary>
+        private void ServerRestart_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            Log.Info("manual server relaunch requested");
+            _ = RelaunchServerAsync();
+
+            static async Task RelaunchServerAsync()
+            {
+                try
+                {
+                    await LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
+                }
+                catch (Exception ex)
+                {
+                    // Fire-and-forget from the button; the pipeline already
+                    // surfaces failures via the Failed state + red dot.
+                    Log.Error(ex, "manual server relaunch threw");
+                }
+            }
+        }
+
+        /// <summary>
         /// Handler for <see cref="LlamaManager.StateChanged"/>: re-renders the
         /// footer's llama.cpp half as the binary is detected/installed so the
         /// running llama.cpp version appears live.
@@ -882,6 +972,38 @@ namespace LlamaApp.Views
             void OnStateChanged()
             {
                 LoadVersionInfo();
+                UpdateServerStatusUI();
+
+                // A dead server takes every in-flight operation with it —
+                // downloads die mid-stream, loads never complete, loaded
+                // models are gone (a restarted server comes back empty) — and
+                // the poller that normally owns these flags stops while the
+                // server is down. Reset all transient row state here so no row
+                // keeps a ring (or a stale "open" glyph) until the server is
+                // relaunched. App-driven downloads are left to their driver:
+                // the dead SSE stream faults DownloadModelAsync and
+                // DownloadAndLaunchAsync's catch-all flips the row to its
+                // failed state with a toast.
+                if (LlamaManager.Shared.ServerStatus != LlamaManager.ServerState.Running)
+                {
+                    foreach (var row in LocalModels)
+                    {
+                        row.IsLoaded = false;
+                        row.IsLoading = false;
+                        row.LoadFraction = 0;
+                        if (row.DownloadCancellation is null)
+                        {
+                            row.IsDownloading = false;
+                            row.DownloadFraction = 0;
+                        }
+                    }
+                    // External-download watches die with the server too;
+                    // cancel them promptly rather than waiting for each dead
+                    // stream to fault on its own.
+                    foreach (var cts in _externalDownloadWatches.Values)
+                        cts.Cancel();
+                    _externalDownloadWatches.Clear();
+                }
 
                 // Keep the empty-state text in step with the server state
                 // ("Starting the llama server…" → "No models yet — …").
@@ -941,14 +1063,29 @@ namespace LlamaApp.Views
 
             foreach (var sm in serverModels)
             {
-                if (_localByServerId.TryGetValue(sm.Id, out var item))
+                if (!_localByServerId.TryGetValue(sm.Id, out var item) &&
+                    (item = FindLocalByRepo(sm.Id)) is not null)
                 {
-                    // Map the server's three load states onto the row:
-                    //   loaded  -> OpenInNewWindow glyph (IsLoaded, ring off)
-                    //   loading -> indeterminate load ring (server-truth load)
-                    //   unloaded-> play glyph (but don't clobber an optimistic
-                    //              IsLoading set by a just-fired play click that
-                    //              the server hasn't acknowledged yet)
+                    // Exact-match miss, but a row for the same repo exists: the
+                    // server ids a mid-download model by its bare repo (the quant
+                    // is resolved only once the download completes), while a row
+                    // moved from Recommended is keyed repo:catalogQuant. Adopt
+                    // the server's id — adding a row here would show the model
+                    // twice for the whole download (and leave a stale row after).
+                    AdoptServerId(item, sm.Id);
+                }
+
+                if (item is not null)
+                {
+                    // Map the server's four model states onto the row:
+                    //   loaded     -> OpenInNewWindow glyph (IsLoaded, ring off)
+                    //   loading    -> load ring (server-truth load)
+                    //   downloading-> download ring (server-truth download; stays
+                    //                 indeterminate for externally-triggered
+                    //                 downloads — no byte progress is tracked)
+                    //   unloaded   -> play glyph (but don't clobber an optimistic
+                    //                 IsLoading set by a just-fired play click that
+                    //                 the server hasn't acknowledged yet)
                     if (sm.IsLoaded)
                     {
                         if (!item.IsLoaded)
@@ -959,17 +1096,44 @@ namespace LlamaApp.Views
                         }
                         item.IsLoaded = true;
                         item.IsLoading = false;
+                        item.IsDownloading = false;
+                        StopExternalDownloadWatch(item);
+                    }
+                    else if (sm.IsDownloading)
+                    {
+                        if (!item.IsDownloading) Log.Info("model downloading: " + sm.Id);
+                        item.IsLoaded = false;
+                        item.IsLoading = false;
+                        item.IsDownloading = true;
+                        // A download the app didn't start (WebUI/CLI) has no
+                        // driver wiring byte progress — watch it over SSE
+                        // ourselves, or the row sits on the indeterminate ring
+                        // for the whole download.
+                        if (item.DownloadCancellation is null)
+                            EnsureExternalDownloadWatch(item, sm.Id);
                     }
                     else if (sm.IsLoading)
                     {
                         if (!item.IsLoading) Log.Info("model loading: " + sm.Id);
                         item.IsLoaded = false;
                         item.IsLoading = true;
+                        item.IsDownloading = false;
+                        StopExternalDownloadWatch(item);
                     }
                     else // "unloaded" (or unknown)
                     {
                         if (item.IsLoaded) Log.Info("model unloaded: " + sm.Id);
                         item.IsLoaded = false;
+                        // Clear IsDownloading only for downloads the poller owns
+                        // (externally triggered ones): an app-driven download's
+                        // driver (DownloadAndLaunchAsync) flips the row to loading
+                        // itself — clearing here first would bounce the row back
+                        // to the play glyph for up to one poll cycle.
+                        if (item.DownloadCancellation is null)
+                        {
+                            item.IsDownloading = false;
+                            StopExternalDownloadWatch(item);
+                        }
                         // Leave IsLoading alone: a just-fired play click sets it
                         // optimistically before the server transitions to "loading";
                         // clearing it here would flicker the ring off for up to one
@@ -987,7 +1151,135 @@ namespace LlamaApp.Views
                 }
             }
 
+            // Sweep poller-owned download rows whose model vanished from
+            // /models entirely: an externally canceled (or failed) download
+            // disappears from the list, and without this the row would keep its
+            // ring — and its progress watch — forever. App-driven downloads are
+            // owned by their driver (DownloadAndLaunchAsync) and never touched.
+            var serverIds = new HashSet<string>(
+                serverModels.Select(m => m.Id), StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, row) in _localByServerId)
+            {
+                if (row.IsDownloading && row.DownloadCancellation is null &&
+                    !serverIds.Contains(key))
+                {
+                    Log.Info("download vanished from /models: " + key);
+                    StopExternalDownloadWatch(row);
+                    row.IsDownloading = false;
+                    row.DownloadFraction = 0;
+                }
+            }
+
             UpdateEmptyState();
+        }
+
+        /// <summary>
+        /// Starts (once per row) an SSE progress watch for a download the app did
+        /// not start itself. The watch only feeds <see cref="ModelItem.DownloadFraction"/>;
+        /// state transitions stay with the poller. It stops by itself when the
+        /// download finishes or fails, and is canceled via
+        /// <see cref="StopExternalDownloadWatch"/> when the row leaves the
+        /// downloading state.
+        /// </summary>
+        private void EnsureExternalDownloadWatch(ModelItem item, string serverId)
+        {
+            if (_externalDownloadWatches.ContainsKey(item))
+                return;
+
+            // Mid-download the server ids the model by its bare repo, which is
+            // also what the SSE "model" field carries.
+            var repo = SplitServerId(serverId).repo;
+            var cts = new CancellationTokenSource();
+            _externalDownloadWatches[item] = cts;
+            Log.Info("watching external download: " + repo);
+            _ = WatchExternalDownloadAsync(item, repo, cts);
+        }
+
+        /// <summary>
+        /// Cancels and forgets a row's external-download progress watch, if any.
+        /// The token source is not disposed here — the watcher task disposes it
+        /// itself when it unwinds, so it can never observe a disposed source.
+        /// </summary>
+        private void StopExternalDownloadWatch(ModelItem item)
+        {
+            if (_externalDownloadWatches.Remove(item, out var cts))
+                cts.Cancel();
+        }
+
+        private async Task WatchExternalDownloadAsync(ModelItem item, string repo, CancellationTokenSource cts)
+        {
+            long lastApplyMs = 0;
+            var progress = new Progress<ModelDownloadProgress>(p =>
+            {
+                // Same throttle as DownloadAndLaunchAsync: ~10 UI updates/s, and
+                // total==0 events (stream noise) never touch the fraction.
+                var now = Environment.TickCount64;
+                if (!p.Done && now - lastApplyMs < 100) return;
+                lastApplyMs = now;
+                if (p.TotalBytes > 0)
+                    item.DownloadFraction = p.Fraction;
+            });
+
+            try
+            {
+                await LlamaManager.Shared.WatchDownloadAsync(repo, progress, cts.Token);
+            }
+            catch (Exception ex)
+            {
+                // Fire-and-forget: nothing upstream would observe a fault.
+                Log.Warn(ex, "external download watch faulted: " + repo);
+            }
+
+            // The entry may already be gone — or replaced by a newer watch — if
+            // the poller stopped this one first; only remove our own.
+            if (_externalDownloadWatches.TryGetValue(item, out var current) &&
+                ReferenceEquals(current, cts))
+                _externalDownloadWatches.Remove(item);
+            cts.Dispose();
+        }
+
+        /// <summary>
+        /// Finds an Available row by bare repo id (the part of a server model id
+        /// before <c>:</c>). The server ids a mid-download model by its bare repo
+        /// — the quant is resolved only once the download completes — so an exact
+        /// <see cref="_localByServerId"/> lookup misses rows that were keyed
+        /// <c>repo:quant</c> (e.g. moved from Recommended on tap).
+        /// </summary>
+        private ModelItem? FindLocalByRepo(string serverId)
+        {
+            var (repo, _) = SplitServerId(serverId);
+            foreach (var (key, row) in _localByServerId)
+            {
+                if (string.Equals(SplitServerId(key).repo, repo, StringComparison.OrdinalIgnoreCase))
+                    return row;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Re-keys <paramref name="item"/> under the id the server is currently
+        /// reporting for it, dropping any previous alias. Also adopts the server's
+        /// resolved quant once the id carries one (mid-download ids are bare
+        /// repos) — <c>/models/load</c> and <c>DELETE /models/{name}</c> must use
+        /// the server's real id, which can differ from the catalog quant the row
+        /// was tapped with.
+        /// </summary>
+        private void AdoptServerId(ModelItem item, string serverId)
+        {
+            foreach (var key in _localByServerId
+                         .Where(kv => ReferenceEquals(kv.Value, item))
+                         .Select(kv => kv.Key).ToList())
+                _localByServerId.Remove(key);
+
+            var (_, quant) = SplitServerId(serverId);
+            if (quant.Length > 0 &&
+                !string.Equals(item.Quant, quant, StringComparison.OrdinalIgnoreCase))
+            {
+                Log.Info($"adopting server-resolved quant {quant} for {serverId} (was {item.Quant})");
+                item.Quant = quant;
+            }
+
+            _localByServerId[serverId] = item;
         }
 
         // ---- Footer actions ----

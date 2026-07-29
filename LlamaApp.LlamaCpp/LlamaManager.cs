@@ -111,10 +111,6 @@ public sealed class LlamaManager
     // races are handled by the retrying adoption probe (see WaitForReachableAsync).
     private readonly SemaphoreSlim _ensureGate = new(1, 1);
 
-    // Model-state poller: a background loop that fetches /models every 500ms
-    // while the server is Running and publishes the snapshot via ModelsChanged.
-    private CancellationTokenSource? _pollerCts;
-
     /// <summary>Current installation state.</summary>
     public InstallState State
     {
@@ -173,7 +169,13 @@ public sealed class LlamaManager
         }
     } = Origin.Unknown;
 
-    /// <summary>Current server state.</summary>
+    /// <summary>
+    /// Current server state — derived from HTTP API polls by the always-on
+    /// supervisor (see <see cref="DeriveServerStatus"/>), never from process
+    /// handles: a spawned server's crash and an adopted server's crash look
+    /// identical to the poll, and a server that appears is adopted the same
+    /// way no matter who started it.
+    /// </summary>
     public ServerState ServerStatus
     {
         get;
@@ -181,11 +183,6 @@ public sealed class LlamaManager
         {
             if (field == value) return;
             field = value;
-            
-            // The model-state poller runs only while the server is up: start it
-            // on Running, tear it down on any other state (Stopped/Failed).
-            if (value == ServerState.Running) StartModelPoller();
-            else StopModelPoller();
             StateChanged?.Invoke(this, EventArgs.Empty);
         }
     } = ServerState.Stopped;
@@ -194,13 +191,22 @@ public sealed class LlamaManager
     public event EventHandler? StateChanged;
 
     /// <summary>
-    /// Rose on a background thread roughly once per second with a fresh
-    /// <c>GET /models</c> snapshot while the server is <see cref="ServerState.Running"/>.
+    /// Raised by the supervisor loop (see <see cref="SupervisorLoopAsync"/>) on a
+    /// background thread roughly every 500ms with a fresh <c>GET /models</c>
+    /// snapshot while the server is <see cref="ServerState.Running"/>.
     /// Handlers should marshal to the UI thread before touching view models.
     /// </summary>
     public event EventHandler<IReadOnlyList<ServerModel>>? ModelsChanged;
 
-    private LlamaManager() { }
+    private LlamaManager()
+    {
+        // The supervisor is the ONLY source of truth for server status: it
+        // polls the HTTP API for the app's whole lifetime and derives
+        // ServerStatus from the answers — no process-handle assumptions.
+        // Fire-and-forget: the loop is inert while Stopped and every tick is
+        // guarded, so it can't fault the process.
+        _ = Task.Run(SupervisorLoopAsync);
+    }
 
     /// <summary>
     /// Ensures a llama server is reachable at <c>localhost:<see cref="ServerPort"/></c> —
@@ -317,7 +323,7 @@ public sealed class LlamaManager
             cancel.ThrowIfCancellationRequested();
             if (await ProbeHealthAsync(cancel)) return true;
             
-            await Task.Delay(250, cancel);
+            await Task.Delay(100, cancel);
         }
         return false;
     }
@@ -437,20 +443,12 @@ public sealed class LlamaManager
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             proc.Exited += (_, _) =>
             {
-                // Fires on a thread-pool thread; marshal to UI thread via the
-                // continuation below is unnecessary since ServerStatus is a
-                // simple set — but keep it thread-safe by not touching the
-                // process field here. Only flip state if this wasn't an
-                // intentional stop (StopServer sets Stopped before killing).
-                if (ServerStatus != ServerState.Stopped)
-                {
-                    Log.Warn($"llama server process exited unexpectedly (code={proc.ExitCode})");
-                    ServerStatus = ServerState.Failed;
-                }
-                else
-                {
-                    Log.Info("llama server process exited (intentional stop)");
-                }
+                // Log-only: server STATUS is derived from API polls by the
+                // supervisor (see SupervisorLoopAsync), never from process
+                // handles — an adopted server has no handle to watch, and a
+                // spawned one's death is detected just as fast via refused
+                // connections on the next poll tick.
+                Log.Info($"llama server process exited (code={proc.ExitCode})");
             };
 
             if (!proc.Start())
@@ -477,8 +475,8 @@ public sealed class LlamaManager
             // alive, and a later app start (or this same retry) spawned a
             // second on the same port → two servers eating RAM. Kill ours so
             // the port is free for the next attempt. StopServer sets Stopped
-            // before killing so the Exited handler logs an intentional stop,
-            // then we surface the failure.
+            // before killing (deliberate intent — the supervisor never leaves
+            // Stopped on its own), then we surface the failure.
             Log.Error("llama server failed to become ready within 15s (port probe timed out)");
             StopServer();
             ServerStatus = ServerState.Failed;
@@ -498,8 +496,10 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Stops the running server process (if any). Safe to call repeatedly.
-    /// Sets state to Stopped before killing so the Exited handler doesn't flip
-    /// to Failed.
+    /// Sets state to <see cref="ServerState.Stopped"/> before killing: Stopped
+    /// marks the stop as deliberate app intent, and the supervisor never
+    /// probes or transitions out of Stopped on its own (see
+    /// <see cref="DeriveServerStatus"/>).
     /// </summary>
     public void StopServer()
     {
@@ -551,59 +551,123 @@ public sealed class LlamaManager
         return false;
     }
 
-    // ---- Model-state poller ----
+    // ---- Server-status supervisor ----
 
     /// <summary>
-    /// Starts the background <c>GET /models</c> poller (every 500ms) that publishes
-    /// fresh snapshots via <see cref="ModelsChanged"/>. Idempotent — restarts the
-    /// loop if one is already running. Torn down automatically when the server
-    /// leaves <see cref="ServerState.Running"/> (see <see cref="ServerStatus"/> setter).
+    /// Pure derivation of <see cref="ServerState"/> from a single API probe —
+    /// the ONLY source of truth for server status. No process-handle
+    /// assumptions: a spawned server's crash and an adopted server's crash
+    /// look identical to the poll, and a server that reappears is adopted the
+    /// same way no matter who (re)started it.
     /// </summary>
-    private void StartModelPoller()
-    {
-        StopModelPoller();
-        _pollerCts = new CancellationTokenSource();
-        var token = _pollerCts.Token;
-        Task.Run(() => PollModelsAsync(token), token);
-        Log.Info("model-state poller started (500ms interval)");
-    }
-
-    /// <summary>Stops the poller and releases its cancellation token. Safe to call repeatedly.</summary>
-    private void StopModelPoller()
-    {
-        try { _pollerCts?.Cancel(); } catch { /* best-effort */ }
-        try { _pollerCts?.Dispose(); } catch { /* best-effort */ }
-        _pollerCts = null;
-        
-        // Don't await the loop: it exits on cancel within one delay interval;
-        // awaiting would block the UI thread (the ServerStatus setter runs on it).
-    }
-
-    /// <summary>
-    /// The poll loop: fetch <c>/models</c> every 500ms and raise
-    /// <see cref="ModelsChanged"/> with the snapshot. Transient errors are
-    /// swallowed — the UI reconcile is additive and never clears rows on an
-    /// empty/error fetch, so a network blip doesn't flicker the list. Exits
-    /// cleanly on cancellation.
-    /// </summary>
-    private async Task PollModelsAsync(CancellationToken cancel)
-    {
-        while (!cancel.IsCancellationRequested)
+    /// <param name="current">The state observed before the probe.</param>
+    /// <param name="apiReachable">Whether the HTTP API answered (any HTTP
+    /// response counts; connection-refused/timeout counts as not).</param>
+    public static ServerState DeriveServerStatus(ServerState current, bool apiReachable) =>
+        (current, apiReachable) switch
         {
-            IReadOnlyList<ServerModel> snapshot = [];
-            try { snapshot = await GetModelsAsync(cancel); }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex) { Log.Debug($"model poll fetch failed: {ex.Message}"); /* transient — keep the previous snapshot in effect */ }
+            (ServerState.Running, true) => ServerState.Running,
+            // Was running, now unreachable → crashed (or the machine/network did).
+            (ServerState.Running, false) => ServerState.Failed,
+            // A launch is confirmed by the API answering, not by the process
+            // having started.
+            (ServerState.Starting, true) => ServerState.Running,
+            // Still booting — StartServerAsync's own wait bounds the window.
+            (ServerState.Starting, false) => ServerState.Starting,
+            // Auto-recovery: a server (re)appeared — e.g. the user restarted
+            // their own instance after a crash. Adopt it; no relaunch click
+            // needed.
+            (ServerState.Failed, true) => ServerState.Running,
+            (ServerState.Failed, false) => ServerState.Failed,
+            // Stopped is deliberate app intent (startup before the ensure
+            // pipeline runs, the port-reclaim window inside StartServerAsync,
+            // app exit). The supervisor never probes while Stopped and never
+            // leaves it on its own — otherwise it could "adopt" a process
+            // StopServer is in the middle of killing. Leaving Stopped is
+            // always explicit: EnsureLlamaOrDownloadAsync / the relaunch button.
+            (ServerState.Stopped, _) => ServerState.Stopped,
+        };
 
-            try { _lastModelsSnapshot = snapshot; ModelsChanged?.Invoke(this, snapshot); }
-            catch (Exception ex) { Log.Warn(ex, "ModelsChanged handler threw"); /* a handler error doesn't take down the poller */ }
+    /// <summary>
+    /// Applies a <see cref="DeriveServerStatus"/> result, with logging on the
+    /// two transitions that matter operationally: declaring a crash
+    /// (<see cref="ServerState.Failed"/>) and confirming/adopting a server
+    /// (<see cref="ServerState.Running"/>).
+    /// </summary>
+    private void ApplyPolledStatus(ServerState derived)
+    {
+        if (derived == ServerStatus) return;
+        if (derived == ServerState.Failed)
+        {
+            Log.Warn("llama server unreachable; declaring it failed (API-polled)");
+            FailureMessage = "The llama server stopped responding.";
+        }
+        else if (derived == ServerState.Running)
+        {
+            Log.Info($"llama server reachable; {ServerStatus} → Running (API-polled)");
+        }
+        ServerStatus = derived;
+    }
 
-            if (snapshot.Count > 0)
-                Log.Debug(
-                    $"poll: {snapshot.Count} model(s): {string.Join(", ", snapshot.Select(m => $"{m.Id}={(m.Status ?? "?")}"))}");
+    /// <summary>
+    /// The always-on supervisor loop — started once in the constructor and run
+    /// for the app's whole lifetime. It is the single place that turns API
+    /// answers into <see cref="ServerStatus"/> transitions:
+    /// <list type="bullet">
+    /// <item>While <see cref="ServerState.Running"/>: fetch <c>GET /models</c>
+    /// every 500ms — the fetch doubles as the liveness probe AND publishes the
+    /// snapshot via <see cref="ModelsChanged"/>. A failed fetch is confirmed
+    /// with a <c>/health</c> probe before declaring death, so a transient
+    /// <c>/models</c> hiccup on a living server doesn't flip the state.</item>
+    /// <item>While <see cref="ServerState.Starting"/> or
+    /// <see cref="ServerState.Failed"/>: probe <c>/health</c> every second — a
+    /// reachable API confirms a launch or adopts a (re)appeared server.</item>
+    /// <item>While <see cref="ServerState.Stopped"/>: idle — see
+    /// <see cref="DeriveServerStatus"/>.</item>
+    /// </list>
+    /// Every tick is guarded: one bad tick doesn't take down the supervisor.
+    /// </summary>
+    private async Task SupervisorLoopAsync()
+    {
+        while (true)
+        {
+            var status = ServerStatus;
+            try
+            {
+                switch (status)
+                {
+                    case ServerState.Running:
+                    {
+                        IReadOnlyList<ServerModel> snapshot = [];
+                        var fetchOk = false;
+                        try { snapshot = await GetModelsAsync(CancellationToken.None); fetchOk = true; }
+                        catch (Exception ex) { Log.Debug($"model poll fetch failed: {ex.Message}"); /* confirmed via /health below */ }
 
-            try { await Task.Delay(500, cancel); }
-            catch (OperationCanceledException) { break; }
+                        if (fetchOk)
+                        {
+                            try { _lastModelsSnapshot = snapshot; ModelsChanged?.Invoke(this, snapshot); }
+                            catch (Exception ex) { Log.Warn(ex, "ModelsChanged handler threw"); /* a handler error doesn't take down the supervisor */ }
+
+                            if (snapshot.Count > 0)
+                                Log.Debug(
+                                    $"poll: {snapshot.Count} model(s): {string.Join(", ", snapshot.Select(m => $"{m.Id}={(m.Status ?? "?")}"))}");
+                        }
+                        else
+                        {
+                            ApplyPolledStatus(DeriveServerStatus(status, await ProbeHealthAsync(CancellationToken.None)));
+                        }
+                        break;
+                    }
+                    case ServerState.Starting:
+                    case ServerState.Failed:
+                        ApplyPolledStatus(DeriveServerStatus(status, await ProbeHealthAsync(CancellationToken.None)));
+                        break;
+                    // Stopped: no probe, no transition — see DeriveServerStatus.
+                }
+            }
+            catch (Exception ex) { Log.Warn(ex, "supervisor tick threw"); /* one bad tick doesn't take down the supervisor */ }
+
+            await Task.Delay(status == ServerState.Running ? 500 : 1000);
         }
     }
 
@@ -763,42 +827,224 @@ public sealed class LlamaManager
     }
 
     /// <summary>
+    /// Watches a download the app did <b>not</b> start (e.g. triggered from the
+    /// WebUI or the CLI) and reports its byte progress until it finishes. Unlike
+    /// <see cref="DownloadModelAsync"/> nothing is POSTed — the download is
+    /// already in flight — and cancellation only stops the watch; it never
+    /// cancels the server-side download.
+    /// <para>There is deliberately no idle timeout: the caller (the <c>/models</c>
+    /// poller) owns the watch's lifetime and cancels it as soon as the model
+    /// leaves the <c>downloading</c> state, so a quiet stream (a stalled but
+    /// living download) is waited out rather than second-guessed.</para>
+    /// </summary>
+    /// <param name="repoName">The bare Hugging Face repo id the server puts in
+    /// the SSE <c>model</c> field while downloading (e.g.
+    /// <c>ggml-org/gemma-3-4b-it-GGUF</c>).</param>
+    /// <param name="progress">Receives <see cref="ModelDownloadProgress"/> updates
+    /// as the server streams them. May be <c>null</c>.</param>
+    /// <param name="cancel">Stops the watch (does not affect the download).</param>
+    /// <returns><c>true</c> if the download finished while watching;
+    /// <c>false</c> if it failed, the stream ended, or the watch was canceled.</returns>
+    public async Task<bool> WatchDownloadAsync(
+        string repoName,
+        IProgress<ModelDownloadProgress>? progress = null,
+        CancellationToken cancel = default)
+    {
+        if (ServerStatus != ServerState.Running)
+            return false;
+
+        var baseUrl = $"http://localhost:{ServerPort}";
+
+        // Same pattern as DownloadModelAsync: a dedicated long-lived client, the
+        // body read as it arrives, and `using` on the response so the connection
+        // is released on every exit path. A dead stream degrades to "no
+        // progress" — the poller keeps the row's state truthful regardless.
+        using var sseClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        try
+        {
+            using var sseResponse = await TryOpenSseAsync(sseClient, baseUrl, cancel);
+            if (sseResponse is null)
+                return false;
+
+            using var reader = new StreamReader(await sseResponse.Content.ReadAsStreamAsync(cancel));
+            await foreach (var (evt, modelId, data) in ParseSseStreamAsync(reader, cancel))
+            {
+                if (!string.Equals(modelId, repoName, StringComparison.OrdinalIgnoreCase))
+                    continue; // another model's event ("*" broadcasts carry no progress)
+
+                switch (evt)
+                {
+                    case "download_progress":
+                        var (downloaded, total) = SumProgress(data);
+                        progress?.Report(new ModelDownloadProgress(
+                            repoName, downloaded, total, Done: false, Failed: false));
+                        break;
+
+                    case "download_finished":
+                        progress?.Report(new ModelDownloadProgress(
+                            repoName, 0, 0, Done: true, Failed: false, Message: "Download complete"));
+                        return true;
+
+                    case "download_failed":
+                        Log.Warn($"server reported download_failed for {repoName}");
+                        progress?.Report(new ModelDownloadProgress(
+                            repoName, 0, 0, Done: false, Failed: true, Message: "Download failed"));
+                        return false;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        {
+            // The poller canceled the watch (download completed, failed, or
+            // vanished) — not an error, and the download itself is deliberately
+            // left alone.
+        }
+        catch (Exception ex) when (ex is IOException or HttpRequestException or ObjectDisposedException)
+        {
+            // ObjectDisposedException covers the race where the poller cancels
+            // and disposes the token source before the first GetAsync registers
+            // the token.
+            Log.Warn(ex, $"download watch for {repoName} ended early");
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Asks the running llama server to load (launch) a model into memory via
     /// <c>POST /models/load</c>. In router mode, the server spawns a child
-    /// process for the model; this returns once the load request is accepted —
-    /// the model isn't necessarily <c>loaded</c> yet. Track the transition via
-    /// the <see cref="ModelsChanged"/> poller, which reports the server's
-    /// <c>status</c> field flipping from <c>unloaded</c> to <c>loaded</c>.
+    /// process for the model.
     /// </summary>
     /// <param name="model">The model to load; <see cref="Common.IModel.ServerModelId"/>
     /// is the canonical id the server knows (the HF repo id with its
     /// <c>:&lt;quant&gt;</c> suffix, e.g. <c>ggml-org/gemma-3-4b-it-GGUF:Q4_K_M</c>) —
     /// <c>/models/load</c> requires the quant suffix, so the bare repo id won't do.</param>
+    /// <param name="progress">Optional sink for the load fraction (0..1). When
+    /// provided, the <c>/models/sse</c> stream is opened BEFORE the POST (a small
+    /// model can finish loading in under a second — opening it after would miss
+    /// the whole load) and <c>status_change</c> events are watched until the
+    /// model reaches a terminal state, reporting each event's fraction. When
+    /// <c>null</c>, the method is fire-and-forget: it returns as soon as the
+    /// load request is accepted.</param>
     /// <param name="cancel">Cancellation token.</param>
-    /// <returns><c>true</c> if the server accepted the load request.</returns>
-    public async Task<bool> LoadModelAsync(IModel model, CancellationToken cancel = default)
+    /// <returns><c>false</c> only when the load definitely didn't happen — the
+    /// POST was rejected, or the server rolled the model back to <c>unloaded</c>
+    /// (a failed load). <c>true</c> means accepted; the <see cref="ModelsChanged"/>
+    /// poller confirms the final <c>loaded</c> transition.</returns>
+    public async Task<bool> LoadModelAsync(IModel model, IProgress<double>? progress = null, CancellationToken cancel = default)
     {
         if (ServerStatus != ServerState.Running)
             return false;
-        
+
+        var baseUrl = $"http://localhost:{ServerPort}";
+        var modelId = model.ServerModelId;
+
+        // Open the SSE stream before the POST when progress is wanted. If it
+        // can't be opened (older server without /models/sse), degrade to
+        // fire-and-forget — the /models poller still reconciles the state.
+        using var sseClient = progress is null ? null : new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        using var sseResponse = await TryOpenSseAsync(sseClient, baseUrl, cancel);
+        using var reader = sseResponse is null
+            ? null
+            : new StreamReader(await sseResponse.Content.ReadAsStreamAsync(cancel));
+
         try
         {
-            Log.Info($"loading model {model.ServerModelId}");
-        
-            var baseUrl = $"http://localhost:{ServerPort}";
-            var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
+            Log.Info($"loading model {modelId}");
+            var payload = $$"""{"model":"{{modelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var resp = await Client.PostAsync($"{baseUrl}/models/load", content, cancel);
             if (!resp.IsSuccessStatusCode)
             {
                 Log.Warn($"server rejected model load ({(int)resp.StatusCode})");
+                return false;
             }
-            return resp.IsSuccessStatusCode;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Error(ex, "model load request threw");
             return false;
+        }
+
+        if (reader is null || progress is null)
+            return true; // accepted; the poller takes it from here
+
+        // Watch status_change events until the model reaches a terminal state.
+        // The timeout only guards against a server that never sends one (a hung
+        // child process): the request WAS accepted, so a timeout still returns
+        // true and leaves the state to the poller.
+        using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        watchCts.CancelAfter(LoadWatchTimeout);
+        try
+        {
+            await foreach (var (evt, evtModel, data) in ParseSseStreamAsync(reader, watchCts.Token))
+            {
+                if (evt != "status_change" ||
+                    !string.Equals(evtModel, modelId, StringComparison.OrdinalIgnoreCase))
+                    continue; // another model's event
+
+                var (status, fraction) = ParseStatusChange(data);
+                switch (status)
+                {
+                    case "loading":
+                        progress.Report(fraction);
+                        break;
+                    case "loaded":
+                        progress.Report(1.0);
+                        return true;
+                    case "unloaded":
+                        // Rolled back — the load failed server-side (e.g. the
+                        // child process died while mmapping the weights).
+                        Log.Warn($"load of {modelId} rolled back to unloaded");
+                        return false;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+        {
+            Log.Warn($"timed out waiting for load events for {modelId}");
+        }
+        catch (Exception ex) when (ex is IOException or HttpRequestException or ObjectDisposedException)
+        {
+            // The server died mid-load: its SSE stream broke, so the load
+            // definitely didn't complete — report failure so the caller drops
+            // the row back to the play glyph instead of spinning forever.
+            Log.Warn(ex, $"load watch for {modelId} broke (server died?)");
+            return false;
+        }
+
+        return true;
+    }
+
+    // How long the load-progress SSE watch waits for a terminal status_change
+    // before deferring to the /models poller. Generous because mmapping a very
+    // large model from a slow disk can take minutes.
+    private static readonly TimeSpan LoadWatchTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Opens the <c>/models/sse</c> event stream for progress watching.
+    /// Returns <c>null</c> (and logs) when the stream can't be opened — the
+    /// caller then degrades to poller-only state tracking.
+    /// </summary>
+    private static async Task<HttpResponseMessage?> TryOpenSseAsync(HttpClient? client, string baseUrl, CancellationToken cancel)
+    {
+        if (client is null) return null;
+        try
+        {
+            var resp = await client.GetAsync(
+                $"{baseUrl}/models/sse", HttpCompletionOption.ResponseHeadersRead, cancel);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Log.Warn($"SSE stream rejected ({(int)resp.StatusCode}); progress falls back to the poller");
+                resp.Dispose();
+                return null;
+            }
+            return resp;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Warn(ex, "SSE stream unavailable; progress falls back to the poller");
+            return null;
         }
     }
 
@@ -893,12 +1139,16 @@ public sealed class LlamaManager
         public string Id { get; init; } = "";
         /// <summary>Absolute path to the GGUF on disk, when known.</summary>
         public string? Path { get; init; }
-        /// <summary>Load state reported by the server: <c>unloaded</c>, <c>loading</c>, or <c>loaded</c>.</summary>
+        /// <summary>Load state reported by the server: <c>unloaded</c>, <c>downloading</c>, <c>loading</c>, or <c>loaded</c>.</summary>
         public string Status { get; init; } = "";
         /// <summary>True when <see cref="Status"/> is <c>loaded</c> (model resident in a child process).</summary>
         public bool IsLoaded => string.Equals(Status, "loaded", StringComparison.OrdinalIgnoreCase);
         /// <summary>True when <see cref="Status"/> is <c>loading</c> (load in progress: child process spawning / weights mmapping).</summary>
         public bool IsLoading => string.Equals(Status, "loading", StringComparison.OrdinalIgnoreCase);
+        /// <summary>True when <see cref="Status"/> is <c>downloading</c> (the server is fetching the
+        /// model's files; the model is id'd by its bare repo until the download completes and the
+        /// quant is resolved).</summary>
+        public bool IsDownloading => string.Equals(Status, "downloading", StringComparison.OrdinalIgnoreCase);
         /// <summary>True when <c>architecture.input_modalities</c> contains <c>image</c>.</summary>
         public bool SupportsImage { get; init; }
         /// <summary>All declared input modalities (e.g. <c>text</c>, <c>image</c>).</summary>
@@ -1188,13 +1438,78 @@ public sealed class LlamaManager
         
         foreach (var url in progress.EnumerateObject().Where(url => url.Value.ValueKind == JsonValueKind.Object))
         {
-            if (url.Value.TryGetProperty("done", out var done))
-                downloaded += done.TryGetInt64(out var d) ? d : 0;
-            if (url.Value.TryGetProperty("total", out var tot))
-                total += tot.TryGetInt64(out var t) ? t : 0;
+            // TryGetInt64 throws InvalidOperationException on a non-Number
+            // element (e.g. a string) — it only returns false for numbers
+            // that don't fit — so the ValueKind must be checked first.
+            if (url.Value.TryGetProperty("done", out var done) &&
+                done.ValueKind == JsonValueKind.Number &&
+                done.TryGetInt64(out var d))
+                downloaded += d;
+            if (url.Value.TryGetProperty("total", out var tot) &&
+                tot.ValueKind == JsonValueKind.Number &&
+                tot.TryGetInt64(out var t))
+                total += t;
         }
 
         return (downloaded, total);
+    }
+
+    /// <summary>
+    /// Parses a <c>status_change</c> data payload into the model's new
+    /// <c>status</c> (<c>loading</c>/<c>loaded</c>/<c>unloaded</c>) and, for
+    /// <c>loading</c>, an overall 0..1 fraction. The server's progress object
+    /// carries the load <c>stages</c>, the <c>current</c> stage, and that
+    /// stage's 0..1 <c>value</c>; the overall fraction weights the value by
+    /// the current stage's position — <c>(stageIndex + value) / stageCount</c>,
+    /// which reduces to <c>value</c> for the common single-stage load.
+    /// </summary>
+    internal static (string status, double fraction) ParseStatusChange(JsonElement data)
+    {
+        if (data.ValueKind != JsonValueKind.Object ||
+            !data.TryGetProperty("status", out var s) ||
+            s.ValueKind != JsonValueKind.String)
+            return ("", 0);
+
+        var status = s.GetString() ?? "";
+        double fraction = 0;
+
+        // TryGetDouble throws InvalidOperationException on a non-Number element
+        // (same as TryGetInt64), so the ValueKind guard must come first.
+        if (data.TryGetProperty("progress", out var progress) &&
+            progress.ValueKind == JsonValueKind.Object &&
+            progress.TryGetProperty("value", out var v) &&
+            v.ValueKind == JsonValueKind.Number &&
+            v.TryGetDouble(out var value))
+        {
+            fraction = value;
+
+            // Multi-stage load (e.g. text_model + mmproj): weight the current
+            // stage's value by how many stages are already behind it.
+            if (progress.TryGetProperty("stages", out var stages) &&
+                stages.ValueKind == JsonValueKind.Array &&
+                stages.GetArrayLength() > 1 &&
+                progress.TryGetProperty("current", out var cur) &&
+                cur.ValueKind == JsonValueKind.String)
+            {
+                var current = cur.GetString();
+                var index = -1;
+                var i = 0;
+                foreach (var stage in stages.EnumerateArray())
+                {
+                    if (stage.ValueKind == JsonValueKind.String &&
+                        string.Equals(stage.GetString(), current, StringComparison.Ordinal))
+                    {
+                        index = i;
+                        break;
+                    }
+                    i++;
+                }
+                if (index >= 0)
+                    fraction = (index + value) / stages.GetArrayLength();
+            }
+        }
+
+        return (status, Math.Clamp(fraction, 0, 1));
     }
 
     /// <summary>

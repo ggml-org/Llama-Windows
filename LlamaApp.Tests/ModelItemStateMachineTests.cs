@@ -120,6 +120,53 @@ public class ModelItemStateMachineTests
         Assert.False(item.DownloadPercentTextVisible); // not downloading
     }
 
+    // ----- Load progress captions -------------------------------------------
+
+    [Fact]
+    public void Load_Is_Indeterminate_Until_First_Progress_Event()
+    {
+        var item = new ModelItem { IsLoading = true };
+
+        Assert.True(item.IsIndeterminateLoad);
+        Assert.False(item.LoadPercentTextVisible);
+
+        item.LoadFraction = 0.5;
+
+        Assert.False(item.IsIndeterminateLoad);
+        Assert.True(item.LoadPercentTextVisible);
+    }
+
+    [Fact]
+    public void Load_Percent_And_Text_Are_Derived_From_Fraction()
+    {
+        var item = new ModelItem { LoadFraction = 0.423 };
+
+        Assert.Equal(42.3, item.LoadProgressPercent, precision: 3);
+        Assert.Equal("42%", item.LoadProgressText);
+    }
+
+    [Fact]
+    public void Load_Percent_Caption_Hides_When_Not_Loading()
+    {
+        var item = new ModelItem { LoadFraction = 0.5 };
+
+        Assert.False(item.LoadPercentTextVisible); // not loading
+    }
+
+    [Fact]
+    public void IsLoading_Raises_Load_Progress_Notifications()
+    {
+        var item = new ModelItem();
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.IsLoading = true;
+
+        // The ring swaps indeterminate ↔ determinate on this transition.
+        Assert.Contains(nameof(ModelItem.IsIndeterminateLoad), raised);
+        Assert.Contains(nameof(ModelItem.LoadPercentTextVisible), raised);
+    }
+
     // ----- Change notifications --------------------------------------------
 
     [Fact]

@@ -129,10 +129,17 @@
                                 VerticalAlignment="Center">
                         <!-- Download failed: warning dot + retry button. Shown
                              instead of the play glyph (PlayGlyphVisible excludes
-                             failed rows) so a broken download can't be "loaded". -->
+                             failed rows) so a broken download can't be "loaded".
+                             The panel is right-aligned, so the dot and the retry
+                             button occupy the same two slots as the delete and
+                             play buttons on an available row — both use the same
+                             16px glyph metrics as those buttons (and the retry
+                             button the same 0.5 opacity) so a row flipping
+                             between failed and available doesn't shift or shrink
+                             the action cell. -->
                         <FontIcon Visibility="{x:Bind DownloadFailed, Mode=OneWay}"
                                   Glyph="&#xE7BA;"
-                                  FontSize="13"
+                                  FontSize="16"
                                   Foreground="#F85149"
                                   VerticalAlignment="Center"
                                   Margin="0,0,2,0"
@@ -147,8 +154,8 @@
                                 AutomationProperties.Name="Retry download"
                                 ToolTipService.ToolTip="Retry download">
                             <FontIcon Glyph="&#xE72C;"
-                                      FontSize="13"
-                                      Opacity="0.6" />
+                                      FontSize="16"
+                                      Opacity="0.5" />
                         </Button>
 
                         <!-- Delete button: remove the model from the server's
@@ -221,12 +228,26 @@
                                        HorizontalAlignment="Center" />
                         </StackPanel>
 
-                        <!-- Indeterminate load ring: load request sent, waiting
-                             for the poller to report the model as loaded. -->
-                        <ProgressRing Visibility="{x:Bind LoadingRingVisible, Mode=OneWay}"
-                                      Width="20" Height="20"
-                                      IsIndeterminate="True"
-                                      VerticalAlignment="Center" />
+                        <!-- Load ring: load request sent. Determinate once the
+                             server's status_change SSE events report a progress
+                             fraction (with a percent caption, like the download
+                             ring); spins indeterminately until the first event
+                             — and for externally-triggered loads, which only
+                             the poller observes. -->
+                        <StackPanel Visibility="{x:Bind LoadingRingVisible, Mode=OneWay}"
+                                    VerticalAlignment="Center"
+                                    Spacing="2">
+                            <ProgressRing Width="20" Height="20"
+                                          Value="{x:Bind LoadProgressPercent, Mode=OneWay}"
+                                          Maximum="100"
+                                          IsIndeterminate="{x:Bind IsIndeterminateLoad, Mode=OneWay}"
+                                          HorizontalAlignment="Center" />
+                            <TextBlock Text="{x:Bind LoadProgressText, Mode=OneWay}"
+                                       Visibility="{x:Bind LoadPercentTextVisible, Mode=OneWay}"
+                                       FontSize="10"
+                                       Opacity="0.6"
+                                       HorizontalAlignment="Center" />
+                        </StackPanel>
 
                         <!-- Open in new window: model is loaded, click to open
                              the running server's WebUI in the browser. -->
@@ -534,16 +555,42 @@
                    Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
 
         <!-- ============ Section 4: Version footer (compact) ============
-             A single centered line: the app's version (no name) and the
-             resolved llama.cpp version, separated by " - ". Bold white so it
-             reads as a clear caption under the Recommended list. -->
-        <TextBlock x:Name="VersionText"
-                   Grid.Row="6"
-                   Margin="16,8,16,10"
-                   HorizontalAlignment="Center"
-                   FontSize="11"
-                   FontWeight="Bold"
-                   Foreground="White" />
+             A single centered line: a server-status dot (green = running,
+             red = crashed, amber = starting, gray = stopped), the app's
+             version (no name) and the resolved llama.cpp version separated
+             by " - ", and a small relaunch button that appears only when
+             the server is down. Bold white so it reads as a clear caption
+             under the Recommended list. -->
+        <StackPanel Grid.Row="6"
+                    Margin="16,8,16,10"
+                    HorizontalAlignment="Center"
+                    Orientation="Horizontal"
+                    Spacing="6">
+            <Ellipse x:Name="ServerStatusDot"
+                     Width="8"
+                     Height="8"
+                     VerticalAlignment="Center"
+                     Fill="#8B949E" />
+            <TextBlock x:Name="VersionText"
+                       FontSize="11"
+                       FontWeight="Bold"
+                       Foreground="White" />
+            <Button x:Name="ServerRestartButton"
+                    Click="ServerRestart_Click"
+                    Padding="4"
+                    MinWidth="0"
+                    MinHeight="0"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    VerticalAlignment="Center"
+                    Visibility="Collapsed"
+                    AutomationProperties.Name="Relaunch the llama server"
+                    ToolTipService.ToolTip="Relaunch the llama server">
+                <FontIcon Glyph="&#xE72C;"
+                          FontSize="11"
+                          Opacity="0.7" />
+            </Button>
+        </StackPanel>
 
     </Grid>
 </Window>

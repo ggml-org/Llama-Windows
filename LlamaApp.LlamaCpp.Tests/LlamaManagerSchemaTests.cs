@@ -63,6 +63,28 @@ public class LlamaManagerSchemaTests
     }
 
     [Fact]
+    public void Map_Downloading_Model_From_Dto()
+    {
+        // Real /models shape for a mid-download model: the id is the bare repo
+        // (the quant is resolved only on completion) and the status value is
+        // "downloading" — neither loading nor loaded.
+        var dto = new LlamaManager.ServerModelDto
+        {
+            Id = "mistralai/Ministral-3-3B-Instruct-2512-GGUF",
+            Status = new LlamaManager.ModelStatusDto { Value = "downloading" },
+            Architecture = new LlamaManager.ArchitectureDto { InputModalities = ["text"] },
+            Source = "cache",
+            CanRemove = true,
+        };
+
+        var model = LlamaManager.Map(dto);
+
+        Assert.True(model.IsDownloading);
+        Assert.False(model.IsLoading);
+        Assert.False(model.IsLoaded);
+    }
+
+    [Fact]
     public void Map_Null_Status_And_Architecture_Default_To_Unloaded()
     {
         var model = LlamaManager.Map(new LlamaManager.ServerModelDto());
@@ -269,6 +291,98 @@ public class LlamaManagerSchemaTests
 
         Assert.Equal(10, done);
         Assert.Equal(150, total);
+    }
+
+    // ----- status_change data payload (load progress) ----------------------
+
+    [Fact]
+    public void ParseStatusChange_Loading_Reports_Value_As_Fraction()
+    {
+        // Real payload captured from /models/sse while loading. A single-stage
+        // load reports the stage's value directly as the overall fraction.
+        const string dataJson = """
+            {"status":"loading","progress":{"stages":["text_model"],"current":"text_model","value":0.9664499163627625}}
+            """;
+
+        using var doc = JsonDocument.Parse(dataJson);
+        var (status, fraction) = LlamaManager.ParseStatusChange(doc.RootElement);
+
+        Assert.Equal("loading", status);
+        Assert.Equal(0.9664499163627625, fraction, precision: 6);
+    }
+
+    [Fact]
+    public void ParseStatusChange_Loaded_Carries_No_Progress()
+    {
+        // Real payload captured from /models/sse on completion (the info body
+        // is trimmed) — no progress object, so the fraction stays 0; callers
+        // report the terminal 1.0 themselves.
+        const string dataJson = """
+            {"status":"loaded","info":{"id":"ggml-org/gemma-3-1b-it-qat-GGUF:Q4_0"}}
+            """;
+
+        using var doc = JsonDocument.Parse(dataJson);
+        var (status, fraction) = LlamaManager.ParseStatusChange(doc.RootElement);
+
+        Assert.Equal("loaded", status);
+        Assert.Equal(0, fraction);
+    }
+
+    [Fact]
+    public void ParseStatusChange_MultiStage_Weights_Value_By_Stage_Position()
+    {
+        // Second of two stages at 50% -> (1 + 0.5) / 2 = 0.75 overall.
+        const string dataJson = """
+            {"status":"loading","progress":{"stages":["text_model","mmproj"],"current":"mmproj","value":0.5}}
+            """;
+
+        using var doc = JsonDocument.Parse(dataJson);
+        var (status, fraction) = LlamaManager.ParseStatusChange(doc.RootElement);
+
+        Assert.Equal("loading", status);
+        Assert.Equal(0.75, fraction, precision: 6);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("{\"status\":42}")]
+    public void ParseStatusChange_Missing_Or_Non_String_Status_Yields_Empty(string dataJson)
+    {
+        using var doc = JsonDocument.Parse(dataJson);
+        var (status, fraction) = LlamaManager.ParseStatusChange(doc.RootElement);
+
+        Assert.Equal("", status);
+        Assert.Equal(0, fraction);
+    }
+
+    [Fact]
+    public void ParseStatusChange_Non_Number_Value_Yields_Zero_Fraction()
+    {
+        // Regression: TryGetDouble throws on a String element (same as
+        // TryGetInt64) — the ValueKind guard must run before it.
+        const string dataJson = """
+            {"status":"loading","progress":{"value":"oops"}}
+            """;
+
+        using var doc = JsonDocument.Parse(dataJson);
+        var (status, fraction) = LlamaManager.ParseStatusChange(doc.RootElement);
+
+        Assert.Equal("loading", status);
+        Assert.Equal(0, fraction);
+    }
+
+    [Fact]
+    public void ParseStatusChange_Clamps_Out_Of_Range_Value()
+    {
+        const string dataJson = """
+            {"status":"loading","progress":{"stages":["text_model"],"current":"text_model","value":1.7}}
+            """;
+
+        using var doc = JsonDocument.Parse(dataJson);
+        var (_, fraction) = LlamaManager.ParseStatusChange(doc.RootElement);
+
+        Assert.Equal(1.0, fraction);
     }
 
     [Fact]
