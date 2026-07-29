@@ -63,6 +63,28 @@ public class LlamaManagerSchemaTests
     }
 
     [Fact]
+    public void Map_Downloading_Model_From_Dto()
+    {
+        // Real /models shape for a mid-download model: the id is the bare repo
+        // (the quant is resolved only on completion) and the status value is
+        // "downloading" — neither loading nor loaded.
+        var dto = new LlamaManager.ServerModelDto
+        {
+            Id = "mistralai/Ministral-3-3B-Instruct-2512-GGUF",
+            Status = new LlamaManager.ModelStatusDto { Value = "downloading" },
+            Architecture = new LlamaManager.ArchitectureDto { InputModalities = ["text"] },
+            Source = "cache",
+            CanRemove = true,
+        };
+
+        var model = LlamaManager.Map(dto);
+
+        Assert.True(model.IsDownloading);
+        Assert.False(model.IsLoading);
+        Assert.False(model.IsLoaded);
+    }
+
+    [Fact]
     public void Map_Null_Status_And_Architecture_Default_To_Unloaded()
     {
         var model = LlamaManager.Map(new LlamaManager.ServerModelDto());
