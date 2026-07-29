@@ -129,10 +129,17 @@
                                 VerticalAlignment="Center">
                         <!-- Download failed: warning dot + retry button. Shown
                              instead of the play glyph (PlayGlyphVisible excludes
-                             failed rows) so a broken download can't be "loaded". -->
+                             failed rows) so a broken download can't be "loaded".
+                             The panel is right-aligned, so the dot and the retry
+                             button occupy the same two slots as the delete and
+                             play buttons on an available row — both use the same
+                             16px glyph metrics as those buttons (and the retry
+                             button the same 0.5 opacity) so a row flipping
+                             between failed and available doesn't shift or shrink
+                             the action cell. -->
                         <FontIcon Visibility="{x:Bind DownloadFailed, Mode=OneWay}"
                                   Glyph="&#xE7BA;"
-                                  FontSize="13"
+                                  FontSize="16"
                                   Foreground="#F85149"
                                   VerticalAlignment="Center"
                                   Margin="0,0,2,0"
@@ -147,8 +154,8 @@
                                 AutomationProperties.Name="Retry download"
                                 ToolTipService.ToolTip="Retry download">
                             <FontIcon Glyph="&#xE72C;"
-                                      FontSize="13"
-                                      Opacity="0.6" />
+                                      FontSize="16"
+                                      Opacity="0.5" />
                         </Button>
 
                         <!-- Delete button: remove the model from the server's
