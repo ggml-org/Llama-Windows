@@ -1188,10 +1188,17 @@ public sealed class LlamaManager
         
         foreach (var url in progress.EnumerateObject().Where(url => url.Value.ValueKind == JsonValueKind.Object))
         {
-            if (url.Value.TryGetProperty("done", out var done))
-                downloaded += done.TryGetInt64(out var d) ? d : 0;
-            if (url.Value.TryGetProperty("total", out var tot))
-                total += tot.TryGetInt64(out var t) ? t : 0;
+            // TryGetInt64 throws InvalidOperationException on a non-Number
+            // element (e.g. a string) — it only returns false for numbers
+            // that don't fit — so the ValueKind must be checked first.
+            if (url.Value.TryGetProperty("done", out var done) &&
+                done.ValueKind == JsonValueKind.Number &&
+                done.TryGetInt64(out var d))
+                downloaded += d;
+            if (url.Value.TryGetProperty("total", out var tot) &&
+                tot.ValueKind == JsonValueKind.Number &&
+                tot.TryGetInt64(out var t))
+                total += t;
         }
 
         return (downloaded, total);
