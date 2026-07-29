@@ -28,6 +28,11 @@
              (StartupHelper) points its IconLocation at the exe, and Explorer
              falls back to it for unpackaged views of the binary. -->
         <ApplicationIcon>Assets\llama.ico</ApplicationIcon>
+        <!-- Assembly/file version shown in the app footer (MainWindow reads
+             AssemblyVersion). Keep in sync with Identity@Version in
+             Package.appxmanifest — single-project MSIX takes the package
+             version from the manifest, not from here. -->
+        <Version>0.0.6.0</Version>
         <PublishProfile>win-$(Platform).pubxml</PublishProfile>
         <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)')) >= 8">win-x86;win-x64;win-arm64</RuntimeIdentifiers>
         <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)')) &lt; 8">win10-x86;win10-x64;win10-arm64</RuntimeIdentifiers>
