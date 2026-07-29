@@ -93,7 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.make-release)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download all publish artifacts
         uses: actions/download-artifact@v8
