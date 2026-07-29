@@ -24,6 +24,10 @@
         <UseRidGraph>true</UseRidGraph>
         <Platforms>x86;x64;ARM64</Platforms>
         <ApplicationManifest>app.manifest</ApplicationManifest>
+        <!-- Embed the llama icon in the exe itself: the startup shortcut
+             (StartupHelper) points its IconLocation at the exe, and Explorer
+             falls back to it for unpackaged views of the binary. -->
+        <ApplicationIcon>Assets\llama.ico</ApplicationIcon>
         <PublishProfile>win-$(Platform).pubxml</PublishProfile>
         <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)')) >= 8">win-x86;win-x64;win-arm64</RuntimeIdentifiers>
         <RuntimeIdentifiers Condition="$([MSBuild]::GetTargetFrameworkVersion('$(TargetFramework)')) &lt; 8">win10-x86;win10-x64;win10-arm64</RuntimeIdentifiers>
@@ -41,21 +45,13 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <Content Include="Assets\SplashScreen.scale-200.png"/>
-        <Content Include="Assets\LockScreenLogo.scale-200.png"/>
-        <Content Include="Assets\Square150x150Logo.scale-200.png"/>
-        <Content Include="Assets\Square44x44Logo.scale-200.png"/>
-        <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png"/>
-        <Content Include="Assets\StoreLogo.png"/>
-        <Content Include="Assets\Wide310x150Logo.scale-200.png"/>
-        <Content Include="Assets\llama.ico"/>
-        <Content Include="Assets\llama-white.svg"/>
-        <Content Include="Assets\Logos\qwen.svg"/>
-        <Content Include="Assets\Logos\gemma.svg"/>
-        <Content Include="Assets\Logos\gpt.svg"/>
-        <Content Include="Assets\Logos\mistral.svg"/>
-        <Content Include="Assets\Logos\nvidia.svg"/>
-        <Content Include="Assets\Logos\z.svg"/>
+        <!-- All image assets — package logos at every scale (Start tile,
+             taskbar, installer dialog, Add/Remove Programs, splash), the tray
+             icon, and the per-row brand logos — ship as Content so the
+             single-project MSIX packs them and they land next to the exe for
+             AppContext.BaseDirectory lookups (see TrayIconManager). A glob, so
+             a newly added asset can't be forgotten from the package. -->
+        <Content Include="Assets\**" />
     </ItemGroup>
 
     <ItemGroup>

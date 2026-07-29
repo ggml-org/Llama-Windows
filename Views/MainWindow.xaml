@@ -100,16 +100,24 @@
                             </TextBlock>
                             <!-- Vision marker: shown when the server reports
                                  image input (architecture.input_modalities).
-                                 A small “glass” glyph, dimmed so it reads as a
-                                 capability hint rather than part of the name.
+                                 A small “view” (eye) glyph, dimmed so it reads
+                                 as a capability hint rather than part of the name.
                                  Tiled in the same gray rounded background as
-                                 the logo so it reads as a small chip. -->
+                                 the logo so it reads as a small chip.
+                                 The glyph MUST come from the intersection of
+                                 Segoe Fluent Icons and Segoe MDL2 Assets:
+                                 FontIcon falls back to MDL2 where the Fluent
+                                 font is missing/older (Windows 10, older
+                                 Windows 11), and there the prettier “glasses”
+                                 U+EB25 doesn't exist — it renders as the
+                                 crossed-square missing-glyph box. U+E890
+                                 (View) exists in both. -->
                             <Border CornerRadius="4"
                                     Background="{ThemeResource ControlFillColorSecondaryBrush}"
                                     Padding="4,1"
                                     VerticalAlignment="Center"
                                     Visibility="{x:Bind Vision, Mode=OneWay}">
-                                <FontIcon Glyph="&#xEB25;"
+                                <FontIcon Glyph="&#xE890;"
                                           FontSize="10"
                                           Opacity="0.55"
                                           HorizontalAlignment="Center"
