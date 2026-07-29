@@ -665,10 +665,15 @@ namespace LlamaApp.Views
         /// </summary>
         private void LocalModelDelete_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is not FrameworkElement fe) return;
-            _pendingDelete = ResolveRowItem(fe);
-            _deleteConfirmFlyout =
-                Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase.GetAttachedFlyout(fe);
+            if (sender is not Button btn) return;
+            _pendingDelete = ResolveRowItem(btn);
+            // Must read Button.Flyout, not FlyoutBase.GetAttachedFlyout: the
+            // flyout is set via the <Button.Flyout> property element, which is
+            // Button's own property — GetAttachedFlyout reads the separate
+            // FlyoutBase.AttachedFlyout attached property and returns null
+            // here, which made the confirm handler's Hide() a silent no-op
+            // (the flyout stayed open after clicking Delete).
+            _deleteConfirmFlyout = btn.Flyout;
         }
 
         /// <summary>
