@@ -1102,7 +1102,7 @@ public sealed class LlamaManager
     }
 
     // How long the load-progress SSE watch waits for a terminal status_change
-    // before deferring to the /models poller. Generous because mmapping a very
+    // before deferring to the /models poller. Generous because mapping a very
     // large model from a slow disk can take minutes.
     private static readonly TimeSpan LoadWatchTimeout = TimeSpan.FromMinutes(5);
 
@@ -1118,13 +1118,11 @@ public sealed class LlamaManager
         {
             var resp = await client.GetAsync(
                 $"{baseUrl}/models/sse", HttpCompletionOption.ResponseHeadersRead, cancel);
-            if (!resp.IsSuccessStatusCode)
-            {
-                Log.Warn($"SSE stream rejected ({(int)resp.StatusCode}); progress falls back to the poller");
-                resp.Dispose();
-                return null;
-            }
-            return resp;
+            if (resp.IsSuccessStatusCode) return resp;
+            
+            Log.Warn($"SSE stream rejected ({(int)resp.StatusCode}); progress falls back to the poller");
+            resp.Dispose();
+            return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
