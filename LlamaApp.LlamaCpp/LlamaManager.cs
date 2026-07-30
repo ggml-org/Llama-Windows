@@ -27,8 +27,34 @@ namespace LlamaApp.Llama;
 /// </summary>
 public sealed class LlamaManager
 {
-    /// <summary>Shared singleton, matching the macOS app's <c>.shared</c>.</summary>
-    public static LlamaManager Shared { get; } = new();
+    private static LlamaManager? _shared;
+
+    /// <summary>
+    /// Shared singleton, matching the macOS app's <c>.shared</c>. Created by
+    /// <see cref="Initialize"/> with the configured server port — the app calls
+    /// it once at startup (App.OnLaunched) before anything else can touch the
+    /// manager (the MainWindow constructor subscribes to its events).
+    /// </summary>
+    public static LlamaManager Shared =>
+        _shared ?? throw new InvalidOperationException(
+            "LlamaManager.Initialize(serverPort) must be called once at startup before first use.");
+
+    /// <summary>
+    /// Creates the <see cref="Shared"/> singleton bound to
+    /// <paramref name="serverPort"/>. Must be called once at startup, before the
+    /// first <see cref="Shared"/> access: the port is baked in at construction
+    /// and every health probe / launch argument / REST URL derives from it, so
+    /// a changed setting only takes effect on the next app launch.
+    /// </summary>
+    public static LlamaManager Initialize(int serverPort)
+    {
+        if (_shared is not null)
+            throw new InvalidOperationException("LlamaManager is already initialized.");
+        if (serverPort is < 1 or > 65535)
+            throw new ArgumentOutOfRangeException(nameof(serverPort), "Port must be in 1..65535.");
+        _shared = new LlamaManager(serverPort);
+        return _shared;
+    }
 
     /// <summary>URL of the official Windows install script.</summary>
     private static readonly Uri InstallScriptUrl = new("https://llama.app/install.ps1");
@@ -88,8 +114,19 @@ public sealed class LlamaManager
         Failed,
     }
 
-    /// <summary>Port the local llama server listens on (matches the flyout link).</summary>
-    public const int ServerPort = 2276;
+    /// <summary>
+    /// Default port the local llama server listens on when the user hasn't
+    /// configured one (mirrored by <c>Settings.ServerPort</c> in the app project).
+    /// </summary>
+    public const int DefaultServerPort = 9931;
+
+    /// <summary>
+    /// Port the local llama server listens on (matches the flyout link). Fixed
+    /// at construction via <see cref="Initialize"/> — the supervisor loop,
+    /// health probes, server launch arguments and every REST URL are built
+    /// from it.
+    /// </summary>
+    public int ServerPort { get; }
 
     /// <summary>
     /// Hugging Face cache directory passed to the server via
@@ -198,8 +235,10 @@ public sealed class LlamaManager
     /// </summary>
     public event EventHandler<IReadOnlyList<ServerModel>>? ModelsChanged;
 
-    private LlamaManager()
+    private LlamaManager(int serverPort)
     {
+        ServerPort = serverPort;
+
         // The supervisor is the ONLY source of truth for server status: it
         // polls the HTTP API for the app's whole lifetime and derives
         // ServerStatus from the answers — no process-handle assumptions.
@@ -243,7 +282,7 @@ public sealed class LlamaManager
             // Probe briefly (a few attempts over ~3s) rather than once: a sibling
             // app instance / a manual launch / a server that's just binding won't
             // answer the very first probe, and a single has misused to spawn a
-            // SECOND `llama serve --port 2276` here — leaving two processes eating
+            // SECOND `llama serve` on the same port here — leaving two processes eating
             // RAM (the loser fails to bind, but the app would also abandon timed-
             // out launches alive — see StartServerAsync). A short adoption window
             // catches the in-flight server and adopts it instead.
@@ -291,7 +330,7 @@ public sealed class LlamaManager
     /// atomic unit used by the retrying <see cref="WaitForReachableAsync"/> and
     /// by the last-chance re-probe in <see cref="StartServerAsync"/>.
     /// </summary>
-    private static async Task<bool> ProbeHealthAsync(CancellationToken cancel)
+    private async Task<bool> ProbeHealthAsync(CancellationToken cancel)
     {
         try
         {
@@ -310,12 +349,11 @@ public sealed class LlamaManager
     /// returning <c>true</c> as soon as a server responds. Used to ADOPT an
     /// already-running server (a sibling app instance, a manual launch, or one
     /// that's mid-bind) rather than spawning a duplicate on the same port — the
-    /// fix for several <c>llama serve --port 2276</c> processes piling up and
-    /// eating RAM. The window is short, so a genuinely absent server doesn't
+    /// fix for several <c>llama serve</c> processes piling up and eating RAM. The window is short, so a genuinely absent server doesn't
     /// delay startup by much (each refusal is near-instant; the 250ms cadence
     /// is what bounds the worst case).
     /// </summary>
-    private static async Task<bool> WaitForReachableAsync(TimeSpan timeout, CancellationToken cancel)
+    private async Task<bool> WaitForReachableAsync(TimeSpan timeout, CancellationToken cancel)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
@@ -513,7 +551,7 @@ public sealed class LlamaManager
     }
 
     /// <summary>
-    /// Polls <c>http://localhost:2276/health</c> until it responds or the timeout
+    /// Polls <c>GET /health</c> on the configured port until it responds or the timeout
     /// elapses (or the spawned <paramref name="proc"/> exits first). The llama
     /// server exposes a health endpoint once it's bound and ready; this confirms
     /// the port is actually serving rather than just waiting for a fixed delay.
@@ -522,7 +560,7 @@ public sealed class LlamaManager
     /// sibling already did) so we don't sit out the full timeout before tearing
     /// down — and we don't keep around a dead-but-tracked process reference.
     /// </summary>
-    private static async Task<bool> WaitForPortAsync(Process proc, TimeSpan timeout, CancellationToken cancel)
+    private async Task<bool> WaitForPortAsync(Process proc, TimeSpan timeout, CancellationToken cancel)
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         var deadline = DateTime.UtcNow + timeout;

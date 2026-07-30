@@ -728,7 +728,7 @@ namespace LlamaApp.Views
             var serverModelId = ((IModel)item).ServerModelId;
             Log.Info("open clicked for " + serverModelId);
             
-            var url = $"http://localhost:{LlamaManager.ServerPort}?model={Uri.EscapeDataString(serverModelId)}";
+            var url = $"http://localhost:{LlamaManager.Shared.ServerPort}?model={Uri.EscapeDataString(serverModelId)}";
             await Windows.System.Launcher.LaunchUriAsync(new Uri(url));
         }
 
@@ -1293,7 +1293,7 @@ namespace LlamaApp.Views
         {
             // Open the running llama server's WebUI in the system browser.
             await Windows.System.Launcher.LaunchUriAsync(
-                new System.Uri($"http://localhost:{LlamaManager.ServerPort}"));
+                new System.Uri($"http://localhost:{LlamaManager.Shared.ServerPort}"));
         }
 
         private void Settings_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)

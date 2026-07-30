@@ -50,6 +50,15 @@ public sealed class Settings
             ".cache", "huggingface", "hub");
 
     /// <summary>
+    /// Port the local llama server listens on (default 9931). Read once at
+    /// startup when the <see cref="Llama.LlamaManager"/> singleton is created
+    /// (App.OnLaunched), so a changed value takes effect on the next app
+    /// launch. Valid range: 1–65535; out-of-range values fall back to the
+    /// default at startup.
+    /// </summary>
+    public int ServerPort { get; set; } = Llama.LlamaManager.DefaultServerPort;
+
+    /// <summary>
     /// Whether LlamaApp should launch automatically when the user signs in to
     /// Windows. The authoritative state is the presence of the startup
     /// shortcut managed by <see cref="StartupHelper"/> (in the user's Startup

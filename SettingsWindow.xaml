@@ -169,6 +169,49 @@
                     </StackPanel>
                 </Border>
 
+                <!-- Llama server port -->
+                <Border CornerRadius="8"
+                        Padding="16,14"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1">
+                    <StackPanel Spacing="10">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0"
+                                    Width="36" Height="36"
+                                    CornerRadius="6"
+                                    Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                    VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xE968;"
+                                          FontSize="16"
+                                          Foreground="White"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center" />
+                            </Border>
+                            <TextBlock Grid.Column="1"
+                                       Text="Llama Server Port"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                        </Grid>
+                        <TextBlock Text="Port the local llama server listens on (1–65535). Takes effect the next time LlamaApp starts."
+                                   FontSize="12"
+                                   Opacity="0.6"
+                                   TextWrapping="WrapWholeWords" />
+                        <NumberBox x:Name="PortBox"
+                                   Minimum="1"
+                                   Maximum="65535"
+                                   SmallChange="1"
+                                   LargeChange="10"
+                                   SpinButtonPlacementMode="Hidden"
+                                   ToolTipService.ToolTip="Port for the local llama server (1–65535)" />
+                    </StackPanel>
+                </Border>
+
                 <!-- Launch at startup (toggle) -->
                 <Border CornerRadius="8"
                         Padding="16,14"
