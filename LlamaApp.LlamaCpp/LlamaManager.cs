@@ -27,6 +27,13 @@ namespace LlamaApp.Llama;
 /// <see cref="GetModelsAsync"/> lists locally available models via the
 /// <c>GET /models</c> REST endpoint.
 /// </para>
+///
+/// <para>A server the app starts is <b>managed</b>: its PID is written to
+/// <c>%LOCALAPPDATA%\LlamaApp\.llama.pid</c> right after spawn, so that after
+/// an app crash the next instance still recognizes the surviving server as its
+/// own — and kills it on exit (<see cref="StopServer"/>). Servers started any
+/// other way (manually, whatever the binary) have no PID file and are left
+/// alone.</para>
 /// </summary>
 public sealed class LlamaManager
 {
@@ -61,11 +68,6 @@ public sealed class LlamaManager
 
     /// <summary>URL of the official Windows install script.</summary>
     private static readonly Uri InstallScriptUrl = new("https://llama.app/install.ps1");
-
-    private static readonly HttpClient Client = new()
-    {
-        Timeout = TimeSpan.FromSeconds(30)
-    };
 
     /// <summary>
     /// The install dir <c>install.ps1</c> targets — on the user PATH by default,
@@ -171,6 +173,19 @@ public sealed class LlamaManager
     // races are handled by the retrying adoption probe (see WaitForReachableAsync).
     private readonly SemaphoreSlim _ensureGate = new(1, 1);
 
+    /// <summary>
+    /// The single <see cref="HttpClient"/> for every llama-server REST call.
+    /// <see cref="HttpClient.BaseAddress"/> carries the configured port —
+    /// 127.0.0.1, not localhost: llama.cpp binds the IPv4 loopback by default,
+    /// and this sidesteps localhost→::1 resolution quirks. The handler bypasses
+    /// the system proxy: a configured proxy/VPN must never intercept loopback
+    /// traffic (the classic cause of "browser gets 200 OK, HttpClient fails").
+    /// The client-level timeout is infinite; each call bounds itself with a
+    /// linked token (<see cref="WithTimeout"/>) so SSE streams can run
+    /// unbounded while probes stay snappy.
+    /// </summary>
+    private readonly HttpClient _http;
+
     /// <summary>Current installation state.</summary>
     public InstallState State
     {
@@ -261,6 +276,11 @@ public sealed class LlamaManager
     private LlamaManager(int serverPort)
     {
         ServerPort = serverPort;
+        _http = new HttpClient(new SocketsHttpHandler { UseProxy = false })
+        {
+            BaseAddress = new Uri($"http://127.0.0.1:{serverPort}"),
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
 
         // The supervisor is the ONLY source of truth for server status: it
         // polls the HTTP API for the app's whole lifetime and derives
@@ -353,12 +373,30 @@ public sealed class LlamaManager
     /// atomic unit used by the retrying <see cref="WaitForReachableAsync"/> and
     /// by the last-chance re-probe in <see cref="StartServerAsync"/>.
     /// </summary>
+    /// <summary>
+    /// A linked token that cancels after <paramref name="timeout"/> — the
+    /// per-call time budget replacing <see cref="HttpClient.Timeout"/> (the
+    /// shared <see cref="_http"/> runs with an infinite timeout so SSE streams
+    /// aren't cut).
+    /// </summary>
+    private static CancellationTokenSource WithTimeout(TimeSpan timeout, CancellationToken cancel)
+    {
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+        cts.CancelAfter(timeout);
+        return cts;
+    }
+
     private async Task<bool> ProbeHealthAsync(CancellationToken cancel)
     {
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };
-            using var resp = await client.GetAsync($"http://localhost:{ServerPort}/health", cancel);
+            // 5s per-call budget: a refused connection (no server) fails
+            // instantly regardless — the budget only bounds a server that is
+            // listening but slow to answer (busy loading a model). The old
+            // per-call client with a 1s timeout and system-proxy defaults is
+            // what made this return false while a browser got 200 OK.
+            using var budget = WithTimeout(TimeSpan.FromSeconds(5), cancel);
+            using var resp = await _http.GetAsync("/health", budget.Token);
             return true;
         }
         catch
@@ -475,6 +513,25 @@ public sealed class LlamaManager
             return true;
         }
 
+        // A live MANAGED server (valid PID file) that isn't responding yet is
+        // still ours — the app may have crashed and restarted while the server
+        // was mid-startup. DON'T kill it: give it a grace window to come up and
+        // adopt it. Only if it never responds (genuinely hung) do we reclaim
+        // it below — it's ours, so killing is safe.
+        if (ReadLiveManagedPid(PidFilePath) is { } managedPid)
+        {
+            Log.Info($"managed llama server (pid {managedPid}) is alive but not reachable yet; waiting for it");
+            ServerStatus = ServerState.Starting;
+            if (await WaitForReachableAsync(TimeSpan.FromSeconds(15), cancel))
+            {
+                Log.Info($"adopted the managed llama server (pid {managedPid})");
+                ServerStatus = ServerState.Running;
+                _ = ResolveAndReadVersionAsync(cancel);
+                return true;
+            }
+            Log.Warn($"managed llama server (pid {managedPid}) never became reachable; killing and relaunching");
+        }
+
         StopServer(); // reclaim any prior instance / port
 
         ServerStatus = ServerState.Starting;
@@ -533,6 +590,9 @@ public sealed class LlamaManager
                 return false;
             }
             _serverProcess = proc;
+            // Track ownership across app restarts: if the app crashes, the next
+            // instance recognizes this server as managed via the PID file.
+            WritePidFile(proc.Id);
 
             // Wait for the port to respond — the server takes a moment to bind.
             // We pass `proc` so the wait fast-fails if the process exits before
@@ -586,21 +646,139 @@ public sealed class LlamaManager
     }
 
     /// <summary>
-    /// Stops the running server process (if any). Safe to call repeatedly.
+    /// Stops the running <b>managed</b> server (if any). Safe to call repeatedly.
     /// Sets state to <see cref="ServerState.Stopped"/> before killing: Stopped
     /// marks the stop as deliberate app intent, and the supervisor never
     /// probes or transitions out of Stopped on its own (see
     /// <see cref="DeriveServerStatus"/>).
+    ///
+    /// <para>"Managed" = an app instance started the server: either this one
+    /// (we hold the process handle) or a previous one that crashed — proven by
+    /// the <c>.llama.pid</c> file (<see cref="ReadLiveManagedPid"/>). A server
+    /// with no valid PID file (started manually by the user, whatever the
+    /// binary) is not ours and is left running.</para>
     /// </summary>
     public void StopServer()
     {
         ServerStatus = ServerState.Stopped;
+
         var proc = _serverProcess;
         _serverProcess = null;
-        if (proc == null || proc.HasExited) return;
-        
-        try { proc.Kill(entireProcessTree: true); }
-        catch (Exception ex) { Log.Warn(ex, "best-effort server kill failed"); }
+
+        if (proc is not null)
+        {
+            // Spawned this session. Clear the PID file only if it still tracks
+            // THIS process — a racing instance may have rewritten it for a
+            // newer server.
+            if (ReadPidFile(PidFilePath) == proc.Id) DeletePidFile();
+            if (!proc.HasExited)
+            {
+                try { proc.Kill(entireProcessTree: true); }
+                catch (Exception ex) { Log.Warn(ex, "best-effort server kill failed"); }
+            }
+            return;
+        }
+
+        // Adopted managed server (started by a previous/crashed instance): no
+        // handle of ours, but a valid PID file proves ownership — kill by PID.
+        if (ReadLiveManagedPid(PidFilePath) is { } managedPid)
+        {
+            DeletePidFile();
+            try
+            {
+                Log.Info($"killing managed llama server by PID file (pid {managedPid})");
+                Process.GetProcessById(managedPid).Kill(entireProcessTree: true);
+            }
+            catch (Exception ex) { Log.Warn(ex, $"best-effort managed server kill failed (pid {managedPid})"); }
+        }
+    }
+
+    // ---- Managed-server PID file ----
+
+    /// <summary>
+    /// Path of the PID file tracking the managed llama server:
+    /// <c>%LOCALAPPDATA%\LlamaApp\.llama.pid</c>. Written by
+    /// <see cref="StartServerAsync"/> right after the server process is spawned;
+    /// read back after an app crash/restart to recognize the surviving server
+    /// as ours (managed) — and therefore safe to stop. Deleted when the managed
+    /// server is stopped or found dead.
+    /// </summary>
+    private static string PidFilePath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LlamaApp", ".llama.pid");
+
+    /// <summary>Writes <paramref name="pid"/> to the PID file. Best-effort.</summary>
+    private static void WritePidFile(int pid)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(PidFilePath)!);
+            File.WriteAllText(PidFilePath, pid.ToString());
+        }
+        catch (Exception ex) { Log.Warn(ex, "best-effort PID file write failed"); }
+    }
+
+    private static void DeletePidFile() => DeletePidFile(PidFilePath);
+
+    /// <summary>Deletes the PID file if present. Best-effort.</summary>
+    private static void DeletePidFile(string pidFilePath)
+    {
+        try { if (File.Exists(pidFilePath)) File.Delete(pidFilePath); }
+        catch (Exception ex) { Log.Warn(ex, "best-effort PID file delete failed"); }
+    }
+
+    /// <summary>
+    /// Raw PID-file parse: the stored PID, or <c>null</c> when the file is
+    /// missing or unreadable. Garbage content is deleted rather than kept.
+    /// </summary>
+    private static int? ReadPidFile(string pidFilePath)
+    {
+        string text;
+        try
+        {
+            if (!File.Exists(pidFilePath)) return null;
+            text = File.ReadAllText(pidFilePath).Trim();
+        }
+        catch (Exception ex) { Log.Warn(ex, "PID file read failed"); return null; }
+
+        if (int.TryParse(text, out var pid) && pid > 0) return pid;
+
+        DeletePidFile(pidFilePath); // garbage — don't keep it around
+        return null;
+    }
+
+    /// <summary>
+    /// Crash-safe managed-server check: the PID from
+    /// <paramref name="pidFilePath"/>, but only if that process is still alive
+    /// AND is actually a llama server — guarding against PID reuse (the OS
+    /// recycling our dead server's PID for an unrelated process): the process
+    /// must be named <c>llama</c> and must have started before the PID file was
+    /// written (we write right after <see cref="Process.Start"/>). A stale or
+    /// mismatched file is deleted so the check stays cheap. Internal for tests.
+    /// </summary>
+    internal static int? ReadLiveManagedPid(string pidFilePath)
+    {
+        if (ReadPidFile(pidFilePath) is not { } pid) return null;
+
+        try
+        {
+            using var proc = Process.GetProcessById(pid);
+            var isLlama = string.Equals(proc.ProcessName, "llama", StringComparison.OrdinalIgnoreCase);
+            var startedBeforeWrite =
+                proc.StartTime.ToUniversalTime() <= File.GetLastWriteTimeUtc(pidFilePath) + TimeSpan.FromSeconds(5);
+            if (isLlama && startedBeforeWrite) return pid;
+        }
+        catch (ArgumentException) { /* no such process — stale file */ }
+        catch (Exception ex)
+        {
+            // Couldn't verify (e.g., access denied): don't kill what we can't
+            // identify, but keep the file for a later re-check.
+            Log.Warn(ex, $"managed-server PID check failed (pid {pid})");
+            return null;
+        }
+
+        DeletePidFile(pidFilePath); // stale or PID reused — clean up
+        return null;
     }
 
     /// <summary>
@@ -615,9 +793,7 @@ public sealed class LlamaManager
     /// </summary>
     private async Task<bool> WaitForPortAsync(Process proc, TimeSpan timeout, CancellationToken cancel)
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
         var deadline = DateTime.UtcNow + timeout;
-        var url = $"http://localhost:{ServerPort}/health";
 
         while (DateTime.UtcNow < deadline)
         {
@@ -631,7 +807,8 @@ public sealed class LlamaManager
             {
                 // Any HTTP response (even an error code) means the server is
                 // up and listening — a connection-refused means it's not yet.
-                var resp = await client.GetAsync(url, cancel);
+                using var budget = WithTimeout(TimeSpan.FromSeconds(2), cancel);
+                using var resp = await _http.GetAsync("/health", budget.Token);
                 return true;
             }
             catch
@@ -799,10 +976,7 @@ public sealed class LlamaManager
             return false;
         }
 
-        var baseUrl = $"http://localhost:{ServerPort}";
         var modelName = model.Name;
-
-        using var sseClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 
         // Open the SSE stream first so we don't miss the earliest progress events.
         // HttpCompletionOption.ResponseHeadersRead lets us read the body as it
@@ -811,8 +985,8 @@ public sealed class LlamaManager
         // is released on EVERY exit path — the early returns from a POST failure
         // and the throw on cancellation used to skip the only Dispose() call,
         // leaking an HTTP connection per failed/canceled download.
-        using var sseResponse = await sseClient.GetAsync(
-            $"{baseUrl}/models/sse",
+        using var sseResponse = await _http.GetAsync(
+            "/models/sse",
             HttpCompletionOption.ResponseHeadersRead,
             cancel);
         sseResponse.EnsureSuccessStatusCode();
@@ -830,7 +1004,8 @@ public sealed class LlamaManager
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
         try
         {
-            using var postResp = await Client.PostAsync($"{baseUrl}/models", content, cancel);
+            using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
+            using var postResp = await _http.PostAsync("/models", content, budget.Token);
             if (!postResp.IsSuccessStatusCode)
             {
                 var body = await postResp.Content.ReadAsStringAsync(cancel);
@@ -902,7 +1077,7 @@ public sealed class LlamaManager
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
             // User canceled — ask the server to stop the download.
-            await CancelServerDownloadAsync(Client, baseUrl, modelName);
+            await CancelServerDownloadAsync(modelName);
             progress?.Report(new ModelDownloadProgress(
                 modelName, 0, 0, Done: false, Failed: false, Message: "Cancelled"));
             throw;
@@ -944,16 +1119,13 @@ public sealed class LlamaManager
         if (ServerStatus != ServerState.Running)
             return false;
 
-        var baseUrl = $"http://localhost:{ServerPort}";
-
-        // Same pattern as DownloadModelAsync: a dedicated long-lived client, the
+        // Same pattern as DownloadModelAsync: the shared long-lived client, the
         // body read as it arrives, and `using` on the response so the connection
         // is released on every exit path. A dead stream degrades to "no
         // progress" — the poller keeps the row's state truthful regardless.
-        using var sseClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         try
         {
-            using var sseResponse = await TryOpenSseAsync(sseClient, baseUrl, cancel);
+            using var sseResponse = await TryOpenSseAsync(cancel);
             if (sseResponse is null)
                 return false;
 
@@ -1027,14 +1199,12 @@ public sealed class LlamaManager
         if (ServerStatus != ServerState.Running)
             return false;
 
-        var baseUrl = $"http://localhost:{ServerPort}";
         var modelId = model.ServerModelId;
 
         // Open the SSE stream before the POST when progress is wanted. If it
         // can't be opened (older server without /models/sse), degrade to
         // fire-and-forget — the /models poller still reconciles the state.
-        using var sseClient = progress is null ? null : new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-        using var sseResponse = await TryOpenSseAsync(sseClient, baseUrl, cancel);
+        using var sseResponse = progress is null ? null : await TryOpenSseAsync(cancel);
         using var reader = sseResponse is null
             ? null
             : new StreamReader(await sseResponse.Content.ReadAsStreamAsync(cancel));
@@ -1044,7 +1214,8 @@ public sealed class LlamaManager
             Log.Info($"loading model {modelId}");
             var payload = $$"""{"model":"{{modelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            using var resp = await Client.PostAsync($"{baseUrl}/models/load", content, cancel);
+            using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
+            using var resp = await _http.PostAsync("/models/load", content, budget.Token);
             if (!resp.IsSuccessStatusCode)
             {
                 Log.Warn($"server rejected model load ({(int)resp.StatusCode})");
@@ -1117,13 +1288,12 @@ public sealed class LlamaManager
     /// Returns <c>null</c> (and logs) when the stream can't be opened — the
     /// caller then degrades to poller-only state tracking.
     /// </summary>
-    private static async Task<HttpResponseMessage?> TryOpenSseAsync(HttpClient? client, string baseUrl, CancellationToken cancel)
+    private async Task<HttpResponseMessage?> TryOpenSseAsync(CancellationToken cancel)
     {
-        if (client is null) return null;
         try
         {
-            var resp = await client.GetAsync(
-                $"{baseUrl}/models/sse", HttpCompletionOption.ResponseHeadersRead, cancel);
+            var resp = await _http.GetAsync(
+                "/models/sse", HttpCompletionOption.ResponseHeadersRead, cancel);
             if (resp.IsSuccessStatusCode) return resp;
             
             Log.Warn($"SSE stream rejected ({(int)resp.StatusCode}); progress falls back to the poller");
@@ -1158,10 +1328,10 @@ public sealed class LlamaManager
         {
             Log.Info($"unloading model {model.ServerModelId}");
 
-            var baseUrl = $"http://localhost:{ServerPort}";
             var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
-            using var resp = await Client.PostAsync($"{baseUrl}/models/unload", content, cancel);
+            using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
+            using var resp = await _http.PostAsync("/models/unload", content, budget.Token);
             if (!resp.IsSuccessStatusCode)
                 Log.Warn($"server rejected model unload ({(int)resp.StatusCode})");
             
@@ -1195,13 +1365,12 @@ public sealed class LlamaManager
         if (ServerStatus != ServerState.Running)
             return false;
 
-        var baseUrl = $"http://localhost:{ServerPort}";
-
         try
         {
             Log.Info($"deleting model {model.ServerModelId}");
-            var url = $"{baseUrl}/models?model={Uri.EscapeDataString(model.ServerModelId)}";
-            using var resp = await Client.DeleteAsync(url, cancel);
+            var url = $"/models?model={Uri.EscapeDataString(model.ServerModelId)}";
+            using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
+            using var resp = await _http.DeleteAsync(url, budget.Token);
             if (!resp.IsSuccessStatusCode)
             {
                 Log.Warn($"server rejected model delete ({(int)resp.StatusCode})");
@@ -1259,11 +1428,10 @@ public sealed class LlamaManager
         if (ServerStatus != ServerState.Running)
             return [];
 
-        var baseUrl = $"http://localhost:{ServerPort}";
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         try
         {
-            using var resp = await client.GetAsync($"{baseUrl}/models", cancel);
+            using var budget = WithTimeout(TimeSpan.FromSeconds(10), cancel);
+            using var resp = await _http.GetAsync("/models", budget.Token);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
             var dto = await JsonSerializer.DeserializeAsync<ModelsResponseDto>(stream, cancellationToken: cancel);
@@ -1316,23 +1484,20 @@ public sealed class LlamaManager
         var model = LoadedModelId
             ?? throw new InvalidOperationException("No model is loaded. Load one from the flyout first.");
 
-        var baseUrl = $"http://localhost:{ServerPort}";
-        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-
         var body = $$"""{"model":"{{model}}","stream":true, "return_progress": true, "messages":[{"role":"user","content":{{JsonString(userMessage)}}}]}""";
         // SendAsync with ResponseHeadersRead returns as soon as the response
         // headers arrive, so we can read the SSE body incrementally below.
         // PostAsync (the default ResponseContentRead) would buffer the entire
         // response before completing — defeating streaming and making the
         // overlay hang until the whole generation finished.
-        using var req = new HttpRequestMessage(HttpMethod.Post, new Uri($"{baseUrl}/v1/chat/completions"))
+        using var req = new HttpRequestMessage(HttpMethod.Post, new Uri("/v1/chat/completions", UriKind.Relative))
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
         
         Log.Info($"chat completion → POST /v1/chat/completions (model={model}, prompt={userMessage.Length} chars)");
         
-        using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancel);
+        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancel);
         Log.Info($"chat completion ← HTTP {(int)resp.StatusCode} {resp.StatusCode}");
         resp.EnsureSuccessStatusCode();
 
@@ -1607,11 +1772,12 @@ public sealed class LlamaManager
     /// finished or the request may fail; either way the SSE stream is closed
     /// by the caller's cancellation.
     /// </summary>
-    private static async Task CancelServerDownloadAsync(HttpClient client, string baseUrl, string modelName)
+    private async Task CancelServerDownloadAsync(string modelName)
     {
         try
         {
-            using var resp = await client.DeleteAsync($"{baseUrl}/models/{Uri.EscapeDataString(modelName)}");
+            using var budget = WithTimeout(TimeSpan.FromSeconds(10), CancellationToken.None);
+            using var resp = await _http.DeleteAsync($"/models/{Uri.EscapeDataString(modelName)}", budget.Token);
         }
         catch { /* Best-effort — don't surface cancel cleanup failures. */ }
     }
@@ -1705,6 +1871,9 @@ public sealed class LlamaManager
         var scriptPath = Path.Combine(Path.GetTempPath(), $"llama-install-{Guid.NewGuid():N}.ps1");
         try
         {
+            // Deliberately NOT the shared _http: this is an internet download
+            // (llama.app), not a loopback call — the system proxy is welcome
+            // here, and the BaseAddress wouldn't apply.
             using (var client = new HttpClient())
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
