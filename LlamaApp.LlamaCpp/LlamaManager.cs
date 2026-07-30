@@ -137,6 +137,19 @@ public sealed class LlamaManager
     /// </summary>
     public string? CacheDirectory { get; set; }
 
+    /// <summary>
+    /// Hugging Face access token passed to the server via <c>HF_TOKEN</c> so
+    /// it can pull private/gated models on the user's behalf (llama.cpp reads
+    /// the variable and sends it as a Bearer token on Hub requests). Set by
+    /// the caller (App.OnLaunched reads it from
+    /// <c>Settings.Current.HuggingFaceToken</c>) — kept here rather than
+    /// reading <c>Settings</c> directly to avoid a circular project
+    /// dependency. Only affects servers the app launches: an adopted
+    /// already-running server keeps whatever environment it was started with.
+    /// Never logged — presence only.
+    /// </summary>
+    public string? HuggingFaceToken { get; set; }
+
     private Process? _serverProcess;
 
     // Single-flight guard for EnsureLlamaOrDownloadAsync / StartServerAsync. Called
@@ -475,6 +488,17 @@ public sealed class LlamaManager
             // resolves downloaded models from the same place the app scans.
             if (!string.IsNullOrEmpty(CacheDirectory) && Directory.Exists(CacheDirectory))
                 psi.EnvironmentVariables["HF_HUB_CACHE"] = CacheDirectory;
+
+            // Hand the server the user's HF access token (if any) so it can
+            // download private/gated models. Passed as an environment variable
+            // — llama.cpp has no token CLI flag, and an arg would be visible in
+            // process listings. Log presence only, never the value.
+            var hfToken = HuggingFaceToken?.Trim();
+            if (!string.IsNullOrEmpty(hfToken))
+            {
+                psi.EnvironmentVariables["HF_TOKEN"] = hfToken;
+                Log.Info("HF token configured; passing HF_TOKEN to the llama server");
+            }
 
             Log.Info($"starting llama server: {BinaryPath} serve --port {ServerPort} --jinja");
 
