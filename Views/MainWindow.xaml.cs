@@ -138,6 +138,7 @@ namespace LlamaApp.Views
             LoadVersionInfo();
             UpdateServerStatusUI();
             UpdateEmptyState();
+            _ = LoadAvatarAsync();
 
             // Refresh the footer's llama.cpp version as the binary is
             // detected/installed. LlamaManager.EnsureLlamaOrDownloadAsync runs
@@ -1304,7 +1305,62 @@ namespace LlamaApp.Views
             HideFlyout();
 
             var w = new SettingsWindow();
+            // The token may have changed — re-resolve the header avatar.
+            w.Closed += (_, _) => _ = LoadAvatarAsync();
             w.Activate();
+        }
+
+        // ---- HF avatar ----
+
+        // Profile URL the avatar button opens (hf.co/<name>). Null while no
+        // whoami-v2 lookup has succeeded.
+        private string? _avatarProfileUrl;
+
+        /// <summary>
+        /// Resolves the Hugging Face user behind the configured token
+        /// (whoami-v2) and shows their avatar in the header, left of the
+        /// settings gear. Hidden when no token is configured; a rejected token
+        /// or network failure just keeps the previous state — the avatar is a
+        /// best-effort decoration. Runs on the UI thread after the await.
+        /// </summary>
+        private async Task LoadAvatarAsync()
+        {
+            try
+            {
+                var token = Settings.Current.HuggingFaceToken;
+                if (string.IsNullOrWhiteSpace(token))
+                {
+                    AvatarButton.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+                    _avatarProfileUrl = null;
+                    return;
+                }
+
+                var info = await new HubClient(token).UserInfo.WhoAmI();
+                if (info is null) return; // rejected token / network hiccup — keep as-is
+
+                if (!string.IsNullOrEmpty(info.AvatarUrl))
+                {
+                    AvatarPicture.ProfilePicture = new Microsoft.UI.Xaml.Media.Imaging
+                        .BitmapImage(new Uri(info.AvatarUrl));
+                }
+                // Initials fallback if the image is missing or fails to load.
+                AvatarPicture.DisplayName = info.Name;
+
+                // The public profile page is hf.co/<username> — the whoami `id`
+                // is an internal ObjectId the website doesn't route.
+                _avatarProfileUrl = $"https://hf.co/{info.Name}";
+                AvatarButton.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(ex, "avatar load failed; staying hidden");
+            }
+        }
+
+        private async void Avatar_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            if (_avatarProfileUrl is null) return;
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(_avatarProfileUrl));
         }
 
         private void Quit_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
