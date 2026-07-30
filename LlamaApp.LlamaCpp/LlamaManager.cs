@@ -76,6 +76,13 @@ public sealed class LlamaManager
     private static string ManagedBinaryPath => Path.Combine(ManagedDir, "llama.exe");
 
     /// <summary>
+    /// The install directory the app manages — surfaced read-only in Settings
+    /// ("Installation Folder" card). External (PATH) installations are never
+    /// managed: their location comes from <see cref="BinaryPath"/> instead.
+    /// </summary>
+    public static string ManagedInstallDir => ManagedDir;
+
+    /// <summary>
     /// Where the resolved binary comes from — surfaced in the flyout footer, so
     /// an external installation isn't mistaken for the app's own (and a stale
     /// version isn't mistaken for a bug).
@@ -554,6 +561,22 @@ public sealed class LlamaManager
             ServerStatus = ServerState.Failed;
             return false;
         }
+    }
+
+    /// <summary>
+    /// Called after the managed install folder was emptied (from Settings):
+    /// drops the stale binary/version/origin so the UI stops advertising an
+    /// installation that no longer exists. The next
+    /// <see cref="EnsureLlamaOrDownloadAsync"/> re-resolves from scratch and
+    /// reinstalls on demand. No-op for external installations — they are not
+    /// the app's to remove.
+    /// </summary>
+    public void NotifyManagedInstallRemoved()
+    {
+        if (CurrentOrigin != Origin.Managed) return;
+        BinaryPath = null;
+        Version = null;
+        CurrentOrigin = Origin.Unknown;
     }
 
     /// <summary>
@@ -1056,7 +1079,7 @@ public sealed class LlamaManager
                         return true;
                     case "unloaded":
                         // Rolled back — the load failed server-side (e.g. the
-                        // child process died while mmapping the weights).
+                        // child process died while mapping the weights).
                         Log.Warn($"load of {modelId} rolled back to unloaded");
                         return false;
                 }

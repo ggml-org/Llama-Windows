@@ -6,10 +6,11 @@ using WinRT.Interop;
 namespace LlamaApp
 {
     /// <summary>
-    /// A small centered settings window (separate from the tray flyout) for
-    /// editing the Hugging Face token (password-masked), the local models
-    /// cache directory (with a folder picker) and the llama server port.
-    /// Saves to <see cref="Settings"/> on Save; discards on Cancel.
+    /// A small centered settings window (separate from the tray flyout) styled
+    /// after the Windows 11 Settings app: a left NavigationView with three
+    /// pages — General (launch at startup, local models cache), Identity
+    /// (Hugging Face token) and Llama (server port). Saves to
+    /// <see cref="Settings"/> on Save; discards on Cancel.
     /// </summary>
     public sealed partial class SettingsWindow : Window
     {
@@ -85,6 +86,109 @@ namespace LlamaApp
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
             LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
+            LoadInstallInfo();
+        }
+
+        /// <summary>
+        /// Populates the Installation Folder card (Llama page). The path is
+        /// informational, not a setting: for an external (PATH) installation
+        /// we show its directory but disable Empty — external installs are not
+        /// LlamaApp's to delete. For the app-managed install, Empty is offered
+        /// whenever the folder exists.
+        /// </summary>
+        private void LoadInstallInfo()
+        {
+            var mgr = Llama.LlamaManager.Shared;
+            string path;
+            bool canEmpty;
+
+            if (mgr.CurrentOrigin == Llama.LlamaManager.Origin.External && mgr.BinaryPath is not null)
+            {
+                path = Path.GetDirectoryName(mgr.BinaryPath)!;
+                InstallDescriptionText.Text =
+                    "Using an external llama installation found on PATH. It isn't managed by LlamaApp — emptying is only available for the app-managed install.";
+                canEmpty = false;
+            }
+            else
+            {
+                path = Llama.LlamaManager.ManagedInstallDir;
+                InstallDescriptionText.Text =
+                    "Where LlamaApp installs the llama server binary. Emptying frees disk space — the binary is downloaded again on next launch.";
+                canEmpty = true;
+            }
+
+            InstallPathBox.Text = path;
+            var exists = Directory.Exists(path);
+            OpenInstallFolderButton.IsEnabled = exists;
+            EmptyInstallFolderButton.IsEnabled = canEmpty && exists;
+        }
+
+        private async void OpenInstallFolder_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            try
+            {
+                await Windows.System.Launcher.LaunchFolderPathAsync(InstallPathBox.Text);
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "open install folder failed");
+            }
+        }
+
+        private async void EmptyInstallFolder_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            var path = InstallPathBox.Text;
+
+            // Destructive: confirm first, with Cancel as the default button so
+            // Enter can't trigger it accidentally.
+            var confirm = new Microsoft.UI.Xaml.Controls.ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = "Empty Llama folder?",
+                Content = $"This stops the llama server (if running) and deletes everything in:\n\n{path}\n\nThe llama binary is downloaded again the next time LlamaApp needs it.",
+                PrimaryButtonText = "Empty",
+                CloseButtonText = "Cancel",
+                DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Close,
+            };
+            if (await confirm.ShowAsync() != Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary)
+                return;
+
+            try
+            {
+                // Stop first: a running server holds a lock on llama.exe.
+                Llama.LlamaManager.Shared.StopServer();
+
+                // Empty = delete the contents, keep the folder itself.
+                foreach (var dir in Directory.EnumerateDirectories(path))
+                    Directory.Delete(dir, recursive: true);
+                foreach (var file in Directory.EnumerateFiles(path))
+                    File.Delete(file);
+
+                Llama.LlamaManager.Shared.NotifyManagedInstallRemoved();
+                Common.Log.Info($"emptied llama install folder: {path}");
+                await ShowMessageAsync("Folder emptied",
+                    "The llama binary will be downloaded again the next time it's needed.");
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "empty install folder failed");
+                await ShowMessageAsync("Couldn't empty the folder",
+                    $"Some files may still be in use.\n\n{ex.Message}");
+            }
+
+            LoadInstallInfo();
+        }
+
+        private async Task ShowMessageAsync(string title, string message)
+        {
+            var d = new Microsoft.UI.Xaml.Controls.ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = title,
+                Content = message,
+                CloseButtonText = "OK",
+            };
+            await d.ShowAsync();
         }
 
         private async void Browse_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
@@ -144,6 +248,26 @@ namespace LlamaApp
         private void Cancel_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             Close();
+        }
+
+        /// <summary>
+        /// Switches the visible settings page from the selected nav item's
+        /// Tag. Null-guarded: the initial IsSelected in XAML can fire this
+        /// during InitializeComponent, before the page fields are connected.
+        /// </summary>
+        private void NavView_SelectionChanged(
+            Microsoft.UI.Xaml.Controls.NavigationView sender,
+            Microsoft.UI.Xaml.Controls.NavigationViewSelectionChangedEventArgs args)
+        {
+            if (GeneralPage is null || IdentityPage is null || LlamaPage is null) return;
+
+            var tag = (args.SelectedItem as Microsoft.UI.Xaml.Controls.NavigationViewItem)?.Tag as string;
+            GeneralPage.Visibility = tag == "general"
+                ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+            IdentityPage.Visibility = tag == "identity"
+                ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+            LlamaPage.Visibility = tag == "llama"
+                ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
         }
 
         // ---- Win32: center on the cursor's monitor ----
