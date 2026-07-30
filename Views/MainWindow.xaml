@@ -414,6 +414,31 @@
                         Spacing="2"
                         Margin="0,0,-2,0"
                         VerticalAlignment="Center">
+                <!-- HF avatar: shown only when a token is configured and
+                     whoami-v2 resolves (see LoadAvatarAsync). Circular picture
+                     with a presence dot; click opens the user's hf.co profile. -->
+                <Button x:Name="AvatarButton"
+                        Click="Avatar_Click"
+                        Padding="3"
+                        MinWidth="0" MinHeight="0"
+                        VerticalAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Visibility="Collapsed"
+                        AutomationProperties.Name="Open your Hugging Face profile"
+                        ToolTipService.ToolTip="Open your Hugging Face profile">
+                    <Grid Width="20" Height="20">
+                        <PersonPicture x:Name="AvatarPicture"
+                                       Width="20" Height="20" />
+                        <!-- Presence dot pinned to the bottom-right of the circle -->
+                        <Ellipse Width="7" Height="7"
+                                 Fill="#3FB950"
+                                 Stroke="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                                 StrokeThickness="1"
+                                 HorizontalAlignment="Right"
+                                 VerticalAlignment="Bottom" />
+                    </Grid>
+                </Button>
                 <Button Click="Settings_Click"
                         Padding="6"
                         MinWidth="0" MinHeight="0"

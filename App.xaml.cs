@@ -106,7 +106,10 @@ namespace LlamaApp
             // once reachable the MainWindow fetches the Available model list via
             // GET /models.
             Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
+            Llama.LlamaManager.Shared.HuggingFaceToken = Settings.Current.HuggingFaceToken;
             Common.Log.Info($"cache directory: {Settings.Current.CacheDirectory}");
+            // Presence only — never log the token itself.
+            Common.Log.Info($"HF token: {(string.IsNullOrWhiteSpace(Settings.Current.HuggingFaceToken) ? "not set" : "configured")}");
             _ = Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
 
             // Spotlight-style prompt overlay, summoned by a global Alt+Space
