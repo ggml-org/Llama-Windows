@@ -13,9 +13,12 @@ namespace LlamaApp.Llama;
 /// <a href="https://llama.app/install.ps1">install.ps1</a> when none is found.
 ///
 /// <para>Mirrors the macOS app's <c>LlamaInstallManager</c> + <c>LlamaBinaries</c>:
-/// the app manages the install-script path (<c>%USERPROFILE%\.llama-app\llama.exe</c>,
-/// what <c>install.ps1</c> produces) and may install/update it; any other installation
-/// (e.g., a manually built binary on PATH) is treated as unmanaged and left alone.
+/// <c>install.ps1</c> puts <c>llama</c> on the user PATH (its install dir,
+/// <c>%LOCALAPPDATA%\Microsoft\WindowsApps</c>, is there by default), so the app
+/// never hardcodes the binary location — it resolves <c>llama.exe</c> with a
+/// <c>which</c>-style PATH lookup (<see cref="FindOnPath(string)"/>). A hit under
+/// the install dir is the app-managed installation (may be installed/emptied);
+/// a hit anywhere else is the user's own external installation and is left alone.
 /// The installation is silent (writes under the user profile, no elevation needed).</para>
 ///
 /// <para>Call <see cref="EnsureLlamaOrDownloadAsync"/> at startup; it adopts a
@@ -65,15 +68,15 @@ public sealed class LlamaManager
     };
 
     /// <summary>
-    /// The install-script path the app manages (matches <c>install.ps1</c>'s
-    /// layout). The real binary lives in <c>%USERPROFILE%\.llama-app</c>;
-    /// <c>install.ps1</c> also adds it to PATH.
+    /// The install dir <c>install.ps1</c> targets — on the user PATH by default,
+    /// which is how the script makes <c>llama</c> resolvable. Never probed
+    /// directly (the binary is discovered via <see cref="FindOnPath(string)"/>);
+    /// used to classify a PATH hit as managed vs external
+    /// (<see cref="IsManagedPath"/>) and to back the Settings "Installation
+    /// Folder" card.
     /// </summary>
     private static string ManagedDir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".llama-app");
-
-    /// <summary>Path to the app-managed <c>llama.exe</c>.</summary>
-    private static string ManagedBinaryPath => Path.Combine(ManagedDir, "llama.exe");
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps");
 
     /// <summary>
     /// The install directory the app manages — surfaced read-only in Settings
@@ -91,7 +94,7 @@ public sealed class LlamaManager
     {
         /// <summary>Not yet resolved — no binary found and no install attempted.</summary>
         Unknown,
-        /// <summary>App-managed binary at <see cref="ManagedBinaryPath"/>.</summary>
+        /// <summary>App-managed binary found in <see cref="ManagedInstallDir"/> (what <c>install.ps1</c> produces).</summary>
         Managed,
         /// <summary>Pre-existing installation found on PATH (not modified by the app).</summary>
         External,
@@ -416,13 +419,16 @@ public sealed class LlamaManager
         try
         {
             await DownloadAndRunInstallerAsync(cancel);
-            // install.ps1 writes llama.exe to the managed dir; confirm it landed.
-            if (!File.Exists(ManagedBinaryPath))
-                throw new IOException($"Install script finished but {ManagedBinaryPath} was not created.");
-
-            BinaryPath = ManagedBinaryPath;
-            CurrentOrigin = Origin.Managed;
-            Version = await ReadVersionAsync(ManagedBinaryPath, cancel);
+            // Exit code 0 = success (DownloadAndRunInstallerAsync throws
+            // otherwise): llama is now on PATH. Resolve its absolute path
+            // dynamically ("which") instead of assuming a fixed location —
+            // FindOnPath also reads the registry user/machine PATH, which is
+            // what sees a PATH entry the installer just added (a child process
+            // can't update our own environment block).
+            BinaryPath = FindOnPath("llama.exe")
+                ?? throw new IOException("Install script succeeded but 'llama' was not found on PATH.");
+            CurrentOrigin = IsManagedPath(BinaryPath) ? Origin.Managed : Origin.External;
+            Version = await ReadVersionAsync(BinaryPath, cancel);
             State = InstallState.Idle;
             return true;
         }
@@ -1617,31 +1623,73 @@ public sealed class LlamaManager
     private record Resolution(ResolutionKind Kind, string? Path);
 
     /// <summary>
-    /// Resolves the active <c>llama</c> binary. The managed path wins, then PATH,
-    /// else <see cref="ResolutionKind.Missing"/>.
+    /// Resolves the active <c>llama</c> binary with a single <c>which</c>-style
+    /// PATH lookup (<see cref="FindOnPath(string)"/>). A hit under the install
+    /// dir is the app-managed installation; a hit anywhere else is the user's
+    /// own external installation; no hit is <see cref="ResolutionKind.Missing"/>.
     /// </summary>
     private static Resolution Resolve()
     {
-        if (File.Exists(ManagedBinaryPath))
-            return new Resolution(ResolutionKind.Managed, ManagedBinaryPath);
-
-        // Probe PATH for an existing (unmanaged) install.
-        var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (string.IsNullOrEmpty(pathEnv)) return new Resolution(ResolutionKind.Missing, null);
-        
-        foreach (var dir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            try
-            {
-                var candidate = Path.Combine(dir.Trim(), "llama.exe");
-                if (File.Exists(candidate))
-                    return new Resolution(ResolutionKind.External, candidate);
-            }
-            catch { /* Malformed PATH entry — skip. */ }
-        }
+        if (FindOnPath("llama.exe") is { } found)
+            return new Resolution(
+                IsManagedPath(found) ? ResolutionKind.Managed : ResolutionKind.External, found);
 
         return new Resolution(ResolutionKind.Missing, null);
     }
+
+    /// <summary>
+    /// <c>which llama.exe</c>: resolves the absolute path of
+    /// <paramref name="exeName"/> over the <b>effective</b> PATH — the process
+    /// PATH plus the user and machine PATH read from the registry. The registry
+    /// reads are what make a just-installed binary visible: <c>install.ps1</c>
+    /// runs as a child process and cannot update our own environment block, so
+    /// a PATH entry it adds only shows up in the registry (and in the process
+    /// PATH of the next login shell).
+    /// </summary>
+    private static string? FindOnPath(string exeName) =>
+        FindOnPath(
+            exeName,
+            Environment.GetEnvironmentVariable("PATH"),
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User),
+            Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine));
+
+    /// <summary>
+    /// Pure core of <see cref="FindOnPath(string)"/>: searches the three PATH
+    /// lists in order (process, user, machine), first hit wins, directories
+    /// deduped case-insensitively, quoted/whitespace-padded entries normalized,
+    /// malformed entries skipped. Internal for tests.
+    /// </summary>
+    internal static string? FindOnPath(string exeName, string? processPath, string? userPath, string? machinePath)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pathEnv in new[] { processPath, userPath, machinePath })
+        {
+            if (string.IsNullOrEmpty(pathEnv)) continue;
+            foreach (var rawDir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var dir = rawDir.Trim().Trim('"');
+                if (dir.Length == 0 || !seen.Add(dir)) continue;
+                try
+                {
+                    var candidate = Path.Combine(dir, exeName);
+                    if (File.Exists(candidate)) return candidate;
+                }
+                catch { /* Malformed PATH entry — skip. */ }
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// True when <paramref name="binaryPath"/> sits directly in the app-managed
+    /// install dir (<see cref="ManagedInstallDir"/>) — i.e., it's the
+    /// installation <c>install.ps1</c> produced, not the user's own.
+    /// </summary>
+    internal static bool IsManagedPath(string binaryPath) =>
+        string.Equals(
+            Path.GetFullPath(Path.GetDirectoryName(binaryPath)!),
+            Path.GetFullPath(ManagedDir),
+            StringComparison.OrdinalIgnoreCase);
 
     // ---- Install ----
 
