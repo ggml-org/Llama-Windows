@@ -133,7 +133,7 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     private static Uri BuildModelUri()
     {
-        var baseUrl = $"http://localhost:{LlamaManager.ServerPort}";
+        var baseUrl = $"http://localhost:{LlamaManager.Shared.ServerPort}";
         var id = LlamaManager.Shared.LoadedModelId;
         return id is null
             ? new Uri(baseUrl)

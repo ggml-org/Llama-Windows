@@ -7,9 +7,9 @@ namespace LlamaApp
 {
     /// <summary>
     /// A small centered settings window (separate from the tray flyout) for
-    /// editing the Hugging Face token (password-masked) and the local models
-    /// cache directory (with a folder picker). Saves to
-    /// <see cref="Settings"/> on Save; discards on Cancel.
+    /// editing the Hugging Face token (password-masked), the local models
+    /// cache directory (with a folder picker) and the llama server port.
+    /// Saves to <see cref="Settings"/> on Save; discards on Cancel.
     /// </summary>
     public sealed partial class SettingsWindow : Window
     {
@@ -80,6 +80,7 @@ namespace LlamaApp
             var s = Settings.Current;
             TokenBox.Password = s.HuggingFaceToken ?? "";
             CacheBox.Text = s.CacheDirectory ?? "";
+            PortBox.Value = s.ServerPort;
             // The OS shortcut is the source of truth: a user may have toggled
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
@@ -112,6 +113,14 @@ namespace LlamaApp
             var s = Settings.Current;
             s.HuggingFaceToken = TokenBox.Password;
             s.CacheDirectory = CacheBox.Text.Trim();
+
+            // The NumberBox clamps to 1–65535 while editing; an empty box
+            // reads as NaN — fall back to the default port in that case. The
+            // value is applied the next time the app starts (the manager
+            // singleton's port is fixed at construction).
+            s.ServerPort = double.IsNaN(PortBox.Value)
+                ? Llama.LlamaManager.DefaultServerPort
+                : (int)PortBox.Value;
 
             // Apply the startup preference to the OS (create/delete the .lnk)
             // and mirror it into settings.json as a hint for the checkbox on

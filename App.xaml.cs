@@ -67,6 +67,19 @@ namespace LlamaApp
                 return;
             }
 
+            // Create the llama-server manager singleton with the configured
+            // port BEFORE anything else can touch LlamaManager.Shared — the
+            // MainWindow constructor below already subscribes to its events.
+            // The port is baked into the manager at construction, so a value
+            // changed in Settings only takes effect on the next launch.
+            var serverPort = Settings.Current.ServerPort;
+            if (serverPort is < 1 or > 65535)
+            {
+                Common.Log.Warn($"configured server port {serverPort} is out of range; falling back to {Llama.LlamaManager.DefaultServerPort}");
+                serverPort = Llama.LlamaManager.DefaultServerPort;
+            }
+            Llama.LlamaManager.Initialize(serverPort);
+
             // The app is tray-only: the main window is created but never shown
             // on launch. It is revealed on demand as a flyout anchored to the
             // system-tray icon (see TrayIconManager / MainWindow.ShowAsFlyout),
@@ -87,10 +100,11 @@ namespace LlamaApp
             Notifications.Invoked += () => _dispatcher.TryEnqueue(() => _trayIcon?.ShowFlyout());
             instance.Activated += (_, _) => _dispatcher.TryEnqueue(() => _trayIcon?.ShowFlyout());
 
-            // Ensure a llama.cpp server is reachable at localhost:2276: adopt an
-            // already-running one, launch one from a found binary, or download the
-            // binary via install.ps1 then launch. Fire-and-forget; once reachable the
-            // MainWindow fetches the Available model list via GET /models.
+            // Ensure a llama.cpp server is reachable on the configured port:
+            // adopt an already-running one, launch one from a found binary, or
+            // download the binary via install.ps1 then launch. Fire-and-forget;
+            // once reachable the MainWindow fetches the Available model list via
+            // GET /models.
             Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
             Common.Log.Info($"cache directory: {Settings.Current.CacheDirectory}");
             _ = Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
