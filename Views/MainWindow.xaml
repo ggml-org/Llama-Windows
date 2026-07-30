@@ -387,7 +387,7 @@
                         Orientation="Horizontal"
                         Spacing="6"
                         VerticalAlignment="Center">
-                <Image Source="ms-appx:///Assets/llama-white.svg"
+                <Image Source="{ThemeResource BrandLogoSource}"
                        Width="20" Height="20"
                        Stretch="Uniform" />
                 <StackPanel Orientation="Horizontal"
@@ -396,7 +396,7 @@
                     <TextBlock Text="llama"
                                FontSize="13"
                                FontWeight="SemiBold"
-                               Foreground="White"
+                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
                                VerticalAlignment="Center" />
                     <TextBlock Text=".app"
                                FontSize="13"
@@ -567,8 +567,8 @@
              red = crashed, amber = starting, gray = stopped), the app's
              version (no name) and the resolved llama.cpp version separated
              by " - ", and a small relaunch button that appears only when
-             the server is down. Bold white so it reads as a clear caption
-             under the Recommended list. -->
+             the server is down. Bold theme foreground so it reads as a clear
+             caption under the Recommended list in either OS theme. -->
         <StackPanel Grid.Row="6"
                     Margin="16,8,16,10"
                     HorizontalAlignment="Center"
@@ -582,7 +582,7 @@
             <TextBlock x:Name="VersionText"
                        FontSize="11"
                        FontWeight="Bold"
-                       Foreground="White" />
+                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
             <Button x:Name="ServerRestartButton"
                     Click="ServerRestart_Click"
                     Padding="4"

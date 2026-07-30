@@ -5,6 +5,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:local="using:LlamaApp"
+    xmlns:imaging="using:Microsoft.UI.Xaml.Media.Imaging"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
     <Application.Resources>
@@ -13,6 +14,26 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
                 <!-- Other merged dictionaries here -->
             </ResourceDictionary.MergedDictionaries>
+
+            <!-- Theme-aware brand logo: the white glyph vanishes on the light
+                 Mica surface and the dark glyph on the dark one, so each OS
+                 theme gets the variant with contrast. Referenced from the
+                 window headers via {ThemeResource BrandLogoSource}; re-resolves
+                 automatically when the OS theme flips at runtime. -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <imaging:SvgImageSource x:Key="BrandLogoSource"
+                                            UriSource="ms-appx:///Assets/llama.svg" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <imaging:SvgImageSource x:Key="BrandLogoSource"
+                                            UriSource="ms-appx:///Assets/llama-white.svg" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Default">
+                    <imaging:SvgImageSource x:Key="BrandLogoSource"
+                                            UriSource="ms-appx:///Assets/llama-white.svg" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
             <!-- Other app resources here -->
             <Color x:Key="Primary">#512BD4</Color>
 
