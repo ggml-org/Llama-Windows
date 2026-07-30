@@ -41,6 +41,11 @@
             <SolidColorBrush x:Key="WhiteBrush" Color="White" />
             <SolidColorBrush x:Key="BlackBrush" Color="Black" />
 
+            <!-- Brand accent (the ".app" wordmark orange): the app's single
+                 accent color, used instead of the system accent for brand
+                 moments — wordmarks, settings icon tiles, nav selection pill. -->
+            <SolidColorBrush x:Key="BrandAccentBrush" Color="#FF8A3D" />
+
             <!-- App background: dark gray instead of the default ~black (#202020). -->
             <!-- Tune the hex: #282828 / #2D2D30 / #333333 are good dark-gray values. -->
             <SolidColorBrush x:Key="ApplicationPageBackgroundThemeBrush" Color="#2D2D30" />

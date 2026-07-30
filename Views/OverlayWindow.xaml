@@ -71,7 +71,7 @@
                     <TextBlock Text=".app"
                                FontSize="13"
                                FontWeight="SemiBold"
-                               Foreground="#FF8A3D"
+                               Foreground="{StaticResource BrandAccentBrush}"
                                VerticalAlignment="Center" />
                 </StackPanel>
             </StackPanel>
