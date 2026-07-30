@@ -135,7 +135,10 @@ internal sealed class TrayIconManager : IDisposable
         // Unregister the toast-notification activator before going down.
         Notifications.Unregister();
         // Stop the llama server first so it doesn't outlive the app (and leave
-        // the port-bound). Best-effort — if it hangs, Environment.Exit reaps it.
+        // the port bound). StopServer only kills a MANAGED server — one an app
+        // instance started, tracked via the .llama.pid file (crash-safe); a
+        // server the user started manually is left running. Best-effort:
+        // Environment.Exit below guarantees the app itself terminates regardless.
         try { Llama.LlamaManager.Shared.StopServer(); }
         catch (Exception ex) { Log.Warn(ex, "best-effort server stop on exit failed"); }
 
