@@ -32,7 +32,7 @@
              AssemblyVersion). Keep in sync with Identity@Version in
              Package.appxmanifest — single-project MSIX takes the package
              version from the manifest, not from here. -->
-        <Version>0.7.0.0</Version>
+        <Version>0.7.1.0</Version>
         <!-- Never emit a .msixbundle from the per-arch build. Shipping assets
              at several scales (Square44x44Logo.scale-*.png etc.) makes MakePri
              split resources into scale-* resource packages, and the default
@@ -54,6 +54,8 @@
              x64 Windows and via emulation on ARM64 Windows (matching the installed
              x64/ARM64EC WebView2 runtime), so WebView2 initializes correctly. -->
         <PlatformTarget Condition="'$(Platform)' == 'AnyCPU'">x64</PlatformTarget>
+        <Authors>Hugging Face</Authors>
+        <PackageProjectUrl>https://github.com/ggml-org/llama-windows</PackageProjectUrl>
     </PropertyGroup>
 
     <ItemGroup>
