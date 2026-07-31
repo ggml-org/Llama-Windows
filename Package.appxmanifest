@@ -19,7 +19,7 @@
   <Identity
     Name="4e440e29-8151-4465-b20f-fb3acb283925"
     Publisher="CN=Hugging Face, O=Hugging Face, L=Brooklyn, S=New York, C=US, PostalCode=11201"
-    Version="0.7.1.0" />
+    Version="0.7.2.0" />
 
   <mp:PhoneIdentity PhoneProductId="4e440e29-8151-4465-b20f-fb3acb283925" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
@@ -29,8 +29,14 @@
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
+  <!-- At least one TargetDeviceFamily is required by the appx schema. This is
+       a full-trust (runFullTrust) desktop app, so Windows.Desktop alone is the
+       accurate declaration — Windows.Universal would redundantly claim support
+       for every device family (Xbox, HoloLens, ...) the package can't run on
+       anyway. MinVersion 17763 = Windows 10 1809, the floor for WinUI 3 /
+       Windows App SDK; MaxVersionTested only selects compatibility quirks and
+       never gates installation. -->
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
   </Dependencies>
 
