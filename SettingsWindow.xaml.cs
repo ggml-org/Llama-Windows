@@ -14,11 +14,13 @@ namespace LlamaApp
     /// </summary>
     public sealed partial class SettingsWindow : Window
     {
-        // Settings window occupies 60% of the work-area width and 40% of its
-        // height on whichever monitor the cursor is on (sized/centered on
-        // construction in SizeAndCenterOnScreen).
-        private const double WidthFraction = 0.50;
-        private const double HeightFraction = 0.50;
+        // Settings window size in DIPs (the units XAML layout uses), centered on
+        // the cursor's monitor. AppWindow sizes/positions are in PHYSICAL pixels,
+        // so the DIPs are scaled by that monitor's DPI before Resize/Move — the
+        // window shows the same amount of content on every screen, whatever the
+        // display scaling. Clamped to the work area so small screens still fit.
+        private const int WindowWidthDips = 960;
+        private const int WindowHeightDips = 560;
 
         public SettingsWindow()
         {
@@ -53,8 +55,8 @@ namespace LlamaApp
         }
 
         /// <summary>
-        /// Sizes the window to WidthFraction × HeightFraction of the work area
-        /// of the monitor the cursor is on, then centers it there — the
+        /// Sizes the window to the fixed DIP design size — scaled by the cursor
+        /// monitor's DPI, clamped to its work area — then centers it there: the
         /// natural spot for a dialog spawned from a tray-only app (no owning
         /// window to center on).
         /// </summary>
@@ -67,8 +69,14 @@ namespace LlamaApp
 
             int workWidth = mi.rcWork.Right - mi.rcWork.Left;
             int workHeight = mi.rcWork.Bottom - mi.rcWork.Top;
-            int width = (int)(workWidth * WidthFraction);
-            int height = (int)(workHeight * HeightFraction);
+
+            // DIP size → physical pixels at this monitor's DPI (default 96 =
+            // 100% scaling if the query fails), clamped to the work area with
+            // a small margin so very small screens still fit the window.
+            uint dpiX = 96, dpiY = 96;
+            GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, out dpiX, out dpiY);
+            int width = Math.Min((int)Math.Round(WindowWidthDips * dpiX / 96.0), (int)(workWidth * 0.92));
+            int height = Math.Min((int)Math.Round(WindowHeightDips * dpiY / 96.0), (int)(workHeight * 0.92));
 
             AppWindow.Resize(new SizeInt32(width, height));
             int x = mi.rcWork.Left + (workWidth - width) / 2;
@@ -295,6 +303,11 @@ namespace LlamaApp
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO mi);
+
+        [DllImport("shcore.dll", ExactSpelling = true)]
+        private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
+        private const int MDT_EFFECTIVE_DPI = 0;
 
         [DllImport("user32.dll", ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.Bool)]

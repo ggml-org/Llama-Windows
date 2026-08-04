@@ -14,8 +14,8 @@
         footer action bar with Save / Cancel. Each page is a stack of rounded
         "SettingsCards" (icon tile + title/description + control). Saves to
         <see cref="Settings"/> on Save; discards on Cancel. See
-        SettingsWindow.xaml.cs for sizing (50% x 50% of the active monitor's
-        work area).
+        SettingsWindow.xaml.cs for sizing (fixed DIP size, scaled by the
+        monitor's DPI, centered on the cursor's monitor).
 
         Cards use a stacked layout (title row, then wrapping description, then a
         full-width control) so descriptive text never gets cropped and the
