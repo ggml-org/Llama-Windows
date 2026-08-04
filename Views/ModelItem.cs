@@ -20,6 +20,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private bool _isLoading;
     private double _loadFraction;
     private bool _isLoaded;
+    private ImageSource? _logo;
 
     /// <summary>Display label (e.g. "GPT-OSS 20B (mxfp4)").</summary>
     public string Name { get; set; } = "";
@@ -56,7 +57,20 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
 
     /// <summary>Quantization label, e.g. "Q4_0", "mxfp4" (used for ServerModelId).</summary>
     public string? Quant { get; set; } = null;
-    public ImageSource? Logo { get; set; }
+    /// <summary>
+    /// The resolved brand logo (theme-dependent — see <see cref="ResolveLogo"/>).
+    /// Notifies so the shell can re-resolve logos on a theme change.
+    /// </summary>
+    public ImageSource? Logo
+    {
+        get => _logo;
+        set
+        {
+            if (ReferenceEquals(_logo, value)) return;
+            _logo = value;
+            OnPropertyChanged();
+        }
+    }
     /// <summary>True for Hub models that can be downloaded; false for locally available models (run/play).</summary>
     public bool Downloadable { get; set; }
     public string? Brand { get; set; }
@@ -261,16 +275,42 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private static readonly Dictionary<string, ImageSource?> LogoCache = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Set by the shell (MainWindow) from the effective theme: true while the
+    /// dark theme is active → <see cref="ResolveLogo"/> picks the white
+    /// &quot;.light&quot; SVG variants. Read/written on the UI thread, like the cache.
+    /// </summary>
+    public static bool UseLightLogos;
+
+    /// <summary>
+    /// Clears the resolved-logo cache. Called by the shell on a theme change,
+    /// before re-resolving every row's <see cref="Logo"/>.
+    /// </summary>
+    public static void ClearLogoCache()
+    {
+        lock (LogoCacheLock) LogoCache.Clear();
+    }
+
+    /// <summary>
     /// Resolves a <see cref="Brand"/> to a bundled brand-logo ImageSource
     /// (Assets/Logos/&lt;logo&gt;.svg), using the brand→logo mapping. Returns
     /// null when the brand is unknown — the XAML Image then stays empty, and the
     /// row shows the background tile alone. Instances are cached per brand (see
     /// <see cref="LogoCache"/>).
+    ///
+    /// <para>The bundled SVGs fill with <c>currentColor</c>, which
+    /// <see cref="SvgImageSource"/> renders as black — invisible on the dark
+    /// theme's Mica surface. When <see cref="UseLightLogos"/> is set, the
+    /// white-filled &lt;logo&gt;.light.svg variant is used instead.</para>
     /// </summary>
     public static ImageSource? ResolveLogo(string? brand)
     {
         var logo = BrandToLogo(brand);
         if (logo is null) return null;
+
+        // Dark theme → white artwork (the default variant rasterizes black).
+        // The variant suffix becomes part of the cache key, so both themes'
+        // instances coexist in the cache.
+        if (UseLightLogos) logo += ".light";
 
         lock (LogoCacheLock)
         {
