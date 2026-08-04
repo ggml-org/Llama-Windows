@@ -36,8 +36,11 @@ public sealed partial class OverlayWindow : Window
     private const double OverlayWidthFraction = 0.6;
     private const double OverlayHeightFraction = 0.7;
     // Clamp so the overlay never collapses to nothing on a tiny/rotated screen.
-    private const int OverlayMinWidth = 520;
-    private const int OverlayMinHeight = 360;
+    // In DIPs, scaled by the target monitor's DPI at summon time — AppWindow
+    // sizes are PHYSICAL pixels, so a raw pixel minimum would shrink to
+    // nothing (in content terms) on high-DPI screens.
+    private const int OverlayMinWidthDips = 520;
+    private const int OverlayMinHeightDips = 360;
 
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
@@ -174,12 +177,31 @@ public sealed partial class OverlayWindow : Window
     private void CenterOnScreen()
     {
         var area = GetCursorMonitorWorkArea();
-        var w = Math.Max(OverlayMinWidth, (int)(area.Width * OverlayWidthFraction));
-        var h = Math.Max(OverlayMinHeight, (int)(area.Height * OverlayHeightFraction));
+        // The fraction of the work area is already in physical pixels (like
+        // area itself); only the DIPs minimum needs scaling to this monitor's
+        // DPI before the two can be compared.
+        var scale = GetCursorMonitorDpiScale();
+        var minW = (int)Math.Round(OverlayMinWidthDips * scale);
+        var minH = (int)Math.Round(OverlayMinHeightDips * scale);
+        var w = Math.Max(minW, (int)(area.Width * OverlayWidthFraction));
+        var h = Math.Max(minH, (int)(area.Height * OverlayHeightFraction));
         AppWindow.Resize(new SizeInt32(w, h));
         var x = area.X + (area.Width - w) / 2;
         var y = area.Y + (area.Height - h) / 2;
         AppWindow.Move(new PointInt32(x, y));
+    }
+
+    /// <summary>
+    /// DPI scale (1.0 = 100%) of the monitor nearest the cursor — the monitor
+    /// <see cref="CenterOnScreen"/> targets. Defaults to 1.0 if the query fails.
+    /// </summary>
+    private static double GetCursorMonitorDpiScale()
+    {
+        GetCursorPos(out var p);
+        var mon = MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST);
+        return GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, out var dpiX, out _) == 0
+            ? dpiX / 96.0
+            : 1.0;
     }
 
     private RectInt32 GetCursorMonitorWorkArea()
@@ -255,6 +277,11 @@ public sealed partial class OverlayWindow : Window
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+    [DllImport("shcore.dll")]
+    private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
+    private const int MDT_EFFECTIVE_DPI = 0;
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
     private static extern int GetWindowLong32(IntPtr hwnd, int nIndex);

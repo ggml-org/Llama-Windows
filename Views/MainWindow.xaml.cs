@@ -22,10 +22,14 @@ namespace LlamaApp.Views
     /// </summary>
     public sealed partial class MainWindow : Window
     {
-        // Flyout dimensions, in physical pixels. Sized for the single-column
+        // Flyout dimensions, in device-independent pixels (DIPs — the units XAML
+        // layout uses). AppWindow sizes/positions are in PHYSICAL pixels, so these
+        // are scaled by the target monitor's DPI before every Resize/Move — that
+        // keeps the flyout the same logical size on every screen, no matter the
+        // display's scaling (100% / 150% / 200% …). Sized for the single-column
         // model list + footer; content scrolls if sections overflow.
-        private const int FlyoutWidth = 420;
-        private const int FlyoutHeight = 560;
+        private const int FlyoutWidthDips = 420;
+        private const int FlyoutHeightDips = 560;
 
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
@@ -1388,10 +1392,15 @@ namespace LlamaApp.Views
             presenter.IsMinimizable = false;
 
             AppWindow.IsShownInSwitchers = false;   // remove from Alt-Tab / taskbar switcher
-            AppWindow.Resize(new SizeInt32(FlyoutWidth, FlyoutHeight));
 
             // WS_EX_TOOLWINDOW keeps the window out of the taskbar entirely.
             _hwnd = WindowNative.GetWindowHandle(this);
+
+            // Initial size. PositionNear re-sizes with the target monitor's DPI
+            // on every show, so the window's current DPI is good enough here.
+            var dpi = GetDpiForWindow(_hwnd);
+            AppWindow.Resize(FlyoutSizeForDpi(dpi, dpi));
+
             var ex = GetWindowLongCompat(_hwnd, GWL_EXSTYLE);
             SetWindowLongCompat(_hwnd, GWL_EXSTYLE, (IntPtr)(ex.ToInt32() | WS_EX_TOOLWINDOW));
 
@@ -1474,16 +1483,16 @@ namespace LlamaApp.Views
 
         private void PositionNear(Point anchor)
         {
-            AppWindow.Resize(new SizeInt32(FlyoutWidth, FlyoutHeight));
-
             // Pin the flyout to the bottom-right of the work area of the monitor
             // nearest the click — i.e. just above the taskbar, next to the tray.
+            // The size is scaled by THAT monitor's DPI, so the flyout keeps the
+            // same logical size whichever screen it appears on.
             var work = GetWorkArea(anchor);
+            var (dpiX, dpiY) = GetMonitorDpi(anchor);
+            var size = FlyoutSizeForDpi(dpiX, dpiY);
 
-            var x = work.Right - FlyoutWidth;
-            var y = work.Bottom - FlyoutHeight;
-
-            AppWindow.Move(new PointInt32(x, y));
+            AppWindow.Resize(size);
+            AppWindow.Move(new PointInt32(work.Right - size.Width, work.Bottom - size.Height));
         }
 
         private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
@@ -1539,6 +1548,14 @@ namespace LlamaApp.Views
         [DllImport("user32.dll", ExactSpelling = true)]
         private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
 
+        [DllImport("user32.dll", ExactSpelling = true)]
+        private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+        [DllImport("shcore.dll", ExactSpelling = true)]
+        private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
+
+        private const int MDT_EFFECTIVE_DPI = 0;
+
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO mi);
@@ -1592,6 +1609,30 @@ namespace LlamaApp.Views
             var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
             GetMonitorInfo(hmon, ref mi);
             return mi.rcWork;
+        }
+
+        /// <summary>
+        /// Converts the flyout's DIP size to physical pixels at the given DPI.
+        /// The flyout is designed in DIPs (the units XAML layout uses), but
+        /// <see cref="AppWindow.Resize"/>/<see cref="AppWindow.Move"/> take
+        /// physical pixels — without this scaling the flyout's logical size
+        /// (how much content fits) would shrink on high-DPI screens.
+        /// </summary>
+        private static SizeInt32 FlyoutSizeForDpi(uint dpiX, uint dpiY) => new(
+            (int)Math.Round(FlyoutWidthDips * dpiX / 96.0),
+            (int)Math.Round(FlyoutHeightDips * dpiY / 96.0));
+
+        /// <summary>
+        /// Returns the effective DPI of the monitor nearest
+        /// <paramref name="anchor"/>, defaulting to 96 (100% scaling) if the
+        /// query fails.
+        /// </summary>
+        private static (uint X, uint Y) GetMonitorDpi(Point anchor)
+        {
+            var hmon = MonitorFromPoint(new POINT { X = anchor.X, Y = anchor.Y }, MONITOR_DEFAULTTONEAREST);
+            return GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, out var dpiX, out var dpiY) == 0
+                ? (dpiX, dpiY)
+                : (96u, 96u);
         }
     }
 }
