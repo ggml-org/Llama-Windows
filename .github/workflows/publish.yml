@@ -1,9 +1,14 @@
 name: Publish
 
+# Manual, on-demand publish of loose-file (non-MSIX) zip builds per
+# architecture — a debugging/inspection artifact, NOT the release channel.
+#
+# Intentionally workflow_dispatch-only: version tags are owned by release.yml
+# (signed MSIX bundle). Previously both workflows triggered on 'v*' tags and
+# BOTH created a GitHub Release on the same tag — racing to attach unsigned
+# zips vs the signed bundle to the same release.
+
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       self-contained:
@@ -11,7 +16,7 @@ on:
         type: boolean
         default: true
       make-release:
-        description: 'Create/update a GitHub Release (tag pushes always do)'
+        description: 'Create/update a GitHub Release'
         type: boolean
         default: false
 
@@ -45,16 +50,6 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
           restore-keys: ${{ runner.os }}-nuget-
 
-      - name: Resolve self-contained flag
-        id: sc
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "self-contained=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "self-contained=${{ inputs.self-contained }}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Restore
         run: >
           dotnet restore LlamaApp.csproj
@@ -66,7 +61,7 @@ jobs:
           dotnet publish LlamaApp.csproj
           -c Release
           -r ${{ matrix.rid }}
-          --self-contained ${{ steps.sc.outputs.self-contained }}
+          --self-contained ${{ inputs.self-contained }}
           -p:Platform=${{ matrix.platform }}
           -p:PublishReadyToRun=false
           -p:PublishSingleFile=false
@@ -91,7 +86,7 @@ jobs:
     name: GitHub Release
     needs: publish
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.make-release)
+    if: inputs.make-release
     steps:
       - uses: actions/checkout@v7
 
