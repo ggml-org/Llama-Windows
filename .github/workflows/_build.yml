@@ -1,0 +1,208 @@
+name: Build & test (reusable)
+
+# Reusable pipeline shared by ci.yml (push/PR to main) and release.yml
+# (version tags). The test matrix and the unsigned-MSIX build used to be
+# copy-pasted into both files and had already drifted apart (release.yml had
+# lost the trx upload, CI uploaded a folder while release staged a single
+# file, cache keys differed). This is the single source of truth — call via
+#   uses: ./.github/workflows/_build.yml
+#
+# Job order: test FIRST, then the ~10-minute MSIX packaging (needs: test).
+# `dotnet test` compiles everything it exercises and fails fast on compile
+# errors, so broken code is caught in minutes without burning a Windows
+# runner on packaging. (The reverse order — tests waiting on the MSIX build —
+# would just delay every failure signal by 10 minutes for no benefit.)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: >-
+          Version tag (e.g. v1.2.3) to stamp into Package.appxmanifest as the
+          MSIX identity version. Empty (CI) keeps the committed version.
+        type: string
+        default: ''
+
+jobs:
+  test:
+    name: Test (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: x64
+            runner: windows-latest
+          - label: arm64
+            runner: windows-11-arm
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-nuget-
+
+      # LlamaApp.LlamaCpp.Tests: platform-agnostic (net10.0) — runs on both
+      # architectures. `dotnet test` restores + builds + tests in one go; a
+      # compile error fails the step here, within minutes.
+      - name: Test (LlamaCpp)
+        run: >
+          dotnet test LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj
+          -c Release
+          --logger "trx;LogFileName=test-results-llamacpp.trx"
+          --logger "console;verbosity=normal"
+
+      # LlamaApp.Tests: references the WinUI APP project (Windows TFM, x64
+      # only), so this is also the step that proves the app itself compiles —
+      # not just the libraries. PublishReadyToRun/PublishTrimmed are forced
+      # off: the app uses reflection-based JsonSerializer and `dynamic`
+      # (StartupHelper), which trim/R2R break (same reason as the MSIX build).
+      - name: Test (app)
+        if: matrix.label == 'x64'
+        run: >
+          dotnet test LlamaApp.Tests/LlamaApp.Tests.csproj
+          -c Release
+          -p:PublishReadyToRun=false
+          -p:PublishTrimmed=false
+          --logger "trx;LogFileName=test-results-app.trx"
+          --logger "console;verbosity=normal"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.label }}-${{ github.run_id }}
+          path: '**/TestResults/*.trx'
+          if-no-files-found: warn
+
+  build:
+    name: Build MSIX (${{ matrix.rid }})
+    needs: test
+    runs-on: windows-latest   # VS MSBuild + ARM64 cross-pack on x64 host is fine
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            platform: x64
+          - rid: win-arm64
+            platform: ARM64
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # setup-msbuild adds Visual Studio's MSBuild to PATH. The
+      # GenerateAppxPackage target is only wired into the Build target chain by
+      # VS MSBuild — `dotnet msbuild` compiles but never packs the Appx, so no
+      # .msix is produced.
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Cache NuGet
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: windows-nuget-${{ hashFiles('**/*.csproj', '**/global.json') }}
+          restore-keys: windows-nuget-
+
+      # Release builds only (inputs.tag set): derive a 4-part package version
+      # from the git tag (v1.2.3 -> 1.2.3.0) and patch Package.appxmanifest so
+      # all architectures share one identity. MSIX versions are numeric-only:
+      # any SemVer prerelease suffix (v0.0.6-alpha) must be dropped or MakeAppx
+      # schema validation fails. A non-version ref (manual dispatch from a
+      # branch) keeps the committed version instead of corrupting the manifest.
+      - name: Set package version from tag
+        if: inputs.tag != ''
+        shell: pwsh
+        run: |
+          $tag = '${{ inputs.tag }}'
+          if ($tag -notmatch '^v?\d+(\.\d+)*(-.*)?$') {
+            Write-Host "::warning::Ref '$tag' is not a version tag — keeping the committed manifest version."
+            exit 0
+          }
+          $tag = $tag -replace '^v','' -replace '-.*$',''
+          $parts = $tag.Split('.')
+          while ($parts.Count -lt 4) { $parts += '0' }
+          $v4 = ($parts[0..3] -join '.')
+          # The package version is the Identity *attribute* (Version="..."),
+          # not a <Version> element. Scope the replace to the Identity tag so
+          # the TargetDeviceFamily Min/MaxVersionTested attributes (which also
+          # contain the substring 'Version="') are left untouched, and fail
+          # loudly if the attribute isn't found instead of shipping the
+          # committed version by mistake.
+          $manifest = Get-Content Package.appxmanifest -Raw
+          if ($manifest -notmatch '<Identity[^>]*Version="[0-9.]+"') {
+            throw 'Identity Version attribute not found in Package.appxmanifest'
+          }
+          # ${1} brace syntax is mandatory: '$1' + a digit-leading version
+          # would parse as capture group $10 (undefined -> empty) and delete
+          # the Identity tag opening, corrupting the manifest.
+          $manifest = [regex]::Replace($manifest, '(<Identity[^>]*Version=")[0-9.]+(")', "`${1}$v4`${2}")
+          Set-Content Package.appxmanifest $manifest
+          Write-Host "Package version set to $v4"
+
+      # Restore + build + package in one msbuild invocation.
+      # GenerateAppxPackageOnBuild=true is the actual switch that fires the
+      # `GenerateMsixPackage` target (which runs MakeAppx via
+      # `_GenerateAppxPackageFile`). The legacy `GenerateAppxPackage=true` is a
+      # no-op passthrough in WinAppSDK 1.6 and produces NO .msix.
+      # PublishTrimmed/PublishReadyToRun are forced off because the app uses
+      # reflection-based JsonSerializer.Deserialize<TValue> and `dynamic`
+      # (StartupHelper) which trim/R2R would remove -> runtime breakage.
+      - name: Build & package unsigned MSIX (${{ matrix.rid }})
+        run: >
+          msbuild LlamaApp.csproj
+          -t:Build -restore -bl:msbuild.binlog
+          -p:Configuration=Release
+          -p:Platform=${{ matrix.platform }}
+          -p:RuntimeIdentifier=${{ matrix.rid }}
+          -p:GenerateAppxPackageOnBuild=true
+          -p:AppxPackageSigningEnabled=false
+          -p:PublishTrimmed=false
+          -p:PublishReadyToRun=false
+          -p:PublishSingleFile=false
+          -p:AppxPackageDir="${{ github.workspace }}\packages\${{ matrix.rid }}\"
+
+      - name: Stage main MSIX (exclude Microsoft framework packages)
+        shell: pwsh
+        run: |
+          # The build also emits Microsoft.* framework packages
+          # (WindowsAppRuntime.1.x.msix, VCLibs, UI.Xaml) under
+          # AppPackages/..._Test/Dependencies/. These are already signed by
+          # Microsoft; feeding them to signtool fails with SignerSign()
+          # 0x8007000b (ERROR_BAD_FORMAT). Stage only our own main package.
+          New-Item -ItemType Directory -Force staging | Out-Null
+          $pkg = Get-ChildItem -Path "packages/${{ matrix.rid }}" -Recurse -Filter *.msix |
+            Where-Object { $_.Name -notlike 'Microsoft.*' } |
+            Select-Object -First 1
+          if (-not $pkg) { throw "Main MSIX not found under packages/${{ matrix.rid }}" }
+          Copy-Item $pkg.FullName -Destination staging
+          Get-ChildItem staging | Select-Object FullName
+
+      - name: Upload unsigned MSIX
+        uses: actions/upload-artifact@v7
+        with:
+          name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
+          path: staging/*.msix
+          if-no-files-found: error
+
+      - name: Upload MSBuild binlog (debug)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: msix-binlog-${{ matrix.rid }}-${{ github.sha }}
+          path: msbuild.binlog
+          if-no-files-found: warn
