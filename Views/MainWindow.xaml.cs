@@ -135,6 +135,21 @@ namespace LlamaApp.Views
         {
             InitializeComponent();
             ConfigureAsFlyout();
+
+            // Brand logos: the bundled SVGs rasterize black (currentColor),
+            // which vanishes on the dark theme's Mica — use the white ".light"
+            // variants while the effective theme is dark, and re-resolve the
+            // rows' logos live when the OS theme flips. Must run before
+            // LoadModels() so the initial resolve picks the right variant.
+            var root = (FrameworkElement)Content;
+            ModelItem.UseLightLogos = root.ActualTheme == ElementTheme.Dark;
+            root.ActualThemeChanged += (_, _) =>
+            {
+                ModelItem.UseLightLogos = root.ActualTheme == ElementTheme.Dark;
+                ModelItem.ClearLogoCache();
+                RefreshRowLogos();
+            };
+
             Closed += MainWindow_Closed;
             Activated += MainWindow_Activated;
 
@@ -783,6 +798,16 @@ namespace LlamaApp.Views
         }
 
         // ---- Row hover feedback ----
+
+        /// <summary>
+        /// Re-resolves every row's brand logo after a theme change (the logo
+        /// variant is theme-dependent and the cache has just been cleared).
+        /// </summary>
+        private void RefreshRowLogos()
+        {
+            foreach (var item in LocalModels.Concat(RecommendedModels))
+                item.Logo = ModelItem.ResolveLogo(item.Brand);
+        }
 
         /// <summary>
         /// Paints the hovered model row with the theme's subtle fill so rows read
