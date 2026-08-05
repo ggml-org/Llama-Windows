@@ -128,7 +128,7 @@ jobs:
           timestamp-digest:             SHA256
 
       - name: Upload .msixbundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: LlamaApp-msixbundle-${{ github.sha }}
           path: bundle/*.msixbundle
