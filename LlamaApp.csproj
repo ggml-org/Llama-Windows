@@ -32,7 +32,7 @@
              AssemblyVersion). Keep in sync with Identity@Version in
              Package.appxmanifest — single-project MSIX takes the package
              version from the manifest, not from here. -->
-        <Version>0.8.0.0</Version>
+        <Version>0.8.2.0</Version>
         <!-- Never emit a .msixbundle from the per-arch build. Shipping assets
              at several scales (Square44x44Logo.scale-*.png etc.) makes MakePri
              split resources into scale-* resource packages, and the default
