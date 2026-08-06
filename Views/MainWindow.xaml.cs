@@ -469,14 +469,16 @@ namespace LlamaApp.Views
         // ---- Model download + launch ----
 
         /// <summary>
-        /// Fired when a row in the Recommended Models section is tapped. Moves
-        /// the model to the Available section with a progress ring, kicks off
-        /// <see cref="LlamaManager.DownloadModelAsync"/> via the running llama
-        /// server, then loads it (see <see cref="LoadAndWatchAsync"/>) when the
-        /// download completes — the row transitions download ring -> load ring ->
-        /// OpenInNewWindow glyph.
+        /// Fired when a row in the Recommended Models section is invoked —
+        /// clicked, or Enter/Space on the focused row (the row root is a
+        /// chromeless Button, so keyboard and screen-reader invokes land here
+        /// too). Moves the model to the Available section with a progress ring,
+        /// kicks off <see cref="LlamaManager.DownloadModelAsync"/> via the
+        /// running llama server, then loads it (see
+        /// <see cref="LoadAndWatchAsync"/>) when the download completes — the
+        /// row transitions download ring -> load ring -> OpenInNewWindow glyph.
         /// </summary>
-        private void RecommendedModel_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+        private void RecommendedModel_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not FrameworkElement fe)
                 return;

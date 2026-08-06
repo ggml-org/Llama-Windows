@@ -358,20 +358,33 @@
             </DataTemplate>
 
             <!-- Recommended model row: icon + name/params·license + download glyph.
-                 The whole row is tappable — clicking starts a download. The row
-                 lights up on hover to communicate that it's clickable, and shows
-                 the full (possibly ellipsis) model name as a tooltip. -->
+                 The whole row is a chromeless Button — click, Enter or Space
+                 starts a download. A bare Grid (the previous root) isn't
+                 focusable and has no invoke pattern, so downloading was
+                 impossible by keyboard and invisible to screen readers; the
+                 Button gives Tab focus, key invoke, an automation name and a
+                 focus visual for free. Its own visual states paint the
+                 hover/pressed fill (ButtonBackgroundPointerOver is the same
+                 SubtleFillColorSecondaryBrush the Available rows paint
+                 manually), so the custom pointer handlers aren't needed here.
+                 The tooltip shows the full (possibly ellipsized) model name. -->
             <DataTemplate x:Key="RecommendedModelRowTemplate"
                           x:DataType="local:ModelItem">
+                <Button Padding="0"
+                        MinWidth="0" MinHeight="0"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        CornerRadius="6"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Stretch"
+                        VerticalContentAlignment="Stretch"
+                        Click="RecommendedModel_Click"
+                        Tag="{x:Bind}"
+                        AutomationProperties.Name="{x:Bind DisplayName}"
+                        AutomationProperties.HelpText="Download this model"
+                        ToolTipService.ToolTip="{x:Bind Name}">
                 <Grid Padding="8,6"
-                      ColumnSpacing="10"
-                      CornerRadius="6"
-                      Background="Transparent"
-                      Tag="{x:Bind}"
-                      Tapped="RecommendedModel_Tapped"
-                      PointerEntered="Row_PointerEntered"
-                      PointerExited="Row_PointerExited"
-                      ToolTipService.ToolTip="{x:Bind Name}">
+                      ColumnSpacing="10">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -426,6 +439,7 @@
                               Opacity="0.5"
                               VerticalAlignment="Center" />
                 </Grid>
+                </Button>
             </DataTemplate>
         </Grid.Resources>
 
