@@ -1534,6 +1534,19 @@ namespace LlamaApp.Views
             ShowWindow(_hwnd, SW_HIDE);
         }
 
+        /// <summary>
+        /// Esc dismisses the flyout — the same convention as the chat overlay
+        /// (and as clicking away, which hides on deactivation). The accelerator
+        /// is window-level, so it fires wherever focus sits inside the flyout.
+        /// </summary>
+        private void EscapeAccelerator_Invoked(
+            Microsoft.UI.Xaml.Input.KeyboardAccelerator sender,
+            Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
+        {
+            args.Handled = true;
+            HideFlyout();
+        }
+
         /// <summary>Whether the flyout is currently visible on screen.</summary>
         public bool IsFlyoutVisible => AppWindow.IsVisible;
 

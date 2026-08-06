@@ -29,6 +29,15 @@
         <MicaBackdrop Kind="Base" />
     </Window.SystemBackdrop>
 
+    <!-- Esc dismisses the flyout (the same convention as the chat overlay,
+         whose pattern this copies). KeyboardAccelerators live on Control, not
+         Window, so the root Grid is wrapped in a UserControl; window-level
+         accelerators are processed regardless of which element has focus. -->
+    <UserControl>
+        <UserControl.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Escape" Invoked="EscapeAccelerator_Invoked" />
+        </UserControl.KeyboardAccelerators>
+
     <Grid>
         <Grid.Resources>
             <!-- Local model row: icon + name/params·size + play glyph or progress ring.
@@ -683,4 +692,5 @@
         </StackPanel>
 
     </Grid>
+    </UserControl>
 </Window>
