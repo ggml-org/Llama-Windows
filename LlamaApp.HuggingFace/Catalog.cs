@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LlamaApp.Common;
@@ -230,18 +231,30 @@ public sealed class Catalog : IModelSource
         );
     }
 
-    /// <summary>Formats a byte count as a human-readable size string, e.g. 2526080992 → "2.4 GB". Internal for unit tests.</summary>
+    /// <summary>
+    /// Formats a byte count as a human-readable size string, e.g. 2526080992 → "2.5 GB".
+    /// Internal for unit tests.
+    /// </summary>
+    /// <remarks>
+    /// Decimal units (1 GB = 1e9 B), whole KB/MB and one fractional digit at GB/TB.
+    /// This mirrors the pre-formatted <c>size</c> strings in catalog.json — and must:
+    /// <see cref="FetchLocalAsync"/> substitutes this value into the very same
+    /// <see cref="Repository.Size"/> field the catalog fills, so a different base
+    /// would make an installed model's size differ from its Discover listing
+    /// (12109566560 B reads "12.1 GB" decimal but "11.3 GB" binary). Invariant
+    /// culture for the same reason: the catalog strings are period-separated.
+    /// </remarks>
     internal static string FormatBytes(ulong bytes)
     {
-        string[] units = ["B", "KB", "MB", "GB", "TB"];
-        double size = bytes;
-        var unit = 0;
-        while (size >= 1024 && unit < units.Length - 1)
-        {
-            size /= 1024;
-            unit++;
-        }
-        return unit == 0 ? $"{bytes} B" : $"{size:0.#} {units[unit]}";
+        if (bytes >= 1_000_000_000_000)
+            return string.Create(CultureInfo.InvariantCulture, $"{bytes / 1_000_000_000_000.0:0.#} TB");
+        if (bytes >= 1_000_000_000)
+            return string.Create(CultureInfo.InvariantCulture, $"{bytes / 1_000_000_000.0:0.#} GB");
+        if (bytes >= 1_000_000)
+            return string.Create(CultureInfo.InvariantCulture, $"{bytes / 1_000_000.0:0} MB");
+        if (bytes >= 1_000)
+            return string.Create(CultureInfo.InvariantCulture, $"{bytes / 1_000.0:0} KB");
+        return string.Create(CultureInfo.InvariantCulture, $"{bytes} B");
     }
 
     // ---- JSON DTOs matching the catalog.json schema ----
