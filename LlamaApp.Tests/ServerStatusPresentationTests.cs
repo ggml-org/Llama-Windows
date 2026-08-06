@@ -64,6 +64,19 @@ public class ServerStatusPresentationTests
     }
 
     [Fact]
+    public void Stopped_While_Installing_Is_Amber_And_Says_So()
+    {
+        // First-run binary install: hundreds of MB with no other progress
+        // indication — the dot must not read a plain gray "stopped".
+        var d = ServerStatusPresentation.Describe(
+            LlamaManager.ServerState.Stopped, LlamaManager.InstallState.Installing);
+
+        Assert.Equal(0xD2, d.Dot.R); // amber
+        Assert.False(d.CanRelaunch);
+        Assert.Contains("installing", d.ToolTip);
+    }
+
+    [Fact]
     public void Stopped_After_Failed_Install_Shows_Relaunch()
     {
         // First-run install failure leaves the server Stopped (never

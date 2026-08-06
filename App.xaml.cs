@@ -119,6 +119,26 @@ namespace LlamaApp
             _overlay = new OverlayWindow();
             _hotkey = new GlobalHotkey();
             _hotkey.Register(() => _dispatcher.TryEnqueue(() => _overlay.Summon()));
+
+            // The hotkey is hard-coded and otherwise undiscoverable — say so
+            // when it can't work instead of the shortcut silently doing
+            // nothing (RegisterHotKey fails when another app owns Alt+Space).
+            if (!_hotkey.IsRegistered)
+            {
+                Notifications.Show("Alt+Space unavailable",
+                    "Another app is using the Alt+Space shortcut, so the chat overlay hotkey is off.");
+            }
+
+            // One-time first-run hint: the app is tray-only (no window appears
+            // on launch) and the overlay hotkey is undiscoverable — tell the
+            // user both, exactly once.
+            if (!Settings.Current.TrayHintShown)
+            {
+                Settings.Current.TrayHintShown = true;
+                Settings.Current.Save();
+                Notifications.Show("LlamaApp is running",
+                    "Find it in the system tray — and press Alt+Space anytime to chat with a loaded model.");
+            }
         }
     }
 }

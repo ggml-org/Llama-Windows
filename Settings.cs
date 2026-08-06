@@ -67,6 +67,13 @@ public sealed class Settings
     /// </summary>
     public bool LaunchAtStartup { get; set; } = false;
 
+    /// <summary>
+    /// Whether the one-time first-run hint ("LlamaApp lives in the system
+    /// tray; Alt+Space opens the chat overlay") has been shown. Persisted so
+    /// the toast fires exactly once, on the first launch.
+    /// </summary>
+    public bool TrayHintShown { get; set; } = false;
+
     private static Settings Load()
     {
         try

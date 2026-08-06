@@ -36,6 +36,13 @@ internal sealed class GlobalHotkey : IDisposable
     private bool _registered;
     private bool _disposed;
 
+    /// <summary>
+    /// True when the hotkey is live. False after a failed
+    /// <see cref="Register"/> (another app already owns Alt+Space) — the
+    /// caller surfaces that instead of the shortcut silently doing nothing.
+    /// </summary>
+    public bool IsRegistered => _registered;
+
     /// <summary>Registers the hotkey and delivers presses to <paramref name="onPressed"/>.</summary>
     public void Register(Action onPressed)
     {
