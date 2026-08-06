@@ -87,6 +87,72 @@ public class ModelItemStateMachineTests
         Assert.True(item.PlayGlyphVisible);
     }
 
+    // ----- Cancel-download button visibility -------------------------------
+
+    [Fact]
+    public void Cancel_Button_Hidden_When_Idle()
+    {
+        var item = new ModelItem();
+        Assert.False(item.CancelDownloadVisible);
+    }
+
+    [Fact]
+    public void Cancel_Button_Shown_Only_For_App_Driven_Downloads()
+    {
+        // An externally-triggered download (WebUI / CLI) has no cancellation
+        // source — the button must hide rather than offer a no-op cancel.
+        var item = new ModelItem { IsDownloading = true };
+        Assert.False(item.CancelDownloadVisible);
+
+        // The driver assigns the source when the download starts...
+        item.DownloadCancellation = new CancellationTokenSource();
+        Assert.True(item.CancelDownloadVisible);
+
+        // ...and clears it when the download ends (before IsDownloading flips).
+        item.DownloadCancellation = null;
+        Assert.False(item.CancelDownloadVisible);
+    }
+
+    [Fact]
+    public void Cancel_Button_Hides_When_Download_Ends()
+    {
+        var item = new ModelItem
+        {
+            IsDownloading = true,
+            DownloadCancellation = new CancellationTokenSource(),
+        };
+        Assert.True(item.CancelDownloadVisible);
+
+        item.IsDownloading = false;
+        Assert.False(item.CancelDownloadVisible);
+    }
+
+    [Fact]
+    public void DownloadCancellation_Raises_Cancel_Visibility_Notification()
+    {
+        var item = new ModelItem { IsDownloading = true };
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.DownloadCancellation = new CancellationTokenSource();
+        Assert.Contains(nameof(ModelItem.CancelDownloadVisible), raised);
+
+        raised.Clear();
+        item.DownloadCancellation = null;
+        Assert.Contains(nameof(ModelItem.CancelDownloadVisible), raised);
+    }
+
+    [Fact]
+    public void IsDownloading_Raises_Cancel_Visibility_Notification()
+    {
+        var item = new ModelItem();
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.IsDownloading = true;
+        Assert.Contains(nameof(ModelItem.CancelDownloadVisible), raised);
+    }
+
     // ----- Download progress captions --------------------------------------
 
     [Fact]

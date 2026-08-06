@@ -236,6 +236,35 @@
                                        HorizontalAlignment="Center" />
                         </StackPanel>
 
+                        <!-- Cancel download: stops the in-flight download (the
+                             server is asked to abort too; a partial download
+                             resumes on the next attempt). Sits at the trailing
+                             edge like the other row actions and shares their
+                             metrics. Hidden for externally-triggered downloads
+                             (WebUI / CLI), which have no cancellation source —
+                             CancelDownloadVisible excludes them so the button
+                             is never a no-op. The glyph MUST exist in both
+                             Segoe Fluent Icons and Segoe MDL2 Assets (see the
+                             vision-marker comment above): U+E711 (Cancel) does.
+                             The download -> load transition drops this button,
+                             shrinking the action cell by one slot; the ring
+                             itself keeps its slot, so the row height and the
+                             ring position don't move. -->
+                        <Button Visibility="{x:Bind CancelDownloadVisible, Mode=OneWay}"
+                                Click="LocalModelCancelDownload_Click"
+                                Tag="{x:Bind}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Cancel download"
+                                ToolTipService.ToolTip="Cancel download">
+                            <FontIcon Glyph="&#xE711;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
                         <!-- Load ring: load request sent. Determinate once the
                              server's status_change SSE events report a progress
                              fraction (with a percent caption, like the download

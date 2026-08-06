@@ -17,6 +17,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private bool _isDownloading;
     private double _downloadFraction;
     private bool _downloadFailed;
+    private CancellationTokenSource? _downloadCancellation;
     private bool _isLoading;
     private double _loadFraction;
     private bool _isLoaded;
@@ -93,6 +94,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(OpenGlyphVisible));
             OnPropertyChanged(nameof(IsIndeterminateDownload));
             OnPropertyChanged(nameof(DownloadPercentTextVisible));
+            OnPropertyChanged(nameof(CancelDownloadVisible));
         }
     }
 
@@ -117,10 +119,21 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// Cancels an in-flight download. Created by the download driver
     /// (MainWindow.DownloadAndLaunchAsync) when the download starts and cleared
     /// when it ends; the row's cancel button calls
-    /// <see cref="CancellationTokenSource.Cancel"/> on it. Not a UI property —
-    /// no change notification.
+    /// <see cref="CancellationTokenSource.Cancel"/> on it. Stays null for
+    /// downloads the app didn't start (WebUI / CLI) — those can't be canceled
+    /// from the row, so the setter notifies <see cref="CancelDownloadVisible"/>
+    /// to keep the cancel button in sync.
     /// </summary>
-    public CancellationTokenSource? DownloadCancellation { get; set; }
+    public CancellationTokenSource? DownloadCancellation
+    {
+        get => _downloadCancellation;
+        set
+        {
+            if (ReferenceEquals(_downloadCancellation, value)) return;
+            _downloadCancellation = value;
+            OnPropertyChanged(nameof(CancelDownloadVisible));
+        }
+    }
 
     /// <summary>True if the download failed; the row shows an error indicator.</summary>
     public bool DownloadFailed
@@ -224,6 +237,14 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
 
     /// <summary>True when the download progress ring should be visible.</summary>
     public bool ProgressRingVisible => IsDownloading;
+
+    /// <summary>
+    /// True when the row's cancel-download button should be visible — while an
+    /// app-driven download is in flight. Externally-triggered downloads (WebUI /
+    /// CLI) have no <see cref="DownloadCancellation"/> source, so the button
+    /// hides rather than offering a no-op cancel.
+    /// </summary>
+    public bool CancelDownloadVisible => IsDownloading && DownloadCancellation is not null;
 
     /// <summary>True when the load ring should be visible.</summary>
     public bool LoadingRingVisible => IsLoading && !IsDownloading;
