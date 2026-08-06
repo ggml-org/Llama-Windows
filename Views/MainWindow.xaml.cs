@@ -416,6 +416,7 @@ namespace LlamaApp.Views
                     RepoName = repo.Name,
                     Parameters = repo.Parameters,
                     Size = repo.Size,
+                    SizeBytes = repo.SizeBytes,
                     License = repo.License,
                     Vision = repo.Vision,
                     Quant = repo.Quant,
@@ -490,6 +491,19 @@ namespace LlamaApp.Views
             if (item.IsDownloading)
                 return; // already in flight (double-tap guard)
 
+            // Disk-space preflight: a one-tap row starts a multi-GB download,
+            // so block it up front when the cache drive can't hold the model
+            // (an unknown size or a failed probe never blocks).
+            if (item.SizeBytes > 0 &&
+                !Common.DiskSpace.HasEnoughSpace(
+                    Settings.Current.CacheDirectory, item.SizeBytes, out var freeBytes))
+            {
+                Log.Info($"download blocked: {((IModel)item).ServerModelId} needs " +
+                    $"{item.SizeBytes} bytes, only {freeBytes} free");
+                ShowInsufficientSpaceFlyout(fe, item, freeBytes);
+                return;
+            }
+
             // Move the model from Recommended → Available (downloading).
             RecommendedModels.Remove(item);
             item.Downloadable = false;
@@ -499,6 +513,48 @@ namespace LlamaApp.Views
             UpdateEmptyState();
 
             _ = DownloadAndLaunchAsync(item);
+        }
+
+        /// <summary>
+        /// Shows a light-dismiss flyout on the tapped Recommended row when the
+        /// disk-space preflight blocks a download. A flyout (not a dialog) so
+        /// the tray window's hide-on-deactivate can't strand a modal.
+        /// </summary>
+        private static void ShowInsufficientSpaceFlyout(FrameworkElement target, ModelItem item, long freeBytes)
+        {
+            // Free space is realistically GB-scale; drop to MB below that so a
+            // nearly-full drive doesn't read "0 GB".
+            var freeText = freeBytes >= 1_000_000_000
+                ? $"{freeBytes / 1_000_000_000.0:0.#} GB"
+                : $"{Math.Max(0, freeBytes) / 1_000_000.0:0} MB";
+
+            var flyout = new Flyout
+            {
+                Content = new StackPanel
+                {
+                    Spacing = 6,
+                    MaxWidth = 260,
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "Not enough disk space",
+                            FontSize = 13,
+                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        },
+                        new TextBlock
+                        {
+                            Text = $"{item.DisplayName} needs {item.Size}, but only " +
+                                   $"{freeText} is free. Free up space, or change the " +
+                                   "cache folder in Settings.",
+                            FontSize = 12,
+                            Opacity = 0.7,
+                            TextWrapping = TextWrapping.Wrap,
+                        },
+                    },
+                },
+            };
+            flyout.ShowAt(target);
         }
 
         /// <summary>
