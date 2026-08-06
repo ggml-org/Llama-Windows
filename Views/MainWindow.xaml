@@ -166,6 +166,33 @@
                                       Opacity="0.5" />
                         </Button>
 
+                        <!-- Load failed: warning dot + retry button, mirroring
+                             the download-failed pair above (same two slots,
+                             same metrics, so a row flipping between failed and
+                             available doesn't shift the action cell). Without
+                             this a rejected load (OOM, corrupt GGUF, server
+                             refusal) was silent: the ring just vanished. -->
+                        <FontIcon Visibility="{x:Bind LoadFailed, Mode=OneWay}"
+                                  Glyph="&#xE7BA;"
+                                  FontSize="16"
+                                  Foreground="#F85149"
+                                  VerticalAlignment="Center"
+                                  Margin="0,0,2,0"
+                                  ToolTipService.ToolTip="Couldn't load the model" />
+                        <Button Visibility="{x:Bind LoadFailed, Mode=OneWay}"
+                                Click="LocalModelRetryLoad_Click"
+                                Tag="{x:Bind}"
+                                Padding="6"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                BorderThickness="0"
+                                AutomationProperties.Name="Retry load"
+                                ToolTipService.ToolTip="Retry load">
+                            <FontIcon Glyph="&#xE72C;"
+                                      FontSize="16"
+                                      Opacity="0.5" />
+                        </Button>
+
                         <!-- Delete button: remove the model from the server's
                              cache (DELETE /models/{name}). Sits to the left of
                              the play glyph; shown only while the model is

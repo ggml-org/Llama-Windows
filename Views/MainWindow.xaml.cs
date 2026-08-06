@@ -551,6 +551,7 @@ namespace LlamaApp.Views
                         // Download done — load it. The row now shows the
                         // load ring until the poller reports the model as
                         // loaded.
+                        item.LoadFailed = false;
                         item.IsLoading = true;
                         _ = LoadAndWatchAsync(item);
                     }
@@ -632,6 +633,29 @@ namespace LlamaApp.Views
             }
 
             Log.Info("play clicked: loading " + ((IModel)item).ServerModelId);
+            item.LoadFailed = false;
+            item.IsLoading = true;
+            _ = LoadAndWatchAsync(item);
+        }
+
+        /// <summary>
+        /// Fired when the retry glyph on a load-failed row is tapped: clears the
+        /// failure state and re-attempts the load. (A load-failed row shows
+        /// warning + retry instead of the play glyph so a rejected load — OOM,
+        /// corrupt GGUF, server refusal — isn't silent.)
+        /// </summary>
+        private void LocalModelRetryLoad_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
+            {
+                Log.Warn("could not resolve a ModelItem");
+                return;
+            }
+            if (item.IsLoading || item.IsLoaded || item.IsDownloading || !item.LoadFailed)
+                return;
+
+            Log.Info("retry clicked: re-loading " + ((IModel)item).ServerModelId);
+            item.LoadFailed = false;
             item.IsLoading = true;
             _ = LoadAndWatchAsync(item);
         }
@@ -902,6 +926,12 @@ namespace LlamaApp.Views
                 {
                     item.IsLoading = false;
                     item.LoadFraction = 0;
+                    // Surface the failure: without this the ring just vanished
+                    // and the play glyph returned with no explanation (OOM,
+                    // corrupt GGUF, server refusal all looked identical).
+                    item.LoadFailed = true;
+                    NotifyWhenHidden("Couldn't load model",
+                        $"{item.DisplayName} couldn't be loaded. It may not fit in memory, or the file may be corrupt.");
                 }
                 if (queue is null || queue.HasThreadAccess)
                     Rejected();
@@ -920,10 +950,20 @@ namespace LlamaApp.Views
                 await Task.Delay(TimeSpan.FromMinutes(2));
                 if (item.IsLoading && !item.IsLoaded)
                 {
-                    if (queue is null || queue.HasThreadAccess)
+                    void GiveUp()
+                    {
+                        if (!item.IsLoading || item.IsLoaded) return;
                         item.IsLoading = false;
+                        // Same contract as a rejection: say we gave up rather
+                        // than silently dropping the spinner.
+                        item.LoadFailed = true;
+                        NotifyWhenHidden("Load timed out",
+                            $"{item.DisplayName} didn't finish loading within 2 minutes.");
+                    }
+                    if (queue is null || queue.HasThreadAccess)
+                        GiveUp();
                     else
-                        queue.TryEnqueue(() => { if (item.IsLoading && !item.IsLoaded) item.IsLoading = false; });
+                        queue.TryEnqueue(GiveUp);
                 }
             });
         }
@@ -1132,6 +1172,7 @@ namespace LlamaApp.Views
                         item.IsLoaded = true;
                         item.IsLoading = false;
                         item.IsDownloading = false;
+                        item.LoadFailed = false; // server-truth loaded clears any stale failure
                         StopExternalDownloadWatch(item);
                     }
                     else if (sm.IsDownloading)

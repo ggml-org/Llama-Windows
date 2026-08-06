@@ -21,6 +21,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private bool _isLoading;
     private double _loadFraction;
     private bool _isLoaded;
+    private bool _loadFailed;
     private ImageSource? _logo;
 
     /// <summary>Display label (e.g. "GPT-OSS 20B (mxfp4)").</summary>
@@ -149,6 +150,26 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// True when the last load request was rejected by the server (OOM, corrupt
+    /// GGUF, …) or never confirmed — the row shows a warning + retry affordance
+    /// instead of the play glyph, mirroring <see cref="DownloadFailed"/>. Set by
+    /// the load driver (MainWindow.LoadAndWatchAsync); cleared when a load is
+    /// (re)attempted and when the server reports the model loaded.
+    /// </summary>
+    public bool LoadFailed
+    {
+        get => _loadFailed;
+        set
+        {
+            if (_loadFailed == value) return;
+            _loadFailed = value;
+            OnPropertyChanged();
+            // A failed row swaps the play glyph for the warning + retry affordance.
+            OnPropertyChanged(nameof(PlayGlyphVisible));
+        }
+    }
+
     // ---- Model load state (drives the Available-row action cell) ----
     // The lifecycle of a local model row, left to right:
     //   unloaded --(play click)--> loading --(server reports loaded)--> loaded
@@ -231,9 +252,10 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>
     /// True when the play glyph should be visible (unloaded, idle). A failed
     /// download shows the warning + retry affordance instead of play — the
-    /// model isn't (fully) cached, so loading it would just be rejected.
+    /// model isn't (fully) cached, so loading it would just be rejected. A
+    /// failed load shows the same affordance so the rejection isn't silent.
     /// </summary>
-    public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed;
+    public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed && !LoadFailed;
 
     /// <summary>True when the download progress ring should be visible.</summary>
     public bool ProgressRingVisible => IsDownloading;
