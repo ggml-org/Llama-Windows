@@ -231,6 +231,73 @@ public class ModelItemStateMachineTests
         Assert.False(item.DownloadPercentTextVisible); // not downloading
     }
 
+    // ----- Download detail line / subtitle ---------------------------------
+
+    [Fact]
+    public void Subtitle_Is_Params_And_Size_At_Rest()
+    {
+        var item = new ModelItem { Parameters = "20B", Size = "12.1 GB" };
+        Assert.Equal("20B · 12.1 GB", item.SubtitleText);
+    }
+
+    [Fact]
+    public void Subtitle_Drops_Empty_Parts()
+    {
+        // An uncataloged model can lack params/size — no dangling " · ".
+        var item = new ModelItem { Parameters = "", Size = "12.1 GB" };
+        Assert.Equal("12.1 GB", item.SubtitleText);
+    }
+
+    [Fact]
+    public void Subtitle_Shows_Download_Detail_While_Downloading()
+    {
+        var item = new ModelItem
+        {
+            Parameters = "20B",
+            Size = "12.1 GB",
+            IsDownloading = true,
+            DownloadedBytes = 3_200_000_000,
+            DownloadTotalBytes = 12_100_000_000,
+        };
+
+        Assert.Equal("3.2 GB of 12.1 GB", item.SubtitleText);
+
+        // Size unknown yet → the rest subtitle stays (no "0 B of 0 B").
+        var early = new ModelItem { Parameters = "20B", Size = "12.1 GB", IsDownloading = true };
+        Assert.Equal("20B · 12.1 GB", early.SubtitleText);
+    }
+
+    [Fact]
+    public void Subtitle_Returns_To_Params_Size_When_Download_Ends()
+    {
+        var item = new ModelItem
+        {
+            Parameters = "20B",
+            Size = "12.1 GB",
+            IsDownloading = true,
+            DownloadedBytes = 3_200_000_000,
+            DownloadTotalBytes = 12_100_000_000,
+        };
+
+        item.IsDownloading = false;
+        Assert.Equal("20B · 12.1 GB", item.SubtitleText);
+    }
+
+    [Fact]
+    public void Byte_Updates_Raise_Subtitle_Notifications()
+    {
+        var item = new ModelItem { IsDownloading = true };
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.DownloadTotalBytes = 12_100_000_000;
+        item.DownloadedBytes = 3_200_000_000;
+        item.DownloadBytesPerSecond = 45_000_000;
+
+        Assert.Contains(nameof(ModelItem.SubtitleText), raised);
+        Assert.Contains(nameof(ModelItem.DownloadDetailText), raised);
+    }
+
     // ----- Load progress captions -------------------------------------------
 
     [Fact]

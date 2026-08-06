@@ -99,14 +99,14 @@
                         <StackPanel Orientation="Horizontal"
                                     Spacing="6"
                                     VerticalAlignment="Center">
+                            <!-- Subtitle: "params · size" at rest; while a
+                                 download runs, the live detail line instead
+                                 ("3.2 GB of 12.1 GB · 45 MB/s · ~4 min left"). -->
                             <TextBlock FontSize="12"
                                        Opacity="0.6"
                                        VerticalAlignment="Center"
-                                       TextTrimming="CharacterEllipsis">
-                                <Run Text="{x:Bind Parameters}" />
-                                <Run Text=" · " />
-                                <Run Text="{x:Bind Size}" />
-                            </TextBlock>
+                                       TextTrimming="CharacterEllipsis"
+                                       Text="{x:Bind SubtitleText, Mode=OneWay}" />
                             <!-- Vision marker: shown when the server reports
                                  image input (architecture.input_modalities).
                                  A small “view” (eye) glyph, dimmed so it reads
