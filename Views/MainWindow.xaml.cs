@@ -518,6 +518,11 @@ namespace LlamaApp.Views
             // server to abort the download when the token fires.
             using var cts = new CancellationTokenSource();
             item.DownloadCancellation = cts;
+            // Reset any stale detail from a previous (failed) attempt — the
+            // subtitle shows the live detail line as soon as a size is known.
+            item.DownloadedBytes = 0;
+            item.DownloadTotalBytes = 0;
+            item.DownloadBytesPerSecond = 0;
 
             // Throttle UI updates: the server streams an SSE progress event per
             // chunk (potentially hundreds/sec), and each one would otherwise
@@ -525,16 +530,44 @@ namespace LlamaApp.Views
             // ~10 updates/sec. Terminal events (Done/Failed) always pass through
             // so the final state lands immediately.
             long lastProgressApplyMs = 0;
+            long lastSampleBytes = 0, lastSampleMs = 0;
+            double bytesPerSecond = 0;
+            string? serverMessage = null;
             var progress = new Progress<ModelDownloadProgress>(p =>
             {
                 var now = Environment.TickCount64;
                 if (!p.Done && !p.Failed && now - lastProgressApplyMs < 100) return;
                 lastProgressApplyMs = now;
 
+                // The server's rejection detail (POST error body, stream
+                // failure) — surfaced in the failure toast.
+                if (p.Failed && !string.IsNullOrWhiteSpace(p.Message))
+                    serverMessage = p.Message;
+
+                // Speed estimate between applied samples (EMA-smoothed — the
+                // per-chunk instantaneous rate jitters too much to show raw).
+                if (p.DownloadedBytes > 0)
+                {
+                    if (lastSampleMs != 0 && p.DownloadedBytes > lastSampleBytes)
+                    {
+                        var instantaneous = (p.DownloadedBytes - lastSampleBytes)
+                            * 1000.0 / Math.Max(1, now - lastSampleMs);
+                        bytesPerSecond = DownloadProgressPresentation
+                            .SmoothSpeed(bytesPerSecond, instantaneous);
+                    }
+                    lastSampleBytes = p.DownloadedBytes;
+                    lastSampleMs = now;
+                }
+
                 void Apply()
                 {
                     if (p.TotalBytes > 0)
+                    {
                         item.DownloadFraction = p.Fraction;
+                        item.DownloadedBytes = p.DownloadedBytes;
+                        item.DownloadTotalBytes = p.TotalBytes;
+                        item.DownloadBytesPerSecond = bytesPerSecond;
+                    }
                 }
                 if (queue is null || queue.HasThreadAccess)
                     Apply();
@@ -561,7 +594,7 @@ namespace LlamaApp.Views
                     {
                         item.DownloadFailed = true;
                         NotifyWhenHidden("Download failed",
-                            $"{item.DisplayName} couldn't be downloaded. Tap retry to try again.");
+                            DownloadFailureToastBody(item, serverMessage));
                     }
                 }
                 if (queue is null || queue.HasThreadAccess)
@@ -587,7 +620,7 @@ namespace LlamaApp.Views
                     item.IsDownloading = false;
                     item.DownloadFailed = true;
                     NotifyWhenHidden("Download failed",
-                        $"{item.DisplayName} couldn't be downloaded. Tap retry to try again.");
+                        DownloadFailureToastBody(item, serverMessage));
                 }
                 if (queue is null || queue.HasThreadAccess)
                     Fail();
@@ -600,6 +633,24 @@ namespace LlamaApp.Views
                 // never touch a disposed source.
                 item.DownloadCancellation = null;
             }
+        }
+
+        /// <summary>
+        /// Builds the download-failure toast body, appending the server's
+        /// rejection detail when one was reported (truncated so a JSON error
+        /// body doesn't flood the toast).
+        /// </summary>
+        private static string DownloadFailureToastBody(ModelItem item, string? serverMessage)
+        {
+            var detail = "";
+            if (!string.IsNullOrWhiteSpace(serverMessage))
+            {
+                var trimmed = serverMessage.Length > 140
+                    ? serverMessage[..140] + "…"
+                    : serverMessage;
+                detail = $" Server said: {trimmed}.";
+            }
+            return $"{item.DisplayName} couldn't be downloaded.{detail} Tap retry to try again.";
         }
 
         // ---- Model load → open ----
@@ -1287,6 +1338,8 @@ namespace LlamaApp.Views
         private async Task WatchExternalDownloadAsync(ModelItem item, string repo, CancellationTokenSource cts)
         {
             long lastApplyMs = 0;
+            long lastSampleBytes = 0, lastSampleMs = 0;
+            double bytesPerSecond = 0;
             var progress = new Progress<ModelDownloadProgress>(p =>
             {
                 // Same throttle as DownloadAndLaunchAsync: ~10 UI updates/s, and
@@ -1294,8 +1347,29 @@ namespace LlamaApp.Views
                 var now = Environment.TickCount64;
                 if (!p.Done && now - lastApplyMs < 100) return;
                 lastApplyMs = now;
+
+                // Same speed estimate as the app-driven path, so an external
+                // download's row shows the same detail line.
+                if (p.DownloadedBytes > 0)
+                {
+                    if (lastSampleMs != 0 && p.DownloadedBytes > lastSampleBytes)
+                    {
+                        var instantaneous = (p.DownloadedBytes - lastSampleBytes)
+                            * 1000.0 / Math.Max(1, now - lastSampleMs);
+                        bytesPerSecond = DownloadProgressPresentation
+                            .SmoothSpeed(bytesPerSecond, instantaneous);
+                    }
+                    lastSampleBytes = p.DownloadedBytes;
+                    lastSampleMs = now;
+                }
+
                 if (p.TotalBytes > 0)
+                {
                     item.DownloadFraction = p.Fraction;
+                    item.DownloadedBytes = p.DownloadedBytes;
+                    item.DownloadTotalBytes = p.TotalBytes;
+                    item.DownloadBytesPerSecond = bytesPerSecond;
+                }
             });
 
             try

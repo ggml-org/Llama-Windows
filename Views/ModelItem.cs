@@ -16,6 +16,9 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
 {
     private bool _isDownloading;
     private double _downloadFraction;
+    private long _downloadedBytes;
+    private long _downloadTotalBytes;
+    private double _downloadBytesPerSecond;
     private bool _downloadFailed;
     private CancellationTokenSource? _downloadCancellation;
     private bool _isLoading;
@@ -96,6 +99,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(IsIndeterminateDownload));
             OnPropertyChanged(nameof(DownloadPercentTextVisible));
             OnPropertyChanged(nameof(CancelDownloadVisible));
+            OnPropertyChanged(nameof(SubtitleText));
         }
     }
 
@@ -133,6 +137,55 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             if (ReferenceEquals(_downloadCancellation, value)) return;
             _downloadCancellation = value;
             OnPropertyChanged(nameof(CancelDownloadVisible));
+        }
+    }
+
+    /// <summary>
+    /// Bytes fetched so far, fed by the download driver (and the external-
+    /// download watch) from the server's SSE progress events. Drives the
+    /// detail line that replaces the subtitle while downloading.
+    /// </summary>
+    public long DownloadedBytes
+    {
+        get => _downloadedBytes;
+        set
+        {
+            if (_downloadedBytes == value) return;
+            _downloadedBytes = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DownloadDetailText));
+            OnPropertyChanged(nameof(SubtitleText));
+        }
+    }
+
+    /// <summary>Total bytes to fetch; 0 until the server reports a size.</summary>
+    public long DownloadTotalBytes
+    {
+        get => _downloadTotalBytes;
+        set
+        {
+            if (_downloadTotalBytes == value) return;
+            _downloadTotalBytes = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DownloadDetailText));
+            OnPropertyChanged(nameof(SubtitleText));
+        }
+    }
+
+    /// <summary>
+    /// Smoothed download rate in bytes/sec, estimated by the download driver
+    /// between throttled progress samples; 0 until the first estimate.
+    /// </summary>
+    public double DownloadBytesPerSecond
+    {
+        get => _downloadBytesPerSecond;
+        set
+        {
+            if (Math.Abs(_downloadBytesPerSecond - value) < 1.0) return;
+            _downloadBytesPerSecond = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DownloadDetailText));
+            OnPropertyChanged(nameof(SubtitleText));
         }
     }
 
@@ -303,6 +356,23 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// ring is up and a progress fraction has been reported.
     /// </summary>
     public bool LoadPercentTextVisible => LoadingRingVisible && LoadFraction > 0;
+
+    /// <summary>
+    /// The download detail line, e.g. "3.2 GB of 12.1 GB · 45 MB/s · ~4 min
+    /// left" (formatting rules live in <see cref="DownloadProgressPresentation"/>).
+    /// </summary>
+    public string DownloadDetailText => DownloadProgressPresentation.FormatDetail(
+        DownloadedBytes, DownloadTotalBytes, DownloadBytesPerSecond);
+
+    /// <summary>
+    /// The row's subtitle line: while a download with a known size runs, the
+    /// live progress detail (<see cref="DownloadDetailText"/>); otherwise the
+    /// catalog's "params · size" pair (empty parts dropped).
+    /// </summary>
+    public string SubtitleText => IsDownloading && DownloadTotalBytes > 0
+        ? DownloadDetailText
+        : string.Join(" · ", new[] { Parameters, Size }
+            .Where(s => !string.IsNullOrWhiteSpace(s)));
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? prop = null)
