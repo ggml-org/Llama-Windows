@@ -165,6 +165,45 @@
                                 </Grid>
                             </Border>
 
+                            <!-- Chat overlay shortcut (informational — the
+                                 hotkey is hard-coded Alt+Space; this card is
+                                 how a user discovers it exists). -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0"
+                                            Width="36" Height="36"
+                                            CornerRadius="6"
+                                            Background="{StaticResource BrandAccentBrush}"
+                                            VerticalAlignment="Top">
+                                        <FontIcon Glyph="&#xE765;"
+                                                  FontSize="16"
+                                                  Foreground="White"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1" Spacing="2">
+                                        <TextBlock Text="Chat overlay"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold" />
+                                        <TextBlock FontSize="12"
+                                                   Opacity="0.6"
+                                                   TextWrapping="WrapWholeWords">
+                                            <Run Text="Press" />
+                                            <Run Text="Alt+Space" FontWeight="SemiBold" />
+                                            <Run Text="anywhere to open the chat overlay for the loaded model. Press Esc to dismiss it." />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
                             <!-- Local models cache directory -->
                             <Border CornerRadius="8"
                                     Padding="16,14"

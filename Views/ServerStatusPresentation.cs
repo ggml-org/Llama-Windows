@@ -64,13 +64,21 @@ namespace LlamaApp.Views
                             ? "llama server: not running (crashed or failed to start) — use the relaunch button"
                             : $"llama server: not running — {detail} Use the relaunch button.",
                         true),
-                _ => installState == LlamaManager.InstallState.Failed
-                    ? new(Gray,
-                        detail is null
-                            ? "llama server: stopped (install failed) — use the relaunch button"
-                            : $"llama server: stopped — install failed: {detail} Use the relaunch button.",
-                        true)
-                    : new(Gray, "llama server: stopped", false),
+                _ => installState switch
+                {
+                    // First-run binary install: amber, and say what's happening —
+                    // the download can be hundreds of MB and otherwise has no
+                    // progress indication anywhere in the app.
+                    LlamaManager.InstallState.Installing =>
+                        new(Amber, "llama server: installing llama.cpp — the first run can take a few minutes…", false),
+                    LlamaManager.InstallState.Failed =>
+                        new(Gray,
+                            detail is null
+                                ? "llama server: stopped (install failed) — use the relaunch button"
+                                : $"llama server: stopped — install failed: {detail} Use the relaunch button.",
+                            true),
+                    _ => new(Gray, "llama server: stopped", false),
+                },
             };
         }
 
