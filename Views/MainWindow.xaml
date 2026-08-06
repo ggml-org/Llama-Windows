@@ -550,8 +550,9 @@
             </StackPanel>
 
             <!-- Empty state — shown when there are no local models. The text
-                 is set from code: "Starting the llama server…" while the server
-                 comes up, then an actionable hint once it's running. -->
+                 is set from code (EmptyStatePresentation) and follows the
+                 server state: starting/installing progress, an actionable hint
+                 once running, an honest failure note when the server is down. -->
             <TextBlock x:Name="NoLocalModelsText"
                        Text="Starting the llama server…"
                        FontSize="13"
