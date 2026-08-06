@@ -345,6 +345,7 @@ namespace LlamaApp.Views
                 Name = DeriveDisplayName(repo, quant, byRepo),
                 RepoName = repo,
                 Quant = quant,
+                Description = matched?.Description ?? "",
                 Parameters = matched?.Parameters ?? "",
                 Size = matched?.Size ?? "",
                 License = matched?.License ?? "",
@@ -407,7 +408,8 @@ namespace LlamaApp.Views
             RecommendedModels.Clear(); // idempotent — safe on catalog retry
 
             // Build a display name that disambiguate quants: "GPT-OSS 20B (mxfp4)".
-            foreach (var repo in repos)
+            // Featured families sort first (catalog order preserved otherwise).
+            foreach (var repo in RecommendedOrdering.OrderForDisplay(repos))
             {
                 var label = !string.IsNullOrEmpty(repo.DisplayName)
                     ? !string.IsNullOrEmpty(repo.Quant)
@@ -419,6 +421,7 @@ namespace LlamaApp.Views
                 {
                     Name = label,
                     RepoName = repo.Name,
+                    Description = repo.Description,
                     Parameters = repo.Parameters,
                     Size = repo.Size,
                     SizeBytes = repo.SizeBytes,
@@ -713,7 +716,7 @@ namespace LlamaApp.Views
                     : serverMessage;
                 detail = $" Server said: {trimmed}.";
             }
-            return $"{item.DisplayName} couldn't be downloaded.{detail} Tap retry to try again.";
+            return $"{item.DisplayName} couldn't be downloaded.{detail} Click retry to try again.";
         }
 
         // ---- Model load → open ----

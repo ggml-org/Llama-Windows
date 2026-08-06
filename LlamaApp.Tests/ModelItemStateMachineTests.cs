@@ -440,6 +440,28 @@ public class ModelItemStateMachineTests
         Assert.Equal("ggml-org/gpt-oss-20b-GGUF", ((IModel)withoutQuant).ServerModelId);
     }
 
+    // ----- Row tooltip (name + description) --------------------------------
+
+    [Fact]
+    public void RowToolTip_Is_The_Name_When_No_Description()
+    {
+        var item = new ModelItem { Name = "GPT-OSS 20B (mxfp4)" };
+        Assert.Equal("GPT-OSS 20B (mxfp4)", item.RowToolTip);
+    }
+
+    [Fact]
+    public void RowToolTip_Appends_The_Description_On_A_Second_Line()
+    {
+        // The catalog's description was populated but bound nowhere — the
+        // tooltip is how you tell what a model is before downloading it.
+        var item = new ModelItem
+        {
+            Name = "GPT-OSS 20B (mxfp4)",
+            Description = "OpenAI's open-weight reasoning model",
+        };
+        Assert.Equal("GPT-OSS 20B (mxfp4)\nOpenAI's open-weight reasoning model", item.RowToolTip);
+    }
+
     // ----- Logo resolution (null paths only — no SvgImageSource created) ----
 
     [Theory]

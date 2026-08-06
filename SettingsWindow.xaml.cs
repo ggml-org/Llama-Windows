@@ -143,6 +143,18 @@ namespace LlamaApp
             }
         }
 
+        private async void OpenLogFolder_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            try
+            {
+                await Windows.System.Launcher.LaunchFolderPathAsync(Common.Log.LogDirectory);
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "open log folder failed");
+            }
+        }
+
         private async void EmptyInstallFolder_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             var path = InstallPathBox.Text;
@@ -179,9 +191,11 @@ namespace LlamaApp
             }
             catch (Exception ex)
             {
+                // The raw exception is logged, not shown — a user-facing
+                // dialog gets an actionable message, not ex.Message.
                 Common.Log.Warn(ex, "empty install folder failed");
                 await ShowMessageAsync("Couldn't empty the folder",
-                    $"Some files may still be in use.\n\n{ex.Message}");
+                    "Some files may still be in use. Close any program using the folder and try again.");
             }
 
             LoadInstallInfo();
