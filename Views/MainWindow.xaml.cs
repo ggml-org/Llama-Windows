@@ -454,12 +454,14 @@ namespace LlamaApp.Views
             LocalModelsList.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
             if (empty)
             {
-                // While the server is still coming up the list may fill shortly —
-                // say so; once it's running, point the user at the Recommended
-                // section instead of a dead-end "No model yet".
-                NoLocalModelsText.Text = LlamaManager.Shared.ServerStatus == LlamaManager.ServerState.Running
-                    ? "No models yet — pick one below to get started"
-                    : "Starting the llama server…";
+                // Honest per-state text (mapping rules live in
+                // EmptyStatePresentation so they stay unit-testable): while the
+                // server is still coming up the list may fill shortly — say so;
+                // once it's running, point at the Recommended section; on a
+                // crash / failed install, say that instead of claiming the
+                // server is still starting forever.
+                NoLocalModelsText.Text = EmptyStatePresentation.Describe(
+                    LlamaManager.Shared.ServerStatus, LlamaManager.Shared.State);
             }
         }
 
