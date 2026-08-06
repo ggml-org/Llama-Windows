@@ -57,6 +57,12 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
 
     public string Parameters { get; set; } = "";
     public string Size { get; set; } = "";
+
+    /// <summary>
+    /// Raw download size in bytes from the catalog (0 when unknown) — used by
+    /// the disk-space preflight before a Recommended-row download starts.
+    /// </summary>
+    public ulong SizeBytes { get; set; }
     public string License { get; set; } = "";
     public bool Vision { get; set; }
 
