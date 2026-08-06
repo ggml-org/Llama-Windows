@@ -55,6 +55,15 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>Short display name: the part of <see cref="Name"/> after the last '/'.</summary>
     public string DisplayName => Name.Split('/', StringSplitOptions.RemoveEmptyEntries).Last().Trim();
 
+    /// <summary>
+    /// The row's tooltip: the full (possibly ellipsized) name, plus the
+    /// catalog's one-line <see cref="Description"/> on a second line when
+    /// known — so you can tell what a model is before downloading it.
+    /// </summary>
+    public string RowToolTip => string.IsNullOrWhiteSpace(Description)
+        ? Name
+        : $"{Name}\n{Description}";
+
     public string Parameters { get; set; } = "";
     public string Size { get; set; } = "";
 

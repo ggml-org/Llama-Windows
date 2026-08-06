@@ -25,6 +25,16 @@ public static class Log
 
     private static readonly object Gate = new();
     private static string? _logDir;
+
+    /// <summary>
+    /// The folder holding the rolled log files
+    /// (<c>%LOCALAPPDATA%\LlamaApp\logs</c>), exposed so the UI can offer an
+    /// "Open Folder" affordance. Computed — no initialization side effects,
+    /// and valid even before the first write.
+    /// </summary>
+    public static string LogDirectory => _logDir ?? Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "LlamaApp", "logs");
     private static string? _currentPath;
     private static string? _currentDate;
     private static StreamWriter? _writer;

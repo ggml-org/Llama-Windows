@@ -51,7 +51,7 @@
                       Background="Transparent"
                       PointerEntered="Row_PointerEntered"
                       PointerExited="Row_PointerExited"
-                      ToolTipService.ToolTip="{x:Bind Name}">
+                      ToolTipService.ToolTip="{x:Bind RowToolTip}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -382,7 +382,7 @@
                         Tag="{x:Bind}"
                         AutomationProperties.Name="{x:Bind DisplayName}"
                         AutomationProperties.HelpText="Download this model"
-                        ToolTipService.ToolTip="{x:Bind Name}">
+                        ToolTipService.ToolTip="{x:Bind RowToolTip}">
                 <Grid Padding="8,6"
                       ColumnSpacing="10">
                     <Grid.ColumnDefinitions>
@@ -420,12 +420,15 @@
                                 <Run Text=" · " />
                                 <Run Text="{x:Bind License}" />
                             </TextBlock>
-                            <!-- Vision marker (same as the Available rows). -->
+                            <!-- Vision marker (same as the Available rows —
+                                 U+E890 View, which exists in both Segoe Fluent
+                                 Icons and Segoe MDL2 Assets; the previous
+                                 U+E7B3 was Repair, a wrench). -->
                             <Border CornerRadius="3"
                                     Background="{ThemeResource ControlFillColorSecondaryBrush}"
                                     Padding="2"
                                     Visibility="{x:Bind Vision, Mode=OneWay}">
-                                <FontIcon Glyph="&#xE7B3;"
+                                <FontIcon Glyph="&#xE890;"
                                           FontSize="10"
                                           Opacity="0.55"
                                           VerticalAlignment="Center" />
@@ -433,10 +436,14 @@
                         </StackPanel>
                     </StackPanel>
 
+                    <!-- Right margin clears the ScrollViewer's overlay
+                         scrollbar (~12px expanded), which would otherwise
+                         cover the glyph when the list scrolls. -->
                     <FontIcon Grid.Column="2"
                               Glyph="&#xE896;"
                               FontSize="16"
                               Opacity="0.5"
+                              Margin="0,0,12,0"
                               VerticalAlignment="Center" />
                 </Grid>
                 </Button>
