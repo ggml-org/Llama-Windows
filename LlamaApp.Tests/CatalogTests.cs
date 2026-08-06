@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using LlamaApp.HuggingFace;
 using Xunit;
@@ -153,15 +154,52 @@ public class CatalogTests
     [Theory]
     [InlineData(0UL, "0 B")]
     [InlineData(512UL, "512 B")]
-    [InlineData(1024UL, "1 KB")]
-    [InlineData(1536UL, "1.5 KB")]
-    [InlineData(1048576UL, "1 MB")]
-    [InlineData(2526080992UL, "2.4 GB")]
-    [InlineData(1073741824UL, "1 GB")]
-    [InlineData(1099511627776UL, "1 TB")]
+    [InlineData(1_000UL, "1 KB")]
+    [InlineData(1_500UL, "2 KB")]
+    [InlineData(1_000_000UL, "1 MB")]
+    [InlineData(2_526_080_992UL, "2.5 GB")]
+    [InlineData(1_000_000_000UL, "1 GB")]
+    [InlineData(1_000_000_000_000UL, "1 TB")]
+    // Boundaries: a hair under a unit step must not borrow the larger unit.
+    [InlineData(999UL, "999 B")]
+    [InlineData(999_999_999UL, "1000 MB")]
     public void FormatBytes_Formats_Human_Readable_Sizes(ulong bytes, string expected)
     {
         Assert.Equal(expected, Catalog.FormatBytes(bytes));
+    }
+
+    // Regression guard for the base of the unit (1 GB = 1e9, not 1024^3).
+    // FetchLocalAsync writes FormatBytes' output into the same Repository.Size
+    // field the catalog fills with its own pre-formatted string, so the two must
+    // agree byte-for-byte or a model's size changes when it becomes installed.
+    // Pairs below are (sizeBytes, size) taken verbatim from llama.app/v1/catalog.json.
+    [Theory]
+    [InlineData(241_410_624UL, "241 MB")]
+    [InlineData(811_843_488UL, "812 MB")]
+    [InlineData(5_524_862_368UL, "5.5 GB")]
+    [InlineData(12_109_566_560UL, "12.1 GB")]
+    [InlineData(19_563_570_240UL, "19.6 GB")]
+    [InlineData(31_842_799_232UL, "31.8 GB")]
+    public void FormatBytes_Matches_Catalog_Size_Strings(ulong sizeBytes, string catalogSize)
+    {
+        Assert.Equal(catalogSize, Catalog.FormatBytes(sizeBytes));
+    }
+
+    [Fact]
+    public void FormatBytes_Uses_Invariant_Decimal_Separator()
+    {
+        // The catalog's strings are period-separated; a comma-decimal UI culture
+        // must not make an installed model read "12,1 GB" next to them.
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("fr-FR");
+            Assert.Equal("12.1 GB", Catalog.FormatBytes(12_109_566_560UL));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
     }
 
     // ----- ExtractQuant ------------------------------------------------------
