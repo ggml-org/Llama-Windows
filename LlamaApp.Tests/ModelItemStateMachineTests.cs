@@ -153,6 +153,51 @@ public class ModelItemStateMachineTests
         Assert.Contains(nameof(ModelItem.CancelDownloadVisible), raised);
     }
 
+    // ----- Load failure affordance -----------------------------------------
+
+    [Fact]
+    public void Failed_Load_Hides_Play_Glyph()
+    {
+        // A rejected load must show the warning + retry affordance, not the
+        // play glyph — otherwise the failure is silent (the ring just vanishes).
+        var item = new ModelItem { LoadFailed = true };
+
+        Assert.False(item.PlayGlyphVisible);
+        Assert.False(item.LoadingRingVisible);
+        Assert.False(item.OpenGlyphVisible);
+
+        item.LoadFailed = false;
+        Assert.True(item.PlayGlyphVisible);
+    }
+
+    [Fact]
+    public void LoadFailed_Raises_Play_Glyph_Notification()
+    {
+        var item = new ModelItem();
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.LoadFailed = true;
+
+        // The UI swaps play ↔ warning+retry on this transition.
+        Assert.Contains(nameof(ModelItem.LoadFailed), raised);
+        Assert.Contains(nameof(ModelItem.PlayGlyphVisible), raised);
+    }
+
+    [Fact]
+    public void Loading_Again_After_Failure_Shows_Ring_Not_Affordance()
+    {
+        // The retry path clears LoadFailed and sets IsLoading: the load ring
+        // shows and the play glyph stays hidden.
+        var item = new ModelItem { LoadFailed = true };
+
+        item.LoadFailed = false;
+        item.IsLoading = true;
+
+        Assert.True(item.LoadingRingVisible);
+        Assert.False(item.PlayGlyphVisible);
+    }
+
     // ----- Download progress captions --------------------------------------
 
     [Fact]
