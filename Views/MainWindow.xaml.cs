@@ -116,6 +116,11 @@ namespace LlamaApp.Views
         // canceled when it leaves it. All access happens on the UI thread.
         private readonly Dictionary<ModelItem, CancellationTokenSource> _externalDownloadWatches = new();
 
+        // Last observed server state, for the once-per-transition crash toast
+        // in LlamaManager_StateChanged (StateChanged fires for every manager
+        // property change, not just status transitions).
+        private LlamaManager.ServerState _lastServerStatus;
+
         // Delete-confirmation context: the trash button's attached Flyout opens
         // automatically on click; LocalModelDelete_Click captures the row's model
         // and the flyout here so the flyout's Delete button (which carries no
@@ -1104,7 +1109,8 @@ namespace LlamaApp.Views
         private void UpdateServerStatusUI()
         {
             var d = ServerStatusPresentation.Describe(
-                LlamaManager.Shared.ServerStatus, LlamaManager.Shared.State);
+                LlamaManager.Shared.ServerStatus, LlamaManager.Shared.State,
+                LlamaManager.Shared.FailureMessage);
             ServerStatusDot.Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(d.Dot);
             Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(ServerStatusDot, d.ToolTip);
             ServerRestartButton.Visibility = d.CanRelaunch
@@ -1159,6 +1165,19 @@ namespace LlamaApp.Views
             {
                 LoadVersionInfo();
                 UpdateServerStatusUI();
+
+                // A crash used to surface only as the footer's 8px dot colour
+                // — toast the reason (LlamaManager.FailureMessage) once per
+                // transition into Failed so it isn't missed while hidden.
+                var serverStatus = LlamaManager.Shared.ServerStatus;
+                if (serverStatus == LlamaManager.ServerState.Failed &&
+                    _lastServerStatus != LlamaManager.ServerState.Failed)
+                {
+                    NotifyWhenHidden("Llama server stopped",
+                        LlamaManager.Shared.FailureMessage
+                            ?? "The llama server stopped responding.");
+                }
+                _lastServerStatus = serverStatus;
 
                 // A dead server takes every in-flight operation with it —
                 // downloads die mid-stream, loads never complete, loaded

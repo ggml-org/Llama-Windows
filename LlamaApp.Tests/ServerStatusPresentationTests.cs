@@ -73,4 +73,62 @@ public class ServerStatusPresentationTests
 
         Assert.True(d.CanRelaunch);
     }
+
+    // ----- FailureMessage surfacing ----------------------------------------
+
+    [Fact]
+    public void Failed_Without_Message_Keeps_The_Generic_Tooltip()
+    {
+        var d = ServerStatusPresentation.Describe(
+            LlamaManager.ServerState.Failed, LlamaManager.InstallState.Idle, null);
+
+        Assert.Contains("crashed or failed to start", d.ToolTip);
+    }
+
+    [Fact]
+    public void Failed_With_Message_Includes_The_Reason()
+    {
+        // LlamaManager.FailureMessage was set but never read anywhere — the
+        // dot's tooltip is where a user asks "why is it red?".
+        var d = ServerStatusPresentation.Describe(
+            LlamaManager.ServerState.Failed, LlamaManager.InstallState.Idle,
+            "The llama server stopped responding.");
+
+        Assert.Contains("The llama server stopped responding.", d.ToolTip);
+        Assert.Contains("relaunch", d.ToolTip);
+    }
+
+    [Fact]
+    public void Failed_Install_With_Message_Includes_The_Reason()
+    {
+        var d = ServerStatusPresentation.Describe(
+            LlamaManager.ServerState.Stopped, LlamaManager.InstallState.Failed,
+            "Install script exited with code 1");
+
+        Assert.Contains("install failed: Install script exited with code 1.", d.ToolTip);
+        Assert.True(d.CanRelaunch);
+    }
+
+    [Fact]
+    public void Message_Is_Sanitized_For_A_Tooltip()
+    {
+        // Multi-line exception text collapses to its first line; a missing
+        // trailing period is added so the relaunch hint reads as its own
+        // sentence.
+        var d = ServerStatusPresentation.Describe(
+            LlamaManager.ServerState.Failed, LlamaManager.InstallState.Idle,
+            "first line of the error\nsecond line with a stack trace");
+
+        Assert.Contains("first line of the error.", d.ToolTip);
+        Assert.DoesNotContain("second line", d.ToolTip);
+    }
+
+    [Fact]
+    public void Blank_Message_Falls_Back_To_The_Generic_Tooltip()
+    {
+        var d = ServerStatusPresentation.Describe(
+            LlamaManager.ServerState.Failed, LlamaManager.InstallState.Idle, "   ");
+
+        Assert.Contains("crashed or failed to start", d.ToolTip);
+    }
 }

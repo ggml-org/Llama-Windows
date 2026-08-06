@@ -40,20 +40,56 @@ namespace LlamaApp.Views
         /// install. It never shows during the startup
         /// Stopped → Starting → Running sequence, so it doesn't flash at
         /// launch.
+        /// <para><paramref name="failureMessage"/> is
+        /// <see cref="LlamaManager.FailureMessage"/> — the user-facing reason
+        /// behind a Failed state. It was set by the manager but never read
+        /// anywhere; the dot's tooltip is the one place a user goes to ask
+        /// "why is it red?", so the reason is included there.</para>
         /// </summary>
         public static Description Describe(
             LlamaManager.ServerState status,
-            LlamaManager.InstallState installState) => status switch
+            LlamaManager.InstallState installState,
+            string? failureMessage = null)
         {
-            LlamaManager.ServerState.Running =>
-                new(Green, "llama server: running", false),
-            LlamaManager.ServerState.Starting =>
-                new(Amber, "llama server: starting…", false),
-            LlamaManager.ServerState.Failed =>
-                new(Red, "llama server: not running (crashed or failed to start) — use the relaunch button", true),
-            _ => installState == LlamaManager.InstallState.Failed
-                ? new(Gray, "llama server: stopped (install failed) — use the relaunch button", true)
-                : new(Gray, "llama server: stopped", false),
-        };
+            var detail = Sanitize(failureMessage);
+            return status switch
+            {
+                LlamaManager.ServerState.Running =>
+                    new(Green, "llama server: running", false),
+                LlamaManager.ServerState.Starting =>
+                    new(Amber, "llama server: starting…", false),
+                LlamaManager.ServerState.Failed =>
+                    new(Red,
+                        detail is null
+                            ? "llama server: not running (crashed or failed to start) — use the relaunch button"
+                            : $"llama server: not running — {detail} Use the relaunch button.",
+                        true),
+                _ => installState == LlamaManager.InstallState.Failed
+                    ? new(Gray,
+                        detail is null
+                            ? "llama server: stopped (install failed) — use the relaunch button"
+                            : $"llama server: stopped — install failed: {detail} Use the relaunch button.",
+                        true)
+                    : new(Gray, "llama server: stopped", false),
+            };
+        }
+
+        /// <summary>
+        /// Prepares a raw failure message for a tooltip: first line only
+        /// (an install exception can span several), truncated, and guaranteed
+        /// to end with a period so the "Use the relaunch button." follow-up
+        /// reads as a separate sentence. Null/blank → null (no detail).
+        /// </summary>
+        private static string? Sanitize(string? message)
+        {
+            if (string.IsNullOrWhiteSpace(message)) return null;
+            var firstLine = message.Split('\n')[0].Trim().TrimEnd('\r');
+            const int Max = 120;
+            if (firstLine.Length > Max)
+                firstLine = firstLine[..Max] + "…";
+            return firstLine.EndsWith('.') || firstLine.EndsWith('…')
+                ? firstLine
+                : firstLine + ".";
+        }
     }
 }
