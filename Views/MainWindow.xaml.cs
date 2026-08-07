@@ -1646,6 +1646,10 @@ namespace LlamaApp.Views
             // style above so no DWM border is drawn either.
             var ncrp = DWMNCRP_DISABLED;
             DwmSetWindowAttribute(_hwnd, DWMWA_NCRENDERING_POLICY, ref ncrp, sizeof(int));
+
+            // Pin the corner radius to the standard 8px "round" style rather
+            // than relying on the system default.
+            WindowCorners.ApplyRound8(this);
         }
 
         /// <summary>
