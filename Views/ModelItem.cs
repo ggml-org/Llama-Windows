@@ -27,7 +27,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private bool _loadFailed;
     private ImageSource? _logo;
 
-    /// <summary>Display label (e.g. "GPT-OSS 20B (mxfp4)").</summary>
+    /// <summary>Display label (e.g. "GPT-OSS 20B") — the quant is never shown.</summary>
     public string Name { get; set; } = "";
 
     /// <summary>
@@ -75,7 +75,10 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public string License { get; set; } = "";
     public bool Vision { get; set; }
 
-    /// <summary>Quantization label, e.g. "Q4_0", "mxfp4" (used for ServerModelId).</summary>
+    /// <summary>
+    /// Quantization label, e.g. "Q4_0", "mxfp4" — used only to build
+    /// <see cref="IModel.ServerModelId"/> for server API calls; never shown in the UI.
+    /// </summary>
     public string? Quant { get; set; } = null;
     /// <summary>
     /// The resolved brand logo (theme-dependent — see <see cref="ResolveLogo"/>).

@@ -342,7 +342,7 @@ namespace LlamaApp.Views
             byRepo.TryGetValue(repo, out var matched);
             return new ModelItem
             {
-                Name = DeriveDisplayName(repo, quant, byRepo),
+                Name = DeriveDisplayName(repo, byRepo),
                 RepoName = repo,
                 Quant = quant,
                 Description = matched?.Description ?? "",
@@ -370,17 +370,17 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// Builds a display name for a server-reported model: the catalog's
-        /// <c>DisplayName</c> with the quant in parens when known, else the last
-        /// path segment of the repo id (with quant in parens).
+        /// <c>DisplayName</c> when known, else the last path segment of the
+        /// repo id. The quant is deliberately not shown — it's an
+        /// implementation detail of the server model id, not friendly row text.
         /// </summary>
         private static string DeriveDisplayName(
-            string repo, string quant, Dictionary<string, Repository> byRepo)
+            string repo, Dictionary<string, Repository> byRepo)
         {
             byRepo.TryGetValue(repo, out var matched);
-            var baseName = !string.IsNullOrEmpty(matched?.DisplayName)
+            return !string.IsNullOrEmpty(matched?.DisplayName)
                 ? matched.DisplayName
                 : repo.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? repo;
-            return string.IsNullOrEmpty(quant) ? baseName : $"{baseName} ({quant})";
         }
 
         /// <summary>
@@ -407,14 +407,18 @@ namespace LlamaApp.Views
 
             RecommendedModels.Clear(); // idempotent — safe on catalog retry
 
-            // Build a display name that disambiguate quants: "GPT-OSS 20B (mxfp4)".
-            // Featured families sort first (catalog order preserved otherwise).
-            foreach (var repo in RecommendedOrdering.OrderForDisplay(repos))
+            // One row per repo: the flattened catalog lists a repo once per
+            // build (quant), which would show as identical duplicate rows now
+            // that the quant isn't displayed. Take the first build in catalog
+            // order — its Quant still drives ServerModelId for the download,
+            // it just isn't shown. Featured families sort first (GroupBy
+            // preserves the order of first appearance).
+            foreach (var repo in RecommendedOrdering.OrderForDisplay(repos)
+                         .GroupBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+                         .Select(g => g.First()))
             {
                 var label = !string.IsNullOrEmpty(repo.DisplayName)
-                    ? !string.IsNullOrEmpty(repo.Quant)
-                        ? $"{repo.DisplayName} ({repo.Quant})"
-                        : repo.DisplayName
+                    ? repo.DisplayName
                     : repo.Name;
 
                 RecommendedModels.Add(new ModelItem
