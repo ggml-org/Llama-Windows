@@ -476,21 +476,27 @@
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                 BorderThickness="1"
                                 CornerRadius="{ThemeResource ControlCornerRadius}">
-                        <Grid ColumnSpacing="8" RowSpacing="8">
+                        <!-- Pickers side by side on one row: labels above,
+                             quant gets 3/5 of the width (its "Q4_K_M · 11 GB"
+                             labels are longer than "Model default"). -->
+                        <Grid ColumnSpacing="8" RowSpacing="4">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="3*" />
+                                <ColumnDefinition Width="2*" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Row="0" Grid.Column="0"
                                        Text="Quantization"
                                        FontSize="12"
-                                       VerticalAlignment="Center"
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            <ComboBox Grid.Row="0" Grid.Column="1"
+                            <TextBlock Grid.Row="0" Grid.Column="1"
+                                       Text="Context size"
+                                       FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <ComboBox Grid.Row="1" Grid.Column="0"
                                       ItemsSource="{x:Bind Builds}"
                                       SelectedItem="{x:Bind SelectedBuild, Mode=TwoWay}"
                                       DisplayMemberPath="Label"
@@ -499,11 +505,6 @@
                                       HorizontalAlignment="Stretch"
                                       HorizontalContentAlignment="Stretch"
                                       FontSize="12" />
-                            <TextBlock Grid.Row="1" Grid.Column="0"
-                                       Text="Context size"
-                                       FontSize="12"
-                                       VerticalAlignment="Center"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <ComboBox Grid.Row="1" Grid.Column="1"
                                       ItemsSource="{x:Bind ContextSizeOptions}"
                                       SelectedItem="{x:Bind SelectedContextSize, Mode=OneWay}"
