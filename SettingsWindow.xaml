@@ -128,7 +128,7 @@
                             <!-- Launch at startup (toggle) -->
                             <Border CornerRadius="8"
                                     Padding="16,14"
-                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
                                 <Grid ColumnSpacing="12">
@@ -170,7 +170,7 @@
                                  how a user discovers it exists). -->
                             <Border CornerRadius="8"
                                     Padding="16,14"
-                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
                                 <Grid ColumnSpacing="12">
@@ -207,7 +207,7 @@
                             <!-- Local models cache directory -->
                             <Border CornerRadius="8"
                                     Padding="16,14"
-                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
                                 <StackPanel Spacing="10">
@@ -261,7 +261,7 @@
                                  pattern as the Installation Folder card). -->
                             <Border CornerRadius="8"
                                     Padding="16,14"
-                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
                                 <StackPanel Spacing="10">
@@ -317,7 +317,7 @@
                             <!-- Hugging Face token (password style — masked) -->
                             <Border CornerRadius="8"
                                     Padding="16,14"
-                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
                                 <StackPanel Spacing="10">
@@ -381,7 +381,7 @@
                             <!-- Llama server port -->
                             <Border CornerRadius="8"
                                     Padding="16,14"
-                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
                                 <StackPanel Spacing="10">
@@ -425,7 +425,7 @@
                                  not a setting) -->
                             <Border CornerRadius="8"
                                     Padding="16,14"
-                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
                                 <StackPanel Spacing="10">
