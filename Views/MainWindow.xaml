@@ -723,7 +723,7 @@
                      Fill="#8B949E" />
             <TextBlock x:Name="VersionText"
                        FontSize="11"
-                       FontWeight="Bold"
+                       FontWeight="SemiBold"
                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
             <Button x:Name="ServerRestartButton"
                     Click="ServerRestart_Click"
