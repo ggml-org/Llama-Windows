@@ -50,7 +50,7 @@
                           x:DataType="local:ModelItem">
                 <Grid Padding="8,6"
                       ColumnSpacing="10"
-                      CornerRadius="6"
+                      CornerRadius="{ThemeResource ControlCornerRadius}"
                       Background="Transparent"
                       PointerEntered="Row_PointerEntered"
                       PointerExited="Row_PointerExited"
@@ -64,7 +64,7 @@
                     <!-- Logo tile with a "running" status badge pinned to its
                          bottom-right corner. -->
                     <Grid Grid.Column="0" Width="32" Height="32">
-                        <Border CornerRadius="6"
+                        <Border CornerRadius="{ThemeResource ControlCornerRadius}"
                                 Background="{ThemeResource ControlFillColorSecondaryBrush}">
                             <Image Source="{x:Bind Logo, Mode=OneWay}"
                                    Stretch="Uniform"
@@ -124,7 +124,7 @@
                                  U+EB25 doesn't exist — it renders as the
                                  crossed-square missing-glyph box. U+E890
                                  (View) exists in both. -->
-                            <Border CornerRadius="4"
+                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
                                     Background="{ThemeResource ControlFillColorSecondaryBrush}"
                                     Padding="4,1"
                                     VerticalAlignment="Center"
@@ -377,7 +377,7 @@
                         MinWidth="0" MinHeight="0"
                         Background="Transparent"
                         BorderThickness="0"
-                        CornerRadius="6"
+                        CornerRadius="{ThemeResource ControlCornerRadius}"
                         HorizontalAlignment="Stretch"
                         HorizontalContentAlignment="Stretch"
                         VerticalContentAlignment="Stretch"
@@ -396,7 +396,7 @@
 
                     <Border Grid.Column="0"
                             Width="32" Height="32"
-                            CornerRadius="6"
+                            CornerRadius="{ThemeResource ControlCornerRadius}"
                             Background="{ThemeResource ControlFillColorSecondaryBrush}">
                         <Image Source="{x:Bind Logo, Mode=OneWay}"
                                Stretch="Uniform"
@@ -427,7 +427,7 @@
                                  U+E890 View, which exists in both Segoe Fluent
                                  Icons and Segoe MDL2 Assets; the previous
                                  U+E7B3 was Repair, a wrench). -->
-                            <Border CornerRadius="3"
+                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
                                     Background="{ThemeResource ControlFillColorSecondaryBrush}"
                                     Padding="2"
                                     Visibility="{x:Bind Vision, Mode=OneWay}">
