@@ -52,6 +52,10 @@ namespace LlamaApp
             // backdrop fill the titlebar area (ExtendsContentIntoTitleBar set
             // in the ctor) — this is what drops the default white titlebar.
             presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: true);
+
+            // Pin the corner radius to the standard 8px "round" style rather
+            // than relying on the system default.
+            WindowCorners.ApplyRound8(this);
         }
 
         /// <summary>

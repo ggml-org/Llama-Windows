@@ -96,6 +96,10 @@ public sealed partial class OverlayWindow : Window
                    SWP_FRAMECHANGED = 0x0020;
         SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+
+        // Pin the corner radius to the standard 8px "round" style rather than
+        // relying on the system default.
+        WindowCorners.ApplyRound8(this);
     }
 
     /// <summary>Shows the overlay centered on the monitor nearest the cursor, ready for input.</summary>
