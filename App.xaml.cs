@@ -107,6 +107,9 @@ namespace LlamaApp
             // GET /models.
             Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
             Llama.LlamaManager.Shared.HuggingFaceToken = Settings.Current.HuggingFaceToken;
+            // Per-model context sizes → the router's model-presets INI (read
+            // at server startup, so this must land before the ensure below).
+            Llama.LlamaManager.Shared.SetModelContextSizes(Settings.Current.ModelContextSizes);
             Common.Log.Info($"cache directory: {Settings.Current.CacheDirectory}");
             // Presence only — never log the token itself.
             Common.Log.Info($"HF token: {(string.IsNullOrWhiteSpace(Settings.Current.HuggingFaceToken) ? "not set" : "configured")}");
