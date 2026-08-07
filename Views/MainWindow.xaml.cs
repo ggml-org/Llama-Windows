@@ -148,13 +148,11 @@ namespace LlamaApp.Views
             // LoadModels() so the initial resolve picks the right variant.
             var root = (FrameworkElement)Content;
             ModelItem.UseLightLogos = root.ActualTheme == ElementTheme.Dark;
-            ModelItem.SubtleFillBrush =
-                (Microsoft.UI.Xaml.Media.Brush)root.Resources["ControlFillColorSecondaryBrush"];
+            ModelItem.SubtleFillBrush = ResolveThemeBrush("ControlFillColorSecondaryBrush");
             root.ActualThemeChanged += (_, _) =>
             {
                 ModelItem.UseLightLogos = root.ActualTheme == ElementTheme.Dark;
-                ModelItem.SubtleFillBrush =
-                    (Microsoft.UI.Xaml.Media.Brush)root.Resources["ControlFillColorSecondaryBrush"];
+                ModelItem.SubtleFillBrush = ResolveThemeBrush("ControlFillColorSecondaryBrush");
                 ModelItem.ClearLogoCache();
                 RefreshRowLogos();
             };
@@ -1034,6 +1032,20 @@ namespace LlamaApp.Views
         /// Re-resolves every row's brand logo after a theme change (the logo
         /// variant is theme-dependent and the cache has just been cleared).
         /// </summary>
+        /// <summary>
+        /// Resolves a WinUI theme brush from the APPLICATION's resources — the
+        /// XamlControlsResources merge lives at the app level, and an element's
+        /// own <c>Resources</c> dictionary neither contains the theme brushes
+        /// nor walks up to them (its indexer throws <see cref="KeyNotFoundException"/>
+        /// on a missing key, which took down window construction). Returns null
+        /// rather than throwing: a cosmetic fill must never crash the window.
+        /// </summary>
+        private static Microsoft.UI.Xaml.Media.Brush? ResolveThemeBrush(string key)
+            => Microsoft.UI.Xaml.Application.Current?.Resources
+                .TryGetValue(key, out var value) == true
+                    ? value as Microsoft.UI.Xaml.Media.Brush
+                    : null;
+
         private void RefreshRowLogos()
         {
             foreach (var item in LocalModels.Concat(RecommendedModels))
