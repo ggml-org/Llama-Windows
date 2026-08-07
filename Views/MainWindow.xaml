@@ -377,6 +377,13 @@
                  multi-GB download sight unseen. -->
             <DataTemplate x:Key="RecommendedModelRowTemplate"
                           x:DataType="local:ModelItem">
+                <!-- One continuous surface: transparent when collapsed, a
+                     subtle theme fill with rounded corners when expanded —
+                     the header and its options line read as a single expanded
+                     row (the WinUI Expander idiom), not a card-in-a-list. -->
+                <Border Background="{x:Bind RowSurface, Mode=OneWay}"
+                        CornerRadius="{ThemeResource ControlCornerRadius}"
+                        Padding="2">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -462,60 +469,56 @@
                 </Grid>
                 </Button>
 
-                    <!-- Download options on a single compact row: the repo's
-                         catalog builds in a quantization picker, a context-size
-                         picker, and the explicit Download action. Sits OUTSIDE
-                         the header Button so picker interaction doesn't toggle
-                         the row. No visible labels — the pickers identify
-                         themselves via tooltip/automation name. -->
-                    <StackPanel Grid.Row="1"
-                                Visibility="{x:Bind IsExpanded, Mode=OneWay}"
-                                Margin="8,0,12,8"
-                                Padding="8,6"
-                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                BorderThickness="1"
-                                CornerRadius="{ThemeResource ControlCornerRadius}">
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*" />
-                                <ColumnDefinition Width="2*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <ComboBox Grid.Column="0"
-                                      ItemsSource="{x:Bind Builds}"
-                                      SelectedItem="{x:Bind SelectedBuild, Mode=TwoWay}"
-                                      DisplayMemberPath="Label"
-                                      Tag="{x:Bind}"
-                                      SelectionChanged="RecommendedQuant_Changed"
-                                      HorizontalAlignment="Stretch"
-                                      HorizontalContentAlignment="Stretch"
-                                      AutomationProperties.Name="Quantization"
-                                      ToolTipService.ToolTip="Quantization"
-                                      FontSize="12" />
-                            <ComboBox Grid.Column="1"
-                                      ItemsSource="{x:Bind ContextSizeOptions}"
-                                      SelectedItem="{x:Bind SelectedContextSize, Mode=OneWay}"
-                                      DisplayMemberPath="Label"
-                                      Tag="{x:Bind}"
-                                      SelectionChanged="RecommendedContext_Changed"
-                                      HorizontalAlignment="Stretch"
-                                      HorizontalContentAlignment="Stretch"
-                                      AutomationProperties.Name="Context size"
-                                      ToolTipService.ToolTip="Context size"
-                                      FontSize="12" />
-                            <Button Grid.Column="2"
-                                    Content="Download"
-                                    Style="{StaticResource AccentButtonStyle}"
-                                    Click="RecommendedDownload_Click"
-                                    Tag="{x:Bind}"
-                                    VerticalAlignment="Center"
-                                    FontSize="12"
-                                    Padding="12,4"
-                                    MinHeight="0" />
-                        </Grid>
-                    </StackPanel>
+                    <!-- The options line: the repo's catalog builds in a
+                         quantization picker, a context-size picker, and the
+                         explicit Download action — standard-height controls
+                         on the 8px grid, no inner card. Sits OUTSIDE the
+                         header Button so picker interaction doesn't toggle
+                         the row; the pickers identify themselves via
+                         tooltip/automation name. EntranceThemeTransition
+                         gives the stock Fluent fade/slide on open. -->
+                    <Grid Grid.Row="1"
+                          Visibility="{x:Bind IsExpanded, Mode=OneWay}"
+                          Margin="8,2,12,6"
+                          ColumnSpacing="8">
+                        <Grid.Transitions>
+                            <TransitionCollection>
+                                <EntranceThemeTransition FromVerticalOffset="-6" />
+                            </TransitionCollection>
+                        </Grid.Transitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="3*" />
+                            <ColumnDefinition Width="2*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ComboBox Grid.Column="0"
+                                  ItemsSource="{x:Bind Builds}"
+                                  SelectedItem="{x:Bind SelectedBuild, Mode=TwoWay}"
+                                  DisplayMemberPath="Label"
+                                  Tag="{x:Bind}"
+                                  SelectionChanged="RecommendedQuant_Changed"
+                                  HorizontalAlignment="Stretch"
+                                  HorizontalContentAlignment="Stretch"
+                                  AutomationProperties.Name="Quantization"
+                                  ToolTipService.ToolTip="Quantization" />
+                        <ComboBox Grid.Column="1"
+                                  ItemsSource="{x:Bind ContextSizeOptions}"
+                                  SelectedItem="{x:Bind SelectedContextSize, Mode=OneWay}"
+                                  DisplayMemberPath="Label"
+                                  Tag="{x:Bind}"
+                                  SelectionChanged="RecommendedContext_Changed"
+                                  HorizontalAlignment="Stretch"
+                                  HorizontalContentAlignment="Stretch"
+                                  AutomationProperties.Name="Context size"
+                                  ToolTipService.ToolTip="Context size" />
+                        <Button Grid.Column="2"
+                                Content="Download"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Click="RecommendedDownload_Click"
+                                Tag="{x:Bind}" />
+                    </Grid>
                 </Grid>
+                </Border>
             </DataTemplate>
         </Grid.Resources>
 

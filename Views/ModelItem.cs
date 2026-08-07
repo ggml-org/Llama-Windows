@@ -117,6 +117,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isExpanded = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(ChevronGlyph));
+            OnPropertyChanged(nameof(RowSurface));
         }
     }
 
@@ -125,6 +126,25 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// ChevronDown (U+E70D) when expanded — the TreeView disclosure pattern.
     /// </summary>
     public string ChevronGlyph => IsExpanded ? "\uE70D" : "\uE76C";
+
+    /// <summary>
+    /// The row's background while expanded: a subtle theme fill that wraps the
+    /// header AND the options line in one continuous rounded surface (the
+    /// WinUI Expander idiom); null (transparent) when collapsed. The brush is
+    /// supplied by the shell via <see cref="SubtleFillBrush"/>.
+    /// </summary>
+    public Brush? RowSurface => IsExpanded ? SubtleFillBrush : null;
+
+    /// <summary>
+    /// Set by the shell (MainWindow) from the effective theme: the
+    /// ControlFillColorSecondary brush used for <see cref="RowSurface"/>.
+    /// Read/written on the UI thread, like <see cref="UseLightLogos"/>.
+    /// </summary>
+    public static Brush? SubtleFillBrush;
+
+    /// <summary>Re-notifies theme-dependent properties after a theme flip
+    /// (the shell swaps <see cref="SubtleFillBrush"/> for the new theme).</summary>
+    public void NotifyThemeChanged() => OnPropertyChanged(nameof(RowSurface));
 
     /// <summary>
     /// The repo's downloadable builds (quant variants) in catalog order, shown

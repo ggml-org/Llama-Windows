@@ -31,6 +31,22 @@ public sealed class ModelItemOptionsTests
         Assert.Contains(nameof(ModelItem.ChevronGlyph), raised);
     }
 
+    [Fact]
+    public void Row_surface_is_transparent_when_collapsed_and_notifies_on_expand()
+    {
+        // Default static brush is null, so the surface is transparent either
+        // way here — what matters is the re-notification on toggle (the shell
+        // swaps SubtleFillBrush per theme).
+        var item = new ModelItem();
+        Assert.Null(item.RowSurface);
+
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+        item.IsExpanded = true;
+
+        Assert.Contains(nameof(ModelItem.RowSurface), raised);
+    }
+
     // ----- Quantization picker ----------------------------------------------
 
     [Fact]

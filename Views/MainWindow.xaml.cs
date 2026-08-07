@@ -148,9 +148,13 @@ namespace LlamaApp.Views
             // LoadModels() so the initial resolve picks the right variant.
             var root = (FrameworkElement)Content;
             ModelItem.UseLightLogos = root.ActualTheme == ElementTheme.Dark;
+            ModelItem.SubtleFillBrush =
+                (Microsoft.UI.Xaml.Media.Brush)root.Resources["ControlFillColorSecondaryBrush"];
             root.ActualThemeChanged += (_, _) =>
             {
                 ModelItem.UseLightLogos = root.ActualTheme == ElementTheme.Dark;
+                ModelItem.SubtleFillBrush =
+                    (Microsoft.UI.Xaml.Media.Brush)root.Resources["ControlFillColorSecondaryBrush"];
                 ModelItem.ClearLogoCache();
                 RefreshRowLogos();
             };
@@ -1033,7 +1037,10 @@ namespace LlamaApp.Views
         private void RefreshRowLogos()
         {
             foreach (var item in LocalModels.Concat(RecommendedModels))
+            {
                 item.Logo = ModelItem.ResolveLogo(item.Brand);
+                item.NotifyThemeChanged(); // RowSurface's brush was swapped
+            }
         }
 
         /// <summary>
