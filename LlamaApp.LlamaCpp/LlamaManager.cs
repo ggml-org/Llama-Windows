@@ -554,6 +554,20 @@ public sealed class LlamaManager
             psi.ArgumentList.Add(ServerPort.ToString());
             psi.ArgumentList.Add("--jinja");
 
+            // Per-model context sizes: the router reads the presets INI once
+            // at startup and applies each [repo:quant] section when it spawns
+            // that model's child process.
+            if (_modelContextSizes.Count > 0)
+            {
+                WritePresetsIni(); // refresh from the in-memory map
+                if (File.Exists(PresetsIniPath))
+                {
+                    psi.ArgumentList.Add("--models-preset");
+                    psi.ArgumentList.Add(PresetsIniPath);
+                }
+            }
+            _presetsPendingRestart = false;
+
             // Point the HF cache at the user-configured directory so the server
             // resolves downloaded models from the same place the app scans.
             if (!string.IsNullOrEmpty(CacheDirectory) && Directory.Exists(CacheDirectory))
@@ -706,6 +720,90 @@ public sealed class LlamaManager
     private static string PidFilePath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "LlamaApp", ".llama.pid");
+
+    /// <summary>
+    /// Path of the model-presets INI passed to the server via
+    /// <c>--models-preset</c> (<c>%LOCALAPPDATA%\LlamaApp\model-presets.ini</c>).
+    /// Holds one <c>[repo:quant]</c> section per model with a chosen context
+    /// size. The router parses it once at startup — and FAILS to start on a
+    /// malformed file, so <see cref="WritePresetsIni"/> writes atomically.
+    /// </summary>
+    private static string PresetsIniPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LlamaApp", "model-presets.ini");
+
+    // Per-model context sizes (full server model id → tokens), mirrored to
+    // PresetsIniPath. _presetsPendingRestart: the map changed while the
+    // server was running — the running process still has the old presets.
+    private IReadOnlyDictionary<string, int> _modelContextSizes =
+        new Dictionary<string, int>();
+    private bool _presetsPendingRestart;
+
+    /// <summary>
+    /// True when the context-size map changed after the running server was
+    /// started. The router reads the presets INI only at launch, so the new
+    /// values apply on the next (re)start — callers that need them now should
+    /// stop and restart the server.
+    /// </summary>
+    public bool PresetsPendingRestart =>
+        _presetsPendingRestart && ServerStatus == ServerState.Running;
+
+    /// <summary>
+    /// Replaces the per-model context-size map (keyed by the full server model
+    /// id, <c>repo:quant</c>; a model with no entry loads with its own trained
+    /// context) and rewrites the presets INI. No-op when the map is unchanged,
+    /// so callers can push persisted settings freely.
+    /// </summary>
+    public void SetModelContextSizes(IReadOnlyDictionary<string, int> sizes)
+    {
+        if (ContextSizesEqual(_modelContextSizes, sizes))
+            return;
+        _modelContextSizes = new Dictionary<string, int>(sizes, StringComparer.OrdinalIgnoreCase);
+        WritePresetsIni();
+        if (ServerStatus == ServerState.Running)
+            _presetsPendingRestart = true;
+    }
+
+    private static bool ContextSizesEqual(
+        IReadOnlyDictionary<string, int> a, IReadOnlyDictionary<string, int> b)
+        => a.Count == b.Count &&
+           a.All(kv => b.TryGetValue(kv.Key, out var v) && v == kv.Value);
+
+    /// <summary>
+    /// Renders the presets INI: one <c>[repo:quant]</c> section per entry with
+    /// its <c>ctx-size</c>, sorted for stable output. Non-positive sizes are
+    /// skipped (0 means "model default" = no preset). Internal for unit tests.
+    /// </summary>
+    internal static string BuildPresetsIni(IReadOnlyDictionary<string, int> sizes)
+    {
+        var sb = new StringBuilder();
+        foreach (var (id, ctx) in sizes
+                     .Where(kv => kv.Value > 0)
+                     .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            sb.Append('[').Append(id).AppendLine("]");
+            sb.Append("ctx-size = ").Append(ctx).AppendLine();
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Writes the presets INI atomically (temp file + move): the
+    /// server refuses to start on a malformed/partial file. Best-effort.</summary>
+    private void WritePresetsIni()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(PresetsIniPath)!);
+            var tmp = PresetsIniPath + ".tmp";
+            File.WriteAllText(tmp, BuildPresetsIni(_modelContextSizes));
+            File.Move(tmp, PresetsIniPath, overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "failed to write the model-presets INI");
+        }
+    }
 
     /// <summary>Writes <paramref name="pid"/> to the PID file. Best-effort.</summary>
     private static void WritePidFile(int pid)
