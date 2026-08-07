@@ -26,6 +26,9 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private bool _isLoaded;
     private bool _loadFailed;
     private ImageSource? _logo;
+    private bool _isExpanded;
+    private QuantOption? _selectedBuild;
+    private ContextSizeOption _selectedContextSize = s_contextSizeOptions[0];
 
     /// <summary>Display label (e.g. "GPT-OSS 20B") — the quant is never shown.</summary>
     public string Name { get; set; } = "";
@@ -97,6 +100,101 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>True for Hub models that can be downloaded; false for locally available models (run/play).</summary>
     public bool Downloadable { get; set; }
     public string? Brand { get; set; }
+
+    // ---- Row options (Recommended rows): expander + quant/context pickers ----
+
+    /// <summary>
+    /// Whether the row's download-options panel (quantization / context size
+    /// pickers and the Download button) is expanded. Toggled by clicking the
+    /// row's header; only Recommended rows have the panel.
+    /// </summary>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set
+        {
+            if (_isExpanded == value) return;
+            _isExpanded = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ChevronGlyph));
+        }
+    }
+
+    /// <summary>
+    /// The header's expander chevron: ChevronRight (U+E76C) when collapsed,
+    /// ChevronDown (U+E70D) when expanded — the TreeView disclosure pattern.
+    /// </summary>
+    public string ChevronGlyph => IsExpanded ? "\uE70D" : "\uE76C";
+
+    /// <summary>
+    /// The repo's downloadable builds (quant variants) in catalog order, shown
+    /// in the quantization picker. Empty for Available (local) rows — their
+    /// build is already on disk.
+    /// </summary>
+    public IReadOnlyList<QuantOption> Builds { get; set; } = [];
+
+    /// <summary>
+    /// The build the download will fetch. Mirrors the picker's selection into
+    /// <see cref="Quant"/>, <see cref="Size"/> and <see cref="SizeBytes"/> so the
+    /// server model id, the row's subtitle and the disk-space preflight all
+    /// follow the chosen quantization.
+    /// </summary>
+    public QuantOption? SelectedBuild
+    {
+        get => _selectedBuild;
+        set
+        {
+            // Null guard: a TwoWay ComboBox binding pushes null when the
+            // selection clears (e.g. ItemsSource swap) — keep the last build.
+            if (value is null || ReferenceEquals(_selectedBuild, value)) return;
+            _selectedBuild = value;
+            Quant = value.Quant;
+            Size = value.SizeLabel;
+            SizeBytes = value.SizeBytes;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(Size));
+            OnPropertyChanged(nameof(SubtitleText));
+        }
+    }
+
+    // Shared option list — one instance serves every row's context picker.
+    private static readonly ContextSizeOption[] s_contextSizeOptions =
+    [
+        new() { Label = "Model default", CtxSize = 0 },
+        new() { Label = "4K",   CtxSize = 4_096 },
+        new() { Label = "8K",   CtxSize = 8_192 },
+        new() { Label = "16K",  CtxSize = 16_384 },
+        new() { Label = "32K",  CtxSize = 32_768 },
+        new() { Label = "64K",  CtxSize = 65_536 },
+        new() { Label = "128K", CtxSize = 131_072 },
+    ];
+
+    /// <summary>The context sizes offered by the row's picker (shared list).</summary>
+    public IReadOnlyList<ContextSizeOption> ContextSizeOptions => s_contextSizeOptions;
+
+    /// <summary>
+    /// The context size the model will load with. "Model default"
+    /// (<see cref="ContextSizeOption.CtxSize"/> 0) lets the server use the
+    /// model's own trained context length.
+    /// </summary>
+    public ContextSizeOption SelectedContextSize
+    {
+        get => _selectedContextSize;
+        set
+        {
+            if (value is null || ReferenceEquals(_selectedContextSize, value)) return;
+            _selectedContextSize = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>
+    /// Maps a stored context size (tokens) back to its picker option; unknown
+    /// or 0 values fall back to "Model default".
+    /// </summary>
+    public static ContextSizeOption ContextSizeOptionFor(int ctxSize)
+        => s_contextSizeOptions.FirstOrDefault(o => o.CtxSize == ctxSize)
+           ?? s_contextSizeOptions[0];
 
     // ---- Download progress state (drives the progress ring) ----
 
