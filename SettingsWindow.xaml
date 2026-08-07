@@ -139,7 +139,7 @@
                                     </Grid.ColumnDefinitions>
                                     <Border Grid.Column="0"
                                             Width="36" Height="36"
-                                            CornerRadius="6"
+                                            CornerRadius="{ThemeResource ControlCornerRadius}"
                                             Background="{StaticResource BrandAccentBrush}"
                                             VerticalAlignment="Top">
                                         <FontIcon Glyph="&#xE7B5;"
@@ -180,7 +180,7 @@
                                     </Grid.ColumnDefinitions>
                                     <Border Grid.Column="0"
                                             Width="36" Height="36"
-                                            CornerRadius="6"
+                                            CornerRadius="{ThemeResource ControlCornerRadius}"
                                             Background="{StaticResource BrandAccentBrush}"
                                             VerticalAlignment="Top">
                                         <FontIcon Glyph="&#xE765;"
@@ -218,7 +218,7 @@
                                         </Grid.ColumnDefinitions>
                                         <Border Grid.Column="0"
                                                 Width="36" Height="36"
-                                                CornerRadius="6"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
                                                 Background="{StaticResource BrandAccentBrush}"
                                                 VerticalAlignment="Center">
                                             <FontIcon Glyph="&#xE8B7;"
@@ -272,7 +272,7 @@
                                         </Grid.ColumnDefinitions>
                                         <Border Grid.Column="0"
                                                 Width="36" Height="36"
-                                                CornerRadius="6"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
                                                 Background="{StaticResource BrandAccentBrush}"
                                                 VerticalAlignment="Center">
                                             <FontIcon Glyph="&#xE8A5;"
@@ -329,7 +329,7 @@
                                         <!-- Accent icon tile -->
                                         <Border Grid.Column="0"
                                                 Width="36" Height="36"
-                                                CornerRadius="6"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
                                                 Background="{StaticResource BrandAccentBrush}"
                                                 VerticalAlignment="Center">
                                             <FontIcon Glyph="&#xE72E;"
@@ -392,7 +392,7 @@
                                         </Grid.ColumnDefinitions>
                                         <Border Grid.Column="0"
                                                 Width="36" Height="36"
-                                                CornerRadius="6"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
                                                 Background="{StaticResource BrandAccentBrush}"
                                                 VerticalAlignment="Center">
                                             <FontIcon Glyph="&#xE968;"
@@ -436,7 +436,7 @@
                                         </Grid.ColumnDefinitions>
                                         <Border Grid.Column="0"
                                                 Width="36" Height="36"
-                                                CornerRadius="6"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
                                                 Background="{StaticResource BrandAccentBrush}"
                                                 VerticalAlignment="Center">
                                             <FontIcon Glyph="&#xE8B7;"
