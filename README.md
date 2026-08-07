@@ -33,7 +33,7 @@ The overlay is the star of the show: a borderless Mica window (~60% of your scre
 
 ## 📦 Install
 
-Grab the latest signed `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.com/your-user/LlamaApp/releases) and double-click to install.
+Grab the latest signed `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.com/ggml-org/Llama-Windows/releases) and double-click to install.
 
 Or build from source — you'll need the **.NET 10 SDK** with the Windows App SDK workload:
 
