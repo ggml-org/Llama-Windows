@@ -1,68 +1,53 @@
-# LlamaApp
+# 🦙 LlamaApp
 
-A Windows 11 system-tray app for running [llama.cpp](https://github.com/ggml-org/llama.cpp) models locally — a WinUI 3 port of the macOS [llama.app](https://llama.app) menu-bar app.
+**Local LLMs, one click away — right from your Windows system tray.**
 
-The app lives in the notification area. Clicking the tray icon pops a borderless, Mica-backed flyout (anchored to the icon) showing your locally available models and a recommended catalog from the [Hugging Face Hub](https://huggingface.co). It adopts, launches, or auto-installs a `llama` binary and drives it over its local REST API.
+LlamaApp is a Windows 11 tray app for running [llama.cpp](https://github.com/ggml-org/llama.cpp) models locally. It's a WinUI 3 port of the macOS [llama.app](https://llama.app) menu-bar experience: no setup, no terminal, no elevation — just click the llama in your notification area and chat.
 
-## Features
+<p align="center">
+  <img src=".images/main.jpg" alt="Tray flyout showing available and recommended models" width="420">
+</p>
 
-- **Tray-only flyout UI** — no taskbar window; left-click the tray icon to show/hide, right-click for Open/Exit. Mirrors the macOS menu-bar experience on Windows 11.
-- **Auto-managed llama.cpp binary** — adopts a running server on `localhost:2276`, launches `%USERPROFILE%\.llama-app\llama.exe`, or downloads it via the official [`install.ps1`](https://llama.app/install.ps1) when none is found. No elevation required.
-- **Local models panel ("Available")** — lists models the running server reports via `GET /models`, enriched with catalog metadata (display name, params, size, brand logo, vision flag). Load/unload a model and open its WebUI from a row's action glyph.
-- **Recommended Models panel** — a scrollable list of downloadable builds (quants) from the Hub, with a one-click download that streams real-time progress over the server's `GET /models/sse` endpoint.
-- **Settings window** — Hugging Face access token (for gated/private repos) and a configurable GGUF cache directory, persisted per-user.
-- **Per-user logging** — daily-rotated logs at `%LOCALAPPDATA%\LlamaApp\logs\LlamaApp-YYYYMMDD.log` (7-day retention).
+## ✨ Why you'll like it
 
-## Solution layout
+- **Lives in your tray** — a borderless, Mica-backed flyout anchored to the tray icon. No taskbar clutter, no window management.
+- **Zero-setup llama.cpp** — adopts a running server, launches your existing `llama.exe`, or downloads one for you. It just works.
+- **One-click models** — browse a recommended catalog from the Hugging Face Hub and download with live progress, or load anything already in your GGUF cache.
+- **Spotlight-style overlay** — press `Alt+Space` anywhere in Windows and a centered prompt overlay appears, ready to chat with your loaded model. `Esc` (or clicking away) dismisses it. It's instant, and it preserves your in-flight conversation between summons.
 
-| Project                   | Target                        | Role                                                                                                     |
-|---------------------------|-------------------------------|----------------------------------------------------------------------------------------------------------|
-| `LlamaApp`                | `net10.0-windows10.0.19041.0` | WinUI 3 unpackaged app: tray icon, flyout shell, settings window, views.                                 |
-| `LlamaApp.LlamaCpp`       | `net10.0`                     | Detects/installs/launches the `llama` binary, talks to the server REST API, parses SSE download streams. |
-| `LlamaApp.HuggingFace`    | `net10.0`                     | Hugging Face Hub client and remote catalog fetcher (`https://llama.app/v1/catalog.json`).                |
-| `LlamaApp.Catalog`        | `net10.0`                     | Generic catalog layer over `IModelSource` (abstraction shared by Hub + local sources).                   |
-| `LlamaApp.Common`         | `net10.0`                     | Shared interfaces (`IModel`, `IModelSource`), logging, `ModelDownloadProgress`.                          |
-| `LlamaApp.LlamaCpp.Tests` | `net10.0`                     | xUnit tests for the server's JSON schemas and SSE parsing.                                               |
+<p align="center">
+  <img src=".images/overlay.jpg" alt="Alt+Space overlay with a chat in progress" width="640">
+</p>
 
-The helper libraries are pure managed (Any CPU); only the WinUI app builds for a concrete platform (x64/x86/ARM64).
+## 🚀 The overlay, up close
 
-## Build & run
+The overlay is the star of the show: a borderless Mica window (~60% of your screen) that embeds the llama server's WebUI for whichever model is loaded. Think Spotlight or Raycast, but for your local LLM.
 
-Requires the **.NET 10 SDK** and the Windows App SDK workloads (WinUI 3, WebView2).
+<p align="center">
+  <img src=".images/overlay_streaming.gif" alt="Streaming a response in the overlay" width="640">
+</p>
 
-```bash
-dotnet restore
-dotnet build -c Debug
-dotnet run -c Debug
-```
+- **Global hotkey** — `Alt+Space` works from any app while LlamaApp is running.
+- **Model-aware** — automatically points at the currently loaded model; shows the router view when none is loaded.
+- **Feels native** — hides instead of closing, so re-summoning is instant.
 
-Build for a specific platform (required for the app to launch correctly):
+## 📦 Install
 
-```bash
-dotnet build -c Release -r win-x64      # or win-x86 / win-arm64
-```
+Grab the latest signed `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.com/your-user/LlamaApp/releases) and double-click to install.
 
-Run the schema/SSE unit tests:
+Or build from source — you'll need the **.NET 10 SDK** with the Windows App SDK workload:
 
 ```bash
-dotnet test LlamaApp.LlamaCpp.Tests
+dotnet build -c Release -r win-x64   # or win-arm64
+dotnet test                          # run the unit tests
 ```
 
-> Note: Any-CPU builds are coerced to `x64` in the app project so the x64 apphost matches the installed WebView2 runtime (the x64/ARM64EC WebView2 won't load under an ARM64-native apphost).
+## 🧠 How it works
 
-## Runtime locations
+LlamaApp manages a `llama serve` process on `localhost:2276` and talks to it over its REST API. Your models stay in the standard Hugging Face cache (`%USERPROFILE%\.cache\huggingface\hub`), shared with `llama.cpp` and HF tooling. Settings and logs live under `%LOCALAPPDATA%\LlamaApp`.
 
-| What | Path |
-|---|---|
-| App-managed binary | `%USERPROFILE%\.llama-app\llama.exe` |
-| GGUF model cache | `%USERPROFILE%\.cache\huggingface\hub` (shared with `llama.cpp` & HF tools) |
-| Settings | `%LOCALAPPDATA%\LlamaApp\settings.json` |
-| Logs | `%LOCALAPPDATA%\LlamaApp\logs\LlamaApp-YYYYMMDD.log` |
-| Server | `http://localhost:2276` (`llama serve --port 2276`) |
+---
 
-## Architecture notes
-
-- `LlamaManager.Shared` is a singleton that owns the binary resolution + server process lifecycle, exposes `StateChanged` / `ModelsChanged` events, and is consumed by both `App` (startup) and `MainWindow` (live UI reconciliation).
-- The model-state poller fires `ModelsChanged` roughly every second with a fresh `/models` snapshot; the Available section reconciles rows in place (play → loading ring → open glyph) rather than rebuilding the list, to avoid flicker and lost click state.
-- SSE download progress is parsed from the server's `GET /models/sse` stream (`ParseSseStreamAsync`), which dispatches one JSON event per blank line (and flushes a trailing event at EOF).
-- The flyout dismisses itself on deactivation (focus loss) with short grace periods to avoid bounce-reopen quirks.
+<p align="center">
+  Made with 🦙 for Windows 11 · Models run 100% locally — your prompts never leave your machine.
+</p>
