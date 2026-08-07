@@ -117,7 +117,7 @@
         <TextBlock Grid.Row="2"
                    HorizontalAlignment="Center"
                    FontSize="11"
-                   Opacity="0.45">
+                   Foreground="{ThemeResource TextFillColorTertiaryBrush}">
             <Run Text="Esc" FontWeight="SemiBold" />
             <Run Text=" to dismiss" />
         </TextBlock>

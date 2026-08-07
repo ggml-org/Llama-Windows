@@ -106,7 +106,7 @@
                                  download runs, the live detail line instead
                                  ("3.2 GB of 12.1 GB · 45 MB/s · ~4 min left"). -->
                             <TextBlock FontSize="12"
-                                       Opacity="0.6"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        VerticalAlignment="Center"
                                        TextTrimming="CharacterEllipsis"
                                        Text="{x:Bind SubtitleText, Mode=OneWay}" />
@@ -228,7 +228,7 @@
                                                    FontWeight="SemiBold" />
                                         <TextBlock Text="The downloaded files are removed from disk. You can download the model again at any time."
                                                    FontSize="12"
-                                                   Opacity="0.7"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                    TextWrapping="Wrap" />
                                         <Button Content="Delete"
                                                 Click="LocalModelDeleteConfirm_Click"
@@ -271,7 +271,7 @@
                             <TextBlock Text="{x:Bind DownloadProgressText, Mode=OneWay}"
                                        Visibility="{x:Bind DownloadPercentTextVisible, Mode=OneWay}"
                                        FontSize="10"
-                                       Opacity="0.6"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        HorizontalAlignment="Center" />
                         </StackPanel>
 
@@ -321,7 +321,7 @@
                             <TextBlock Text="{x:Bind LoadProgressText, Mode=OneWay}"
                                        Visibility="{x:Bind LoadPercentTextVisible, Mode=OneWay}"
                                        FontSize="10"
-                                       Opacity="0.6"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        HorizontalAlignment="Center" />
                         </StackPanel>
 
@@ -415,7 +415,7 @@
                                  shown up front so a one-tap row never starts a
                                  multi-GB download the user couldn't foresee. -->
                             <TextBlock FontSize="11"
-                                       Opacity="0.6"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                        TextTrimming="CharacterEllipsis">
                                 <Run Text="{x:Bind Parameters}" />
                                 <Run Text=" · " />
@@ -584,7 +584,7 @@
                     <TextBlock Text="Available"
                                FontSize="13"
                                FontWeight="SemiBold"
-                               Opacity="0.7" />
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                     <Button x:Name="ServerLink"
                             Click="ServerLink_Click"
                             Padding="0"
@@ -605,7 +605,7 @@
                 <TextBlock x:Name="NoLocalModelsText"
                            Text="Starting the llama server…"
                            FontSize="13"
-                           Opacity="0.45"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                            HorizontalAlignment="Center"
                            TextAlignment="Center"
                            TextWrapping="Wrap"
@@ -655,7 +655,7 @@
                            Margin="0,0,-2,0"
                            FontSize="13"
                            FontWeight="SemiBold"
-                           Opacity="0.7" />
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
                 <!-- Scrolls internally when the list outgrows the stretched row. -->
                 <ScrollViewer x:Name="RecommendedScroll"
@@ -683,7 +683,7 @@
                     <TextBlock x:Name="RecommendedStatusText"
                                Text="Loading models…"
                                FontSize="12"
-                               Opacity="0.5"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                                HorizontalAlignment="Center"
                                TextAlignment="Center"
                                TextWrapping="Wrap" />
