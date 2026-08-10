@@ -408,8 +408,8 @@ namespace LlamaApp.Views
             RecommendedModels.Clear(); // idempotent — safe on catalog retry
 
             // Build a display name that disambiguate quants: "GPT-OSS 20B (mxfp4)".
-            // Featured families sort first (catalog order preserved otherwise).
-            foreach (var repo in RecommendedOrdering.OrderForDisplay(repos))
+            // Only featured families are shown (catalog order preserved).
+            foreach (var repo in RecommendedFiltering.FilterForDisplay(repos))
             {
                 var label = !string.IsNullOrEmpty(repo.DisplayName)
                     ? !string.IsNullOrEmpty(repo.Quant)
