@@ -4,9 +4,7 @@
 
 Llama is a Windows 11 tray app for running [llama.cpp](https://github.com/ggml-org/llama.cpp) models locally. It's a WinUI 3 port of [Llama for Mac](https://github.com/ggml-org/Llama-macOS).
 
-<p align="center">
-  <img src=".images/main.jpg" alt="Tray flyout showing available and recommended models" width="420">
-</p>
+<img width="1310" height="737" alt="Tray flyout showing available and recommended models" src="https://github.com/user-attachments/assets/6d726939-5c81-4702-a7a4-f28a14ce4876" />
 
 ## Install
 
