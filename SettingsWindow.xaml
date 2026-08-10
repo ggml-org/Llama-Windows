@@ -421,6 +421,50 @@
                                 </StackPanel>
                             </Border>
 
+                            <!-- Unload model when idle (ComboBox: 5m / 15m / 1h / Never) -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE916;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Unload Model When Idle"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Free the model's memory after it's been idle for a while. The model stays available — the next chat request reloads it automatically. Applies the next time the llama server starts."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <ComboBox x:Name="IdleUnloadBox"
+                                              HorizontalAlignment="Stretch"
+                                              ToolTipService.ToolTip="How long a loaded model may stay idle before it's unloaded from memory">
+                                        <ComboBoxItem Content="After 5 minutes" Tag="300" />
+                                        <ComboBoxItem Content="After 15 minutes" Tag="900" />
+                                        <ComboBoxItem Content="After 1 hour" Tag="3600" />
+                                        <ComboBoxItem Content="Never" Tag="-1" />
+                                    </ComboBox>
+                                </StackPanel>
+                            </Border>
+
                             <!-- Installation folder (read-only — informational,
                                  not a setting) -->
                             <Border CornerRadius="8"

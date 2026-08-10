@@ -1285,8 +1285,11 @@ namespace LlamaApp.Views
 
                 if (item is not null)
                 {
-                    // Map the server's four model states onto the row:
+                    // Map the server's model states onto the row:
                     //   loaded     -> OpenInNewWindow glyph (IsLoaded, ring off)
+                    //   sleeping   -> same as loaded (ServerModel.IsLoaded covers
+                    //                 it): freed after the idle timeout but still
+                    //                 the active model — it wakes on the next request
                     //   loading    -> load ring (server-truth load)
                     //   downloading-> download ring (server-truth download; stays
                     //                 indeterminate for externally-triggered

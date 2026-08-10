@@ -162,6 +162,20 @@ public sealed class LlamaManager
     /// </summary>
     public string? HuggingFaceToken { get; set; }
 
+    /// <summary>
+    /// Seconds of idleness after which the server unloads a model from memory,
+    /// passed as <c>--sleep-idle-seconds</c> at launch; -1 (the default)
+    /// disables it. An idled-out model reports <c>sleeping</c> — it stays the
+    /// active model and wakes transparently on the next request. Set by the
+    /// caller (App.OnLaunched reads it from
+    /// <c>Settings.Current.IdleUnloadSeconds</c>) — kept here rather than
+    /// reading <c>Settings</c> directly to avoid a circular project
+    /// dependency. Only affects servers the app launches: an adopted
+    /// already-running server keeps whatever arguments it was started with,
+    /// and a changed value takes effect on the next server start.
+    /// </summary>
+    public int IdleUnloadSeconds { get; set; } = -1;
+
     private Process? _serverProcess;
 
     // Single-flight guard for EnsureLlamaOrDownloadAsync / StartServerAsync. Called
@@ -554,6 +568,17 @@ public sealed class LlamaManager
             psi.ArgumentList.Add(ServerPort.ToString());
             psi.ArgumentList.Add("--jinja");
 
+            // Idle model unload. Done server-side because the server is the
+            // only place that sees ALL model traffic — the overlay's WebUI
+            // chats straight with it, invisible to the app, so an app-side
+            // idle timer could unload a model mid-conversation. The router
+            // propagates the flag to each per-model child server.
+            if (IdleUnloadSeconds > 0)
+            {
+                psi.ArgumentList.Add("--sleep-idle-seconds");
+                psi.ArgumentList.Add(IdleUnloadSeconds.ToString());
+            }
+
             // Point the HF cache at the user-configured directory so the server
             // resolves downloaded models from the same place the app scans.
             if (!string.IsNullOrEmpty(CacheDirectory) && Directory.Exists(CacheDirectory))
@@ -570,7 +595,8 @@ public sealed class LlamaManager
                 Log.Info("HF token configured; passing HF_TOKEN to the llama server");
             }
 
-            Log.Info($"starting llama server: {BinaryPath} serve --port {ServerPort} --jinja");
+            Log.Info($"starting llama server: {BinaryPath} serve --port {ServerPort} --jinja" +
+                (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : ""));
 
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             proc.Exited += (_, _) =>
@@ -1397,10 +1423,17 @@ public sealed class LlamaManager
         public string Id { get; init; } = "";
         /// <summary>Absolute path to the GGUF on disk, when known.</summary>
         public string? Path { get; init; }
-        /// <summary>Load state reported by the server: <c>unloaded</c>, <c>downloading</c>, <c>loading</c>, or <c>loaded</c>.</summary>
+        /// <summary>Load state reported by the server: <c>unloaded</c>, <c>downloading</c>, <c>loading</c>, <c>loaded</c>, or <c>sleeping</c>.</summary>
         public string Status { get; init; } = "";
-        /// <summary>True when <see cref="Status"/> is <c>loaded</c> (model resident in a child process).</summary>
-        public bool IsLoaded => string.Equals(Status, "loaded", StringComparison.OrdinalIgnoreCase);
+        /// <summary>True when <see cref="Status"/> is <c>loaded</c> (model resident in a child process)
+        /// or <c>sleeping</c> (freed after the idle timeout but still the active model — it wakes
+        /// transparently on the next request, so for every caller it counts as loaded).</summary>
+        public bool IsLoaded =>
+            string.Equals(Status, "loaded", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(Status, "sleeping", StringComparison.OrdinalIgnoreCase);
+        /// <summary>True when <see cref="Status"/> is <c>sleeping</c>: the server freed the model's
+        /// memory after <c>--sleep-idle-seconds</c> of idleness; the next request wakes it.</summary>
+        public bool IsSleeping => string.Equals(Status, "sleeping", StringComparison.OrdinalIgnoreCase);
         /// <summary>True when <see cref="Status"/> is <c>loading</c> (load in progress: child process spawning / weights mmapping).</summary>
         public bool IsLoading => string.Equals(Status, "loading", StringComparison.OrdinalIgnoreCase);
         /// <summary>True when <see cref="Status"/> is <c>downloading</c> (the server is fetching the
