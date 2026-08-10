@@ -15,8 +15,9 @@ Grab the latest `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.c
 ## Highlights
 
 - **Lives in your tray** — a borderless, Mica-backed flyout anchored to the tray icon
-- **Zero-setup llama.cpp** — adopts a running server, launches your existing `llama.exe`, or downloads one for you
-- **One-click models** — browse recommended models from the Hugging Face Hub or load models you already have on disk
+- **Zero-setup llama.cpp** — uses your existing `llama.exe`, or downloads one for you
+- **One-click models** — browse and download recommended models from the Hugging Face Hub
+- **Standard storage** — models live in the Hugging Face cache, shared with `llama.cpp` and other tools
 - **Spotlight-like overlay** — press `Alt+Space` from any app to chat with your loaded model
 
 ## The overlay
