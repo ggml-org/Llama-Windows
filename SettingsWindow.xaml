@@ -112,15 +112,28 @@
 
                 <!-- Pages: exactly one is visible at a time, switched from
                      NavView_SelectionChanged. Each page has a Fluent page
-                     header (subtitle style) above its cards. -->
-                <Grid Padding="8,0,16,8">
+                     header (subtitle style) above its cards. No right padding
+                     here: the ScrollViewer reaches the window's right edge so
+                     the overlay scrollbar hugs it (Windows 11 Settings style)
+                     instead of floating mid-gutter; each page reserves the
+                     scrollbar lane in its own padding, identically, so all
+                     tabs render the same insets whether or not the bar shows.
+                     Every page ScrollViewer uses HorizontalScrollBarVisibility=
+                     Disabled (not Hidden): Hidden still measures content with
+                     infinite width (ScrollMode only gates touch input), which
+                     let long unwrapped content silently overflow the window. -->
+                <Grid Padding="8,0,0,8">
 
                     <!-- ============ General page ============ -->
                     <ScrollViewer x:Name="GeneralPage"
                                   VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Hidden"
+                                  HorizontalScrollBarVisibility="Disabled"
                                   HorizontalScrollMode="Disabled">
-                        <StackPanel Spacing="10" Padding="8,4,8,8">
+                        <!-- Right padding reserves the overlay scrollbar's
+                             lane (~12px expanded + gap) on every page, so the
+                             bar never covers the cards and every tab has the
+                             same insets whether or not the bar shows. -->
+                        <StackPanel Spacing="10" Padding="8,4,20,8">
                             <TextBlock Text="General"
                                        Style="{ThemeResource SubtitleTextBlockStyle}"
                                        Margin="4,4,0,10" />
@@ -307,9 +320,9 @@
                     <ScrollViewer x:Name="IdentityPage"
                                   Visibility="Collapsed"
                                   VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Hidden"
+                                  HorizontalScrollBarVisibility="Disabled"
                                   HorizontalScrollMode="Disabled">
-                        <StackPanel Spacing="10" Padding="8,4,8,8">
+                        <StackPanel Spacing="10" Padding="8,4,20,8">
                             <TextBlock Text="Identity"
                                        Style="{ThemeResource SubtitleTextBlockStyle}"
                                        Margin="4,4,0,10" />
@@ -371,9 +384,9 @@
                     <ScrollViewer x:Name="LlamaPage"
                                   Visibility="Collapsed"
                                   VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Hidden"
+                                  HorizontalScrollBarVisibility="Disabled"
                                   HorizontalScrollMode="Disabled">
-                        <StackPanel Spacing="10" Padding="8,4,8,8">
+                        <StackPanel Spacing="10" Padding="8,4,20,8">
                             <TextBlock Text="Llama"
                                        Style="{ThemeResource SubtitleTextBlockStyle}"
                                        Margin="4,4,0,10" />
