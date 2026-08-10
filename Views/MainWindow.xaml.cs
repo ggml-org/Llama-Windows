@@ -148,9 +148,11 @@ namespace LlamaApp.Views
             // LoadModels() so the initial resolve picks the right variant.
             var root = (FrameworkElement)Content;
             ModelItem.UseLightLogos = root.ActualTheme == ElementTheme.Dark;
+            ModelItem.SubtleFillBrush = ResolveThemeBrush("ControlFillColorSecondaryBrush");
             root.ActualThemeChanged += (_, _) =>
             {
                 ModelItem.UseLightLogos = root.ActualTheme == ElementTheme.Dark;
+                ModelItem.SubtleFillBrush = ResolveThemeBrush("ControlFillColorSecondaryBrush");
                 ModelItem.ClearLogoCache();
                 RefreshRowLogos();
             };
@@ -342,7 +344,7 @@ namespace LlamaApp.Views
             byRepo.TryGetValue(repo, out var matched);
             return new ModelItem
             {
-                Name = DeriveDisplayName(repo, quant, byRepo),
+                Name = DeriveDisplayName(repo, byRepo),
                 RepoName = repo,
                 Quant = quant,
                 Description = matched?.Description ?? "",
@@ -370,17 +372,17 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// Builds a display name for a server-reported model: the catalog's
-        /// <c>DisplayName</c> with the quant in parens when known, else the last
-        /// path segment of the repo id (with quant in parens).
+        /// <c>DisplayName</c> when known, else the last path segment of the
+        /// repo id. The quant is deliberately not shown — it's an
+        /// implementation detail of the server model id, not friendly row text.
         /// </summary>
         private static string DeriveDisplayName(
-            string repo, string quant, Dictionary<string, Repository> byRepo)
+            string repo, Dictionary<string, Repository> byRepo)
         {
             byRepo.TryGetValue(repo, out var matched);
-            var baseName = !string.IsNullOrEmpty(matched?.DisplayName)
+            return !string.IsNullOrEmpty(matched?.DisplayName)
                 ? matched.DisplayName
                 : repo.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? repo;
-            return string.IsNullOrEmpty(quant) ? baseName : $"{baseName} ({quant})";
         }
 
         /// <summary>
@@ -407,31 +409,45 @@ namespace LlamaApp.Views
 
             RecommendedModels.Clear(); // idempotent — safe on catalog retry
 
-            // Build a display name that disambiguate quants: "GPT-OSS 20B (mxfp4)".
-            // Featured families sort first (catalog order preserved otherwise).
-            foreach (var repo in RecommendedOrdering.OrderForDisplay(repos))
+            // One row per repo: the flattened catalog lists a repo once per
+            // build (quant), which would show as identical duplicate rows now
+            // that the quant isn't displayed. The row keeps ALL its builds for
+            // the quantization picker; the first build in catalog order is the
+            // preselected default. Featured families sort first (GroupBy
+            // preserves the order of first appearance).
+            foreach (var group in RecommendedOrdering.OrderForDisplay(repos)
+                         .GroupBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
             {
-                var label = !string.IsNullOrEmpty(repo.DisplayName)
-                    ? !string.IsNullOrEmpty(repo.Quant)
-                        ? $"{repo.DisplayName} ({repo.Quant})"
-                        : repo.DisplayName
-                    : repo.Name;
-
-                RecommendedModels.Add(new ModelItem
+                var builds = group.Select(b => new QuantOption
                 {
-                    Name = label,
+                    Quant = b.Quant,
+                    SizeLabel = b.Size,
+                    SizeBytes = b.SizeBytes,
+                }).ToList();
+                var repo = group.First();
+
+                var item = new ModelItem
+                {
+                    Name = !string.IsNullOrEmpty(repo.DisplayName)
+                        ? repo.DisplayName
+                        : repo.Name,
                     RepoName = repo.Name,
                     Description = repo.Description,
                     Parameters = repo.Parameters,
-                    Size = repo.Size,
-                    SizeBytes = repo.SizeBytes,
                     License = repo.License,
                     Vision = repo.Vision,
-                    Quant = repo.Quant,
                     Downloadable = true,
                     Brand = repo.Brand,
                     Logo = ModelItem.ResolveLogo(repo.Brand),
-                });
+                    Builds = builds,
+                };
+                // Mirrors the default build's quant/size into Quant/Size/
+                // SizeBytes (server id, subtitle, disk preflight).
+                item.SelectedBuild = builds[0];
+                // Restore a context size previously chosen for this build.
+                item.SelectedContextSize = ModelItem.ContextSizeOptionFor(
+                    StoredContextSize(((IModel)item).ServerModelId));
+                RecommendedModels.Add(item);
             }
 
             RecommendedStatusPanel.Visibility = Visibility.Collapsed;
@@ -480,30 +496,50 @@ namespace LlamaApp.Views
         /// Fired when a row in the Recommended Models section is invoked —
         /// clicked, or Enter/Space on the focused row (the row root is a
         /// chromeless Button, so keyboard and screen-reader invokes land here
-        /// too). Moves the model to the Available section with a progress ring,
-        /// kicks off <see cref="LlamaManager.DownloadModelAsync"/> via the
-        /// running llama server, then loads it (see
-        /// <see cref="LoadAndWatchAsync"/>) when the download completes — the
-        /// row transitions download ring -> load ring -> OpenInNewWindow glyph.
+        /// too). Toggles the row's download-options panel (quantization and
+        /// context size pickers); the download itself starts from the panel's
+        /// Download button — see <see cref="RecommendedDownload_Click"/>.
         /// </summary>
         private void RecommendedModel_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is not FrameworkElement fe)
-                return;
-            
             // x:Bind doesn't set DataContext inside a DataTemplate (compiled
             // bindings bypass the property), so read the row's model from its
             // Tag (bound via Tag="{x:Bind}") and fall back to a visual-tree
             // walk — same approach as the Available-row play/open buttons.
-            if (ResolveRowItem(fe) is not { } item)
+            if (sender is FrameworkElement fe && ResolveRowItem(fe) is { } item)
+                item.IsExpanded = !item.IsExpanded;
+        }
+
+        /// <summary>
+        /// The expanded row's Download button: applies the chosen context size
+        /// (the router reads the model-presets INI only at startup, so a running
+        /// server restarts to pick up a change), runs the disk-space preflight
+        /// against the selected build, then starts the download.
+        /// </summary>
+        private async void RecommendedDownload_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
                 return;
-            
+
             if (item.IsDownloading)
                 return; // already in flight (double-tap guard)
 
-            // Disk-space preflight: a one-tap row starts a multi-GB download,
-            // so block it up front when the cache drive can't hold the model
-            // (an unknown size or a failed probe never blocks).
+            // Push the persisted context-size choices into the server manager.
+            // Applied here (not on picker change) so browsing a row's options
+            // never restarts the server out from under a loaded model. If the
+            // restart fails, fall through — the download's own failure path
+            // toasts the server-down state.
+            var mgr = LlamaManager.Shared;
+            mgr.SetModelContextSizes(Settings.Current.ModelContextSizes);
+            if (mgr.PresetsPendingRestart)
+            {
+                mgr.StopServer();
+                await mgr.StartServerAsync();
+            }
+
+            // Disk-space preflight: the download is multi-GB, so block it up
+            // front when the cache drive can't hold the SELECTED build (an
+            // unknown size or a failed probe never blocks).
             if (item.SizeBytes > 0 &&
                 !Common.DiskSpace.HasEnoughSpace(
                     Settings.Current.CacheDirectory, item.SizeBytes, out var freeBytes))
@@ -524,6 +560,56 @@ namespace LlamaApp.Views
 
             _ = DownloadAndLaunchAsync(item);
         }
+
+        /// <summary>
+        /// Quantization picker changed: re-read the stored context size for the
+        /// newly selected build (choices are persisted per server model id, so
+        /// each quant variant remembers its own).
+        /// </summary>
+        private void RecommendedQuant_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (sender is not ComboBox cb ||
+                ResolveRowItem(cb) is not { } item ||
+                cb.SelectedItem is not QuantOption build)
+                return;
+
+            // Build the id from the CONTROL's selection, not item.SelectedBuild:
+            // the TwoWay binding's source update isn't guaranteed to have run
+            // before this event, so item.Quant may still be the previous build.
+            var id = string.IsNullOrEmpty(build.Quant)
+                ? (item.RepoName ?? item.Name)
+                : $"{item.RepoName ?? item.Name}:{build.Quant}";
+            item.SelectedContextSize =
+                ModelItem.ContextSizeOptionFor(StoredContextSize(id));
+        }
+
+        /// <summary>
+        /// Context-size picker changed: persist the choice for the selected
+        /// build's server model id ("Model default" removes the entry). The
+        /// server side is applied on download — see <see cref="RecommendedDownload_Click"/>.
+        /// </summary>
+        private void RecommendedContext_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (sender is not ComboBox cb ||
+                ResolveRowItem(cb) is not { } item ||
+                cb.SelectedItem is not ContextSizeOption opt)
+                return;
+
+            item.SelectedContextSize = opt;
+            var sizes = Settings.Current.ModelContextSizes;
+            var id = ((IModel)item).ServerModelId;
+            if (opt.CtxSize > 0)
+                sizes[id] = opt.CtxSize;
+            else
+                sizes.Remove(id);
+            Settings.Current.Save();
+        }
+
+        /// <summary>The persisted context size (tokens) for a server model id
+        /// (<c>repo:quant</c>); 0 when none was chosen (="Model default").</summary>
+        private static int StoredContextSize(string serverModelId)
+            => Settings.Current.ModelContextSizes.TryGetValue(
+                serverModelId, out var ctx) ? ctx : 0;
 
         /// <summary>
         /// Shows a light-dismiss flyout on the tapped Recommended row when the
@@ -946,10 +1032,27 @@ namespace LlamaApp.Views
         /// Re-resolves every row's brand logo after a theme change (the logo
         /// variant is theme-dependent and the cache has just been cleared).
         /// </summary>
+        /// <summary>
+        /// Resolves a WinUI theme brush from the APPLICATION's resources — the
+        /// XamlControlsResources merge lives at the app level, and an element's
+        /// own <c>Resources</c> dictionary neither contains the theme brushes
+        /// nor walks up to them (its indexer throws <see cref="KeyNotFoundException"/>
+        /// on a missing key, which took down window construction). Returns null
+        /// rather than throwing: a cosmetic fill must never crash the window.
+        /// </summary>
+        private static Microsoft.UI.Xaml.Media.Brush? ResolveThemeBrush(string key)
+            => Microsoft.UI.Xaml.Application.Current?.Resources
+                .TryGetValue(key, out var value) == true
+                    ? value as Microsoft.UI.Xaml.Media.Brush
+                    : null;
+
         private void RefreshRowLogos()
         {
             foreach (var item in LocalModels.Concat(RecommendedModels))
+            {
                 item.Logo = ModelItem.ResolveLogo(item.Brand);
+                item.NotifyThemeChanged(); // RowSurface's brush was swapped
+            }
         }
 
         /// <summary>

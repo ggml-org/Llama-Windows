@@ -74,6 +74,15 @@ public sealed class Settings
     /// </summary>
     public bool TrayHintShown { get; set; } = false;
 
+    /// <summary>
+    /// Per-model context sizes (tokens) chosen in a Recommended row's options
+    /// panel, keyed by the full server model id (<c>repo:quant</c>). Pushed to
+    /// the llama server as a model-presets INI via
+    /// <see cref="Llama.LlamaManager.SetModelContextSizes"/>; a model with no
+    /// entry loads with its own trained context length.
+    /// </summary>
+    public Dictionary<string, int> ModelContextSizes { get; set; } = new();
+
     private static Settings Load()
     {
         try
