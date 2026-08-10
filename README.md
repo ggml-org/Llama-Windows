@@ -19,21 +19,13 @@ Grab the latest `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.c
 - **One-click models** — browse recommended models from the Hugging Face Hub or load models you already have on disk
 - **Spotlight-like overlay** — press `Alt+Space` from any app to chat with your loaded model
 
-<p align="center">
-  <img src=".images/overlay.jpg" alt="Alt+Space overlay with a chat in progress" width="640">
-</p>
+## The overlay
 
-## The overlay, up close
-
-The overlay is the star of the show: a borderless Mica window (~60% of your screen) that embeds the llama server's WebUI for whichever model is loaded. Think Spotlight or Raycast, but for your local LLM.
+`Alt+Space` from any app opens a borderless window with the WebUI for whichever model is loaded. It hides instead of closing, so re-summoning is instant and your conversation is still there.
 
 <p align="center">
   <img src=".images/overlay_streaming.gif" alt="Streaming a response in the overlay" width="640">
 </p>
-
-- **Global hotkey** — `Alt+Space` works from any app while Llama is running.
-- **Model-aware** — automatically points at the currently loaded model; shows the router view when none is loaded.
-- **Native feel** — hides instead of closing, so re-summoning is instant.
 
 ## How it works
 
