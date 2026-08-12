@@ -9,8 +9,8 @@ namespace LlamaApp
     /// A small centered settings window (separate from the tray flyout) styled
     /// after the Windows 11 Settings app: a left NavigationView with three
     /// pages — General (launch at startup, local models cache), Identity
-    /// (Hugging Face token) and Llama (server port). Saves to
-    /// <see cref="Settings"/> on Save; discards on Cancel.
+    /// (Hugging Face token) and Llama (server port, idle model unload). Saves
+    /// to <see cref="Settings"/> on Save; discards on Cancel.
     /// </summary>
     public sealed partial class SettingsWindow : Window
     {
@@ -94,6 +94,20 @@ namespace LlamaApp
             TokenBox.Password = s.HuggingFaceToken ?? "";
             CacheBox.Text = s.CacheDirectory ?? "";
             PortBox.Value = s.ServerPort;
+            // Select the idle-unload choice matching the saved seconds; an
+            // unrecognized value (hand-edited settings.json) falls back to
+            // Never, the safe default.
+            var idleTag = s.IdleUnloadSeconds.ToString();
+            foreach (var item in IdleUnloadBox.Items.OfType<Microsoft.UI.Xaml.Controls.ComboBoxItem>())
+            {
+                if (item.Tag as string == idleTag)
+                {
+                    IdleUnloadBox.SelectedItem = item;
+                    break;
+                }
+            }
+            if (IdleUnloadBox.SelectedItem is null)
+                IdleUnloadBox.SelectedIndex = IdleUnloadBox.Items.Count - 1; // Never
             // The OS shortcut is the source of truth: a user may have toggled
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
@@ -251,6 +265,13 @@ namespace LlamaApp
             s.ServerPort = double.IsNaN(PortBox.Value)
                 ? Llama.LlamaManager.DefaultServerPort
                 : (int)PortBox.Value;
+
+            // The ComboBox items carry the seconds in their Tag. Applied the
+            // next time the server starts (it's a launch argument), so no
+            // live server restart here.
+            if ((IdleUnloadBox.SelectedItem as Microsoft.UI.Xaml.Controls.ComboBoxItem)?.Tag is string idleTag
+                && int.TryParse(idleTag, out var idleSeconds))
+                s.IdleUnloadSeconds = idleSeconds;
 
             // Apply the startup preference to the OS (create/delete the .lnk)
             // and mirror it into settings.json as a hint for the checkbox on

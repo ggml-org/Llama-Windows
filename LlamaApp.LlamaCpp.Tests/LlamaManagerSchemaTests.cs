@@ -85,6 +85,29 @@ public class LlamaManagerSchemaTests
     }
 
     [Fact]
+    public void Map_Sleeping_Model_Counts_As_Loaded()
+    {
+        // Real /models shape once --sleep-idle-seconds has fired: the server
+        // freed the model's memory but it stays the active model and wakes
+        // transparently on the next request — so it must still read as loaded
+        // (the overlay resolves it, the unload button stays available, and the
+        // flyout doesn't flap between loaded/unloaded on every sleep/wake).
+        var dto = new LlamaManager.ServerModelDto
+        {
+            Id = "ggml-org/gemma-3-1b-it-qat-GGUF:Q4_0",
+            Status = new LlamaManager.ModelStatusDto { Value = "sleeping" },
+            Source = "cache",
+        };
+
+        var model = LlamaManager.Map(dto);
+
+        Assert.True(model.IsSleeping);
+        Assert.True(model.IsLoaded);
+        Assert.False(model.IsLoading);
+        Assert.False(model.IsDownloading);
+    }
+
+    [Fact]
     public void Map_Null_Status_And_Architecture_Default_To_Unloaded()
     {
         var model = LlamaManager.Map(new LlamaManager.ServerModelDto());

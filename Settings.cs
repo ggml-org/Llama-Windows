@@ -59,6 +59,16 @@ public sealed class Settings
     public int ServerPort { get; set; } = Llama.LlamaManager.DefaultServerPort;
 
     /// <summary>
+    /// Seconds of idleness after which the llama server unloads the model from
+    /// memory: 300 (5 min), 900 (15 min), 3600 (1 hour), or -1 (never, the
+    /// default). Handed to the server as <c>--sleep-idle-seconds</c> at launch
+    /// (see <see cref="Llama.LlamaManager.IdleUnloadSeconds"/>), so a changed
+    /// value takes effect on the next server start. An idled-out model stays
+    /// listed and wakes transparently on the next request.
+    /// </summary>
+    public int IdleUnloadSeconds { get; set; } = -1;
+
+    /// <summary>
     /// Whether LlamaApp should launch automatically when the user signs in to
     /// Windows. The authoritative state is the presence of the startup
     /// shortcut managed by <see cref="StartupHelper"/> (in the user's Startup
