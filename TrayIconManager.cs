@@ -3,6 +3,8 @@ using System.Runtime.InteropServices;
 using H.NotifyIcon.Core;
 using LlamaApp.Common;
 using Microsoft.UI.Dispatching;
+using Microsoft.Win32;
+using Windows.UI.ViewManagement;
 
 namespace LlamaApp;
 
@@ -44,14 +46,25 @@ namespace LlamaApp;
 /// broadcasts <c>TaskbarCreated</c> and each app must re-add its icon.
 /// H.NotifyIcon 2.4.1 raises the event but leaves the re-adding to the app
 /// (<see cref="OnTaskbarCreated"/>).</para>
+///
+/// <para><b>Theme awareness</b>: the glyph is near-black, so it vanishes on a
+/// dark taskbar. The icon therefore tracks the OS <i>system</i> theme — the
+/// one the taskbar itself follows, read from
+/// <c>SystemUsesLightTheme</c> in the registry (not the app theme, which can
+/// differ in a custom mode) — showing the white glyph on a dark taskbar and
+/// the dark glyph on a light one, swapping live via
+/// <see cref="UISettings.ColorValuesChanged"/> when the theme flips.</para>
 /// </summary>
 internal sealed class TrayIconManager : IDisposable
 {
     private readonly MainWindow _window;
     private readonly DispatcherQueue _dispatcher;
-    private readonly Icon _icon;
+    private readonly Icon _lightTaskbarIcon;
+    private readonly Icon _darkTaskbarIcon;
     private readonly TrayIcon _trayIcon;
     private readonly PopupMenu _contextMenu;
+    private readonly UISettings _uiSettings = new();
+    private nint _appliedIconHandle;
     private bool _disposed;
     private int _recreating;
 
@@ -63,17 +76,22 @@ internal sealed class TrayIconManager : IDisposable
                 "TrayIconManager must be constructed on the UI thread.");
 
         // The Assets folder is copied next to the executable, so resolve the
-        // icon relative to the app's base directory rather than the CWD.
-        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "llama.ico");
-        _icon = new Icon(iconPath);
+        // icons relative to the app's base directory rather than the CWD.
+        var assetsDir = Path.Combine(AppContext.BaseDirectory, "Assets");
+        _lightTaskbarIcon = new Icon(Path.Combine(assetsDir, "llama.ico"));
+        _darkTaskbarIcon = new Icon(Path.Combine(assetsDir, "llama-white.ico"));
 
         _trayIcon = new TrayIcon("LlamaApp")
         {
             ToolTip = "LlamaApp",
-            Icon = _icon.Handle,
+            Icon = TaskbarIconHandle,
         };
+        _appliedIconHandle = _trayIcon.Icon;
         _trayIcon.MessageWindow.SubscribeToMouseEventReceived(OnMouseEvent);
         _trayIcon.MessageWindow.SubscribeToTaskbarCreated(OnTaskbarCreated);
+
+        // Swap the glyph when the OS theme flips (see the class remarks).
+        _uiSettings.ColorValuesChanged += OnColorValuesChanged;
 
         // Shown manually on right-click (see ShowContextMenu).
         _contextMenu = BuildContextMenu();
@@ -137,6 +155,58 @@ internal sealed class TrayIconManager : IDisposable
         {
             Interlocked.Exchange(ref _recreating, 0);
         }
+    }
+
+    /// <summary>
+    /// The icon handle for the current taskbar theme: the white glyph on a
+    /// dark taskbar, the dark glyph on a light one.
+    /// </summary>
+    private nint TaskbarIconHandle =>
+        (IsTaskbarDark() ? _darkTaskbarIcon : _lightTaskbarIcon).Handle;
+
+    /// <summary>
+    /// Whether the taskbar — the surface the tray icon sits on — is currently
+    /// dark. The taskbar follows the OS <i>system</i> theme, so this reads
+    /// <c>SystemUsesLightTheme</c> rather than the app theme
+    /// (<c>AppsUseLightTheme</c> / <c>RequestedTheme</c>): in a custom mode the
+    /// two can differ, and only the system one matches the taskbar. A missing
+    /// or unreadable value means the Windows 11 default — light — which keeps
+    /// the original dark-glyph behavior.
+    /// </summary>
+    private static bool IsTaskbarDark()
+    {
+        try
+        {
+            return Registry.GetValue(
+                @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "SystemUsesLightTheme", 1) is int value && value == 0;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "could not read the system theme; assuming a light taskbar");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Re-evaluates the glyph after a system color change. The event also
+    /// fires for accent-color changes, so the NIM_MODIFY update is skipped
+    /// unless the effective icon actually changed.
+    /// </summary>
+    private void OnColorValuesChanged(UISettings sender, object? args)
+    {
+        // Fires on a background thread; the tray icon is UI-thread state.
+        Enqueue(() =>
+        {
+            if (_disposed) return;
+            var handle = TaskbarIconHandle;
+            if (handle == _appliedIconHandle) return;
+            _appliedIconHandle = handle;
+            // UpdateIcon falls back to setting the Icon property when the tray
+            // icon hasn't been created yet, so the retry loop picks it up too.
+            _trayIcon.UpdateIcon(handle);
+            Log.Info($"taskbar theme changed; tray icon swapped to the {(IsTaskbarDark() ? "white" : "dark")} glyph");
+        });
     }
 
     /// <summary>
@@ -269,7 +339,8 @@ internal sealed class TrayIconManager : IDisposable
         try
         {
             _trayIcon.Dispose();
-            _icon.Dispose();
+            _lightTaskbarIcon.Dispose();
+            _darkTaskbarIcon.Dispose();
         }
         catch (Exception ex)
         {
@@ -299,7 +370,9 @@ internal sealed class TrayIconManager : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _uiSettings.ColorValuesChanged -= OnColorValuesChanged;
         _trayIcon.Dispose();
-        _icon.Dispose();
+        _lightTaskbarIcon.Dispose();
+        _darkTaskbarIcon.Dispose();
     }
 }
