@@ -19,8 +19,7 @@ public sealed class Settings
     // (HuggingFace token, cache directory, startup hint) would be silently
     // discarded on every launch. Keep this above any member that calls Load.
     private static readonly string SettingsPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "LlamaApp", "settings.json");
+        Common.AppData.Root, "settings.json");
 
     /// <summary>Singleton instance; loaded lazily on first access and cached.</summary>
     public static Settings Current { get; } = Load();
@@ -69,7 +68,7 @@ public sealed class Settings
     public int IdleUnloadSeconds { get; set; } = -1;
 
     /// <summary>
-    /// Whether LlamaApp should launch automatically when the user signs in to
+    /// Whether Llama should launch automatically when the user signs in to
     /// Windows. The authoritative state is the presence of the startup
     /// shortcut managed by <see cref="StartupHelper"/> (in the user's Startup
     /// folder); this value is a persisted hint so the Settings checkbox can
@@ -78,7 +77,7 @@ public sealed class Settings
     public bool LaunchAtStartup { get; set; } = false;
 
     /// <summary>
-    /// Whether the one-time first-run hint ("LlamaApp lives in the system
+    /// Whether the one-time first-run hint ("Llama lives in the system
     /// tray; Alt+Space opens the chat overlay") has been shown. Persisted so
     /// the toast fires exactly once, on the first launch.
     /// </summary>

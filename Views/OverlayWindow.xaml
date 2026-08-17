@@ -51,30 +51,13 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <!-- Brand: logo + wordmark -->
-            <StackPanel Grid.Column="0"
-                        Orientation="Horizontal"
-                        Spacing="6"
-                        VerticalAlignment="Center">
-                <Image Source="{ThemeResource BrandLogoSource}"
-                       Width="18" Height="18"
-                       Stretch="Uniform"
-                       VerticalAlignment="Center" />
-                <StackPanel Orientation="Horizontal"
-                            Spacing="1"
-                            VerticalAlignment="Center">
-                    <TextBlock Text="llama"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text=".app"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="{StaticResource BrandAccentBrush}"
-                               VerticalAlignment="Center" />
-                </StackPanel>
-            </StackPanel>
+            <!-- Brand: logo -->
+            <Image Grid.Column="0"
+                   Source="{ThemeResource BrandLogoSource}"
+                   Width="18" Height="18"
+                   Stretch="Uniform"
+                   HorizontalAlignment="Left"
+                   VerticalAlignment="Center" />
 
             <!-- Spacer -->
 

@@ -56,7 +56,7 @@
         <PlatformTarget Condition="'$(Platform)' == 'AnyCPU'">x64</PlatformTarget>
         <Authors>Hugging Face</Authors>
         <PackageProjectUrl>https://github.com/ggml-org/llama-windows</PackageProjectUrl>
-        <Title>LlamaApp</Title>
+        <Title>Llama</Title>
         <RepositoryUrl>https://github.com/ggml-org/llama-windows</RepositoryUrl>
     </PropertyGroup>
 

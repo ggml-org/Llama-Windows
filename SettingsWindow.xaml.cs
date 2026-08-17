@@ -119,7 +119,7 @@ namespace LlamaApp
         /// Populates the Installation Folder card (Llama page). The path is
         /// informational, not a setting: for an external (PATH) installation
         /// we show its directory but disable Empty — external installs are not
-        /// LlamaApp's to delete. For the app-managed install, Empty is offered
+        /// Llama's to delete. For the app-managed install, Empty is offered
         /// whenever the folder exists.
         /// </summary>
         private void LoadInstallInfo()
@@ -132,14 +132,14 @@ namespace LlamaApp
             {
                 path = Path.GetDirectoryName(mgr.BinaryPath)!;
                 InstallDescriptionText.Text =
-                    "Using an external llama installation found on PATH. It isn't managed by LlamaApp — emptying is only available for the app-managed install.";
+                    "Using an external llama installation found on PATH. It isn't managed by Llama — emptying is only available for the app-managed install.";
                 canEmpty = false;
             }
             else
             {
                 path = Llama.LlamaManager.ManagedInstallDir;
                 InstallDescriptionText.Text =
-                    "Where LlamaApp installs the llama server binary. Emptying frees disk space — the binary is downloaded again on next launch.";
+                    "Where Llama installs the llama server binary. Emptying frees disk space — the binary is downloaded again on next launch.";
                 canEmpty = true;
             }
 
@@ -183,7 +183,7 @@ namespace LlamaApp
             {
                 XamlRoot = Content.XamlRoot,
                 Title = "Empty Llama folder?",
-                Content = $"This stops the llama server (if running) and deletes everything in:\n\n{path}\n\nThe llama binary is downloaded again the next time LlamaApp needs it.",
+                Content = $"This stops the llama server (if running) and deletes everything in:\n\n{path}\n\nThe llama binary is downloaded again the next time Llama needs it.",
                 PrimaryButtonText = "Empty",
                 CloseButtonText = "Cancel",
                 DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Close,

@@ -28,7 +28,7 @@ public sealed class Catalog : IModelSource
     public static async Task<IReadOnlyList<Repository>> FetchAsync(CancellationToken cancel = default)
     {
         using var client = new HttpClient();
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("LlamaApp/1.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("Llama/1.0");
         client.Timeout = TimeSpan.FromSeconds(15);
 
         using var response = await client.GetAsync(CatalogUrl, cancel);

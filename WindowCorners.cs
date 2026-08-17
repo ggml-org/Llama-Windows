@@ -7,7 +7,7 @@ namespace LlamaApp;
 /// <summary>
 /// Sets a window's DWM corner preference. Windows 11 rounds top-level window
 /// corners by default, but the radius is the system's choice — pinning the
-/// preference guarantees the standard 8px "round" corners for every LlamaApp
+/// preference guarantees the standard 8px "round" corners for every Llama
 /// window (tray flyout, chat overlay, settings) regardless of the system
 /// default. Ignored on Windows 10, where the attribute doesn't exist.
 /// </summary>

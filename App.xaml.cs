@@ -16,9 +16,13 @@ namespace LlamaApp
         /// </summary>
         public App()
         {
+            // Move the pre-rename data folder (%LOCALAPPDATA%\LlamaApp) to its
+            // new home (%LOCALAPPDATA%\Llama) before logging or settings touch it.
+            Common.AppData.MigrateLegacyFolder();
+
             // Initialize the global logger first, before anything that can
             // fail: a debug build logs at Debug level, a release build at Info.
-            // The log lives at %LOCALAPPDATA%\LlamaApp\logs\LlamaApp-YYYYMMDD.log
+            // The log lives at %LOCALAPPDATA%\Llama\logs\Llama-YYYYMMDD.log
             // (rolled daily, old files swept to a 7-day retention).
             Common.Log.Initialize(level:
 #if DEBUG
@@ -27,7 +31,7 @@ namespace LlamaApp
                 Common.LogLevel.Info
 #endif
             );
-            Common.Log.Info("LlamaApp starting");
+            Common.Log.Info("Llama starting");
 
             _dispatcher = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()
                           ?? throw new InvalidOperationException("App must initialize on the UI thread.");
@@ -50,7 +54,7 @@ namespace LlamaApp
             // duplicate tray icon and a second /models poller fighting over
             // the same server port.
             var instance = Microsoft.Windows.AppLifecycle.AppInstance
-                .FindOrRegisterForKey("LlamaApp");
+                .FindOrRegisterForKey("Llama");
             if (!instance.IsCurrent)
             {
                 Common.Log.Info("another instance is already running; redirecting activation and exiting");
@@ -66,6 +70,10 @@ namespace LlamaApp
                 Environment.Exit(0);
                 return;
             }
+
+            // The startup shortcut was renamed with the app ("LlamaApp.lnk" →
+            // "Llama.lnk") — sweep any leftover from a pre-rename install.
+            StartupHelper.RemoveLegacyShortcut();
 
             // Create the llama-server manager singleton with the configured
             // port BEFORE anything else can touch LlamaManager.Shared — the
@@ -116,7 +124,7 @@ namespace LlamaApp
             // Spotlight-style prompt overlay, summoned by a global Alt+Space
             // hotkey. Created lazily on first press and reused thereafter; the
             // hotkey is registered for the app's lifetime only, so it stops
-            // working the moment LlamaApp exits.
+            // working the moment Llama exits.
             _overlay = new OverlayWindow();
             _hotkey = new GlobalHotkey();
             _hotkey.Register(() => _dispatcher.TryEnqueue(() => _overlay.Summon()));
@@ -137,7 +145,7 @@ namespace LlamaApp
             {
                 Settings.Current.TrayHintShown = true;
                 Settings.Current.Save();
-                Notifications.Show("LlamaApp is running",
+                Notifications.Show("Llama is running",
                     "Find it in the system tray — and press Alt+Space anytime to chat with a loaded model.");
             }
         }

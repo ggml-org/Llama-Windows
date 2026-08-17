@@ -41,9 +41,9 @@
             <SolidColorBrush x:Key="WhiteBrush" Color="White" />
             <SolidColorBrush x:Key="BlackBrush" Color="Black" />
 
-            <!-- Brand accent (the ".app" wordmark orange): the app's single
-                 accent color, used instead of the system accent for brand
-                 moments — wordmarks, settings icon tiles, nav selection pill. -->
+            <!-- Brand accent (orange): the app's single accent color, used
+                 instead of the system accent for brand moments — settings
+                 icon tiles, nav selection pill, status dots. -->
             <SolidColorBrush x:Key="BrandAccentBrush" Color="#FF8A3D" />
 
             <!-- App background: dark gray instead of the default ~black (#202020). -->

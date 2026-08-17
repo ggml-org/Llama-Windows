@@ -17,7 +17,7 @@
         The content is a vertical Grid with three sections. Sections 1, 2 take
         their natural height; section 3 stretches to fill the remaining space
         (Row *):
-          1. Brand header (logo + llama.app left, action icons right) — Auto, compact
+          1. Brand header (logo left, action icons right) — Auto, compact
           2. Available (local models, or "No model yet") — Auto, Fluent card
           3. Recommended Models                        — * (stretches), Fluent card
           4. Version footer (app version - llama.cpp version) — Auto, compact
@@ -463,7 +463,7 @@
         </Grid.RowDefinitions>
 
         <!-- ============ Section 1: Brand header (compact) ============
-             Logo + "llama.app" left-aligned, action icons right-aligned, both
+             Logo left-aligned, action icons right-aligned, both
              at the same 16px horizontal margin as the sections below. The
              settings gear opens Settings; the globe quits the app — replacing
              the old footer's Settings/Quit buttons. -->
@@ -475,29 +475,13 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <!-- Left: brand logo + wordmark -->
-            <StackPanel Grid.Column="0"
-                        Orientation="Horizontal"
-                        Spacing="6"
-                        VerticalAlignment="Center">
-                <Image Source="{ThemeResource BrandLogoSource}"
-                       Width="20" Height="20"
-                       Stretch="Uniform" />
-                <StackPanel Orientation="Horizontal"
-                            Spacing="1"
-                            VerticalAlignment="Center">
-                    <TextBlock Text="llama"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="{ThemeResource TextFillColorPrimaryBrush}"
-                               VerticalAlignment="Center" />
-                    <TextBlock Text=".app"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="{StaticResource BrandAccentBrush}"
-                               VerticalAlignment="Center" />
-                </StackPanel>
-            </StackPanel>
+            <!-- Left: brand logo -->
+            <Image Grid.Column="0"
+                   Source="{ThemeResource BrandLogoSource}"
+                   Width="20" Height="20"
+                   Stretch="Uniform"
+                   HorizontalAlignment="Left"
+                   VerticalAlignment="Center" />
 
             <!-- Right: action icons (replace the old footer buttons). Transparent
                  chrome to match the row icon buttons; the default button visual
