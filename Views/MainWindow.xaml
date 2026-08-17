@@ -14,16 +14,17 @@
         only ever appears anchored to the system-tray icon, dismissing itself
         when it loses focus — mirroring the macOS menu-bar app on Windows.
 
-        The content is a vertical Grid with three sections. Sections 1, 2 take
-        their natural height; section 3 stretches to fill the remaining space
+        The content is a vertical Grid with three sections. Sections 1, 3 take
+        their natural height; section 2 stretches to fill the remaining space
         (Row *):
           1. Brand header (logo left, action icons right) — Auto, compact
-          2. Available (local models, or "No model yet") — Auto, Fluent card
-          3. Recommended Models                        — * (stretches), Fluent card
-          4. Version footer (app version - llama.cpp version) — Auto, compact
-        The two list sections are Fluent cards (4px rounded corners, 1px
-        stroke, card fill, z-depth 8 elevation via ThemeShadow), so no divider
-        line is needed between them.
+          2. Models — a single list: available (local) models on top with
+             their run glyph, recommended Hub models below with their
+             download glyph — * (stretches), Fluent card
+          3. Version footer (app version - llama.cpp version) — Auto, compact
+        The list section is a Fluent card (4px rounded corners, 1px stroke,
+        card fill, z-depth 8 elevation via ThemeShadow), so no divider line
+        is needed around it.
         The old footer's Settings/Quit buttons are gone; those actions live as
         icons in the header now. The version caption is re-added as the last
         section.
@@ -456,10 +457,9 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" /> <!-- Section 1: brand header -->
             <RowDefinition Height="Auto" /> <!-- Divider -->
-            <RowDefinition Height="Auto" /> <!-- Section 2: Available (card) -->
-            <RowDefinition Height="*" />    <!-- Section 3: Recommended (card, stretches) -->
+            <RowDefinition Height="*" />    <!-- Section 2: models list (card, stretches) -->
             <RowDefinition Height="Auto" /> <!-- Divider -->
-            <RowDefinition Height="Auto" /> <!-- Section 4: version footer -->
+            <RowDefinition Height="Auto" /> <!-- Section 3: version footer -->
         </Grid.RowDefinitions>
 
         <!-- ============ Section 1: Brand header (compact) ============
@@ -546,11 +546,13 @@
                    Margin="16,0"
                    Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
 
-        <!-- ============ Section 2: Available (local models) ============
-             A Fluent card: 4px rounded corners, 1px stroke, the card fill
-             tokens, and z-depth 8 elevation (ThemeShadow). -->
+        <!-- ============ Section 2: Models (single list; card, stretches, scrolls) ============
+             One Fluent card holding both model groups in a single scrolling
+             list: available (local) models on top — run glyph — and
+             recommended Hub models below — download glyph. The group headers
+             scroll with the rows; there is no per-group internal scroll. -->
         <Border Grid.Row="2"
-                Margin="16,12,16,6"
+                Margin="16,12,16,12"
                 Padding="8,10"
                 CornerRadius="4"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -560,48 +562,46 @@
             <Border.Shadow>
                 <ThemeShadow />
             </Border.Shadow>
-            <StackPanel Spacing="8">
-                <!-- Section title + link to the running server's API. The link is
-                     styled gray/non-bold (not white/bold) to read as a subtle href. -->
-                <StackPanel Orientation="Horizontal" Spacing="8"
-                            Margin="0,0,-2,0">
-                    <TextBlock Text="Available"
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Hidden"
+                          HorizontalScrollMode="Disabled">
+                <StackPanel Spacing="8">
+                    <!-- "Available" group header + link to the running server's
+                         API. The link is styled gray/non-bold (not white/bold)
+                         to read as a subtle href. -->
+                    <StackPanel Orientation="Horizontal" Spacing="8"
+                                Margin="0,0,-2,0">
+                        <TextBlock Text="Available"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button x:Name="ServerLink"
+                                Click="ServerLink_Click"
+                                Padding="0"
+                                MinWidth="0"
+                                MinHeight="0"
+                                Opacity="0.55"
+                                VerticalAlignment="Center"
+                                ToolTipService.ToolTip="Open WebUI">
+                            <FontIcon Glyph="&#xE8A7;"
+                                      FontSize="14" />
+                        </Button>
+                    </StackPanel>
+
+                    <!-- Empty state — shown when there are no local models. The text
+                         is set from code (EmptyStatePresentation) and follows the
+                         server state: starting/installing progress, an actionable hint
+                         once running, an honest failure note when the server is down. -->
+                    <TextBlock x:Name="NoLocalModelsText"
+                               Text="Starting the llama server…"
                                FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    <Button x:Name="ServerLink"
-                            Click="ServerLink_Click"
-                            Padding="0"
-                            MinWidth="0"
-                            MinHeight="0"
-                            Opacity="0.55"
-                            VerticalAlignment="Center"
-                            ToolTipService.ToolTip="Open WebUI">
-                        <FontIcon Glyph="&#xE8A7;"
-                                  FontSize="14" />
-                    </Button>
-                </StackPanel>
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               HorizontalAlignment="Center"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               Margin="0,8,0,8" />
 
-                <!-- Empty state — shown when there are no local models. The text
-                     is set from code (EmptyStatePresentation) and follows the
-                     server state: starting/installing progress, an actionable hint
-                     once running, an honest failure note when the server is down. -->
-                <TextBlock x:Name="NoLocalModelsText"
-                           Text="Starting the llama server…"
-                           FontSize="13"
-                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                           HorizontalAlignment="Center"
-                           TextAlignment="Center"
-                           TextWrapping="Wrap"
-                           Margin="0,8,0,8" />
-
-                <!-- Local model rows (run on click). Capped at ~4 rows so the
-                     section never pushes the Recommended list off-screen; scrolls
-                     internally when there are more local models than that. -->
-                <ScrollViewer MaxHeight="184"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Hidden"
-                              HorizontalScrollMode="Disabled">
+                    <!-- Local model rows (run on click). -->
                     <ItemsRepeater x:Name="LocalModelsList"
                                    ItemsSource="{x:Bind LocalModels}"
                                    ItemTemplate="{StaticResource LocalModelRowTemplate}">
@@ -609,93 +609,65 @@
                             <StackLayout Spacing="2" />
                         </ItemsRepeater.Layout>
                     </ItemsRepeater>
-                </ScrollViewer>
-            </StackPanel>
-        </Border>
 
-        <!-- ============ Section 3: Recommended Models (card; stretches, scrolls) ============
-             The same Fluent card treatment as the Available section — the card
-             stroke + elevation replace the divider line that used to separate
-             the two sections. -->
-        <Border Grid.Row="3"
-                Margin="16,6,16,12"
-                Padding="8,10"
-                CornerRadius="4"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                Translation="0,0,8">
-            <Border.Shadow>
-                <ThemeShadow />
-            </Border.Shadow>
-            <Grid RowSpacing="8">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" /> <!-- Header (fixed) -->
-                    <RowDefinition Height="*" />    <!-- List (fills + scrolls) -->
-                </Grid.RowDefinitions>
+                    <!-- "Recommended Models" group header — the extra top margin
+                         separates the two groups inside the single list. -->
+                    <TextBlock Text="Recommended Models"
+                               Margin="0,4,-2,0"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 
-                <TextBlock Grid.Row="0"
-                           Text="Recommended Models"
-                           Margin="0,0,-2,0"
-                           FontSize="13"
-                           FontWeight="SemiBold"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <!-- Catalog status: "Loading…" while the remote catalog is being
+                         fetched; an error + Retry button if the fetch fails (previously
+                         the section just stayed silently blank). -->
+                    <StackPanel x:Name="RecommendedStatusPanel"
+                                VerticalAlignment="Center"
+                                Spacing="10">
+                        <TextBlock x:Name="RecommendedStatusText"
+                                   Text="Loading models…"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap" />
+                        <Button x:Name="RetryCatalogButton"
+                                Content="Retry"
+                                Click="RetryCatalog_Click"
+                                HorizontalAlignment="Center"
+                                Visibility="Collapsed"
+                                FontSize="12"
+                                Padding="12,4"
+                                MinHeight="0" />
+                    </StackPanel>
 
-                <!-- Scrolls internally when the list outgrows the stretched row. -->
-                <ScrollViewer x:Name="RecommendedScroll"
-                              Grid.Row="1"
-                              Visibility="Collapsed"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Hidden"
-                              HorizontalScrollMode="Disabled">
+                    <!-- Recommended rows (download on click) — hidden until the
+                         catalog lands, swapped with the status panel from code. -->
                     <ItemsRepeater x:Name="RecommendedModelsList"
+                                   Visibility="Collapsed"
                                    ItemsSource="{x:Bind RecommendedModels}"
                                    ItemTemplate="{StaticResource RecommendedModelRowTemplate}">
                         <ItemsRepeater.Layout>
                             <StackLayout Spacing="2" />
                         </ItemsRepeater.Layout>
                     </ItemsRepeater>
-                </ScrollViewer>
-
-                <!-- Catalog status: "Loading…" while the remote catalog is being
-                     fetched; an error + Retry button if the fetch fails (previously
-                     the section just stayed silently blank). -->
-                <StackPanel x:Name="RecommendedStatusPanel"
-                            Grid.Row="1"
-                            VerticalAlignment="Center"
-                            Spacing="10">
-                    <TextBlock x:Name="RecommendedStatusText"
-                               Text="Loading models…"
-                               FontSize="12"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               HorizontalAlignment="Center"
-                               TextAlignment="Center"
-                               TextWrapping="Wrap" />
-                    <Button x:Name="RetryCatalogButton"
-                            Content="Retry"
-                            Click="RetryCatalog_Click"
-                            HorizontalAlignment="Center"
-                            Visibility="Collapsed"
-                            FontSize="12"
-                            Padding="12,4"
-                            MinHeight="0" />
                 </StackPanel>
-            </Grid>
+            </ScrollViewer>
         </Border>
 
-        <Rectangle Grid.Row="4"
+        <Rectangle Grid.Row="3"
                    Height="1"
                    Margin="16,0"
                    Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
 
-        <!-- ============ Section 4: Version footer (compact) ============
+        <!-- ============ Section 3: Version footer (compact) ============
              A single centered line: a server-status dot (green = running,
              red = crashed, amber = starting, gray = stopped), the app's
              version (no name) and the resolved llama.cpp version separated
              by " - ", and a small relaunch button that appears only when
              the server is down. Bold theme foreground so it reads as a clear
-             caption under the Recommended list in either OS theme. -->
-        <StackPanel Grid.Row="5"
+             caption under the models list in either OS theme. -->
+        <StackPanel Grid.Row="4"
                     Margin="16,8,16,10"
                     HorizontalAlignment="Center"
                     Orientation="Horizontal"

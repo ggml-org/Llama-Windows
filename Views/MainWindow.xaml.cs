@@ -18,7 +18,7 @@ namespace LlamaApp.Views
     /// borderless with a Mica backdrop (native Windows 11 flyout look) and only
     /// ever appears anchored to the tray icon via <see cref="ShowAsFlyout"/>,
     /// auto-hiding when it loses activation. This mirrors the macOS menu-bar
-    /// app on Windows while hosting the four-section models panel.
+    /// app on Windows while hosting the three-section models panel.
     /// </summary>
     public sealed partial class MainWindow : Window
     {
@@ -398,7 +398,7 @@ namespace LlamaApp.Views
             // leaving the section silently blank.
             if (repos.Count == 0)
             {
-                RecommendedScroll.Visibility = Visibility.Collapsed;
+                RecommendedModelsList.Visibility = Visibility.Collapsed;
                 RecommendedStatusPanel.Visibility = Visibility.Visible;
                 RecommendedStatusText.Text = "Couldn't load the model catalog. Check your connection and try again.";
                 RetryCatalogButton.Visibility = Visibility.Visible;
@@ -436,7 +436,7 @@ namespace LlamaApp.Views
 
             RecommendedStatusPanel.Visibility = Visibility.Collapsed;
             RetryCatalogButton.Visibility = Visibility.Collapsed;
-            RecommendedScroll.Visibility = Visibility.Visible;
+            RecommendedModelsList.Visibility = Visibility.Visible;
         }
 
         /// <summary>
