@@ -11,7 +11,7 @@ public enum LogLevel { Trace, Debug, Info, Warn, Error, None }
 
 /// <summary>
 /// Process-global, dependency-free logger. Writes each line to a daily rolling
-/// file (<c>%LOCALAPPDATA%\LlamaApp\logs\LlamaApp-YYYYMMDD.log</c>) and, when the
+/// file (<c>%LOCALAPPDATA%\Llama\logs\Llama-YYYYMMDD.log</c>) and, when the
 /// app was launched from a terminal or an IDE that captures stdout (Rider, VS
 /// Code, <c>dotnet run</c>), mirrors it to that stdout so logs stream live into
 /// the shell / debug panel. The stdout mirror is a no-op when there's no parent
@@ -28,13 +28,11 @@ public static class Log
 
     /// <summary>
     /// The folder holding the rolled log files
-    /// (<c>%LOCALAPPDATA%\LlamaApp\logs</c>), exposed so the UI can offer an
+    /// (<c>%LOCALAPPDATA%\Llama\logs</c>), exposed so the UI can offer an
     /// "Open Folder" affordance. Computed — no initialization side effects,
     /// and valid even before the first write.
     /// </summary>
-    public static string LogDirectory => _logDir ?? Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "LlamaApp", "logs");
+    public static string LogDirectory => _logDir ?? Path.Combine(AppData.Root, "logs");
     private static string? _currentPath;
     private static string? _currentDate;
     private static StreamWriter? _writer;
@@ -70,9 +68,7 @@ public static class Log
         {
             if (level is { } l) Level = l;
 
-            _logDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "LlamaApp", "logs");
+            _logDir = Path.Combine(AppData.Root, "logs");
             Try(() => Directory.CreateDirectory(_logDir));
 
             if (enableConsole && _consoleWriter is null)
@@ -119,7 +115,7 @@ public static class Log
             }
 
             if (Debugger.IsAttached)
-                Debugger.Log(0, "LlamaApp", text);
+                Debugger.Log(0, "Llama", text);
         }
     }
 
@@ -170,7 +166,7 @@ public static class Log
 
         if (string.IsNullOrEmpty(_logDir)) return;
 
-        _currentPath = Path.Combine(_logDir, $"LlamaApp-{today}.log");
+        _currentPath = Path.Combine(_logDir, $"Llama-{today}.log");
         try
         {
             // Append + FileShare.ReadWrite so the file can be opened in a text
@@ -186,8 +182,11 @@ public static class Log
     {
         if (string.IsNullOrEmpty(_logDir) || !Directory.Exists(_logDir)) return;
         var cutoff = DateTime.Now.AddDays(-RetentionDays);
-        foreach (var f in Directory.EnumerateFiles(_logDir, "LlamaApp-*.log"))
-            Try(() => { if (File.GetLastWriteTime(f) < cutoff) File.Delete(f); });
+        // "LlamaApp-*.log" covers files written by pre-rename builds — the
+        // legacy data folder is migrated wholesale, old file names included.
+        foreach (var pattern in new[] { "Llama-*.log", "LlamaApp-*.log" })
+            foreach (var f in Directory.EnumerateFiles(_logDir, pattern))
+                Try(() => { if (File.GetLastWriteTime(f) < cutoff) File.Delete(f); });
     }
 
     /// <summary>

@@ -4,7 +4,7 @@ using LlamaApp.Common;
 namespace LlamaApp;
 
 /// <summary>
-/// Registers a system-wide hotkey while LlamaApp is running, mirroring the
+/// Registers a system-wide hotkey while Llama is running, mirroring the
 /// macOS spotlight/Raycast summon. Uses a tiny message-only Win32 window
 /// (created on the UI thread, whose message loop dispatches the resulting
 /// <c>WM_HOTKEY</c>) so we don't need to subclass any WinUI window's WndProc.

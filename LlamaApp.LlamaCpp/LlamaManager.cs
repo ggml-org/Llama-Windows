@@ -29,7 +29,7 @@ namespace LlamaApp.Llama;
 /// </para>
 ///
 /// <para>A server the app starts is <b>managed</b>: its PID is written to
-/// <c>%LOCALAPPDATA%\LlamaApp\.llama.pid</c> right after spawn, so that after
+/// <c>%LOCALAPPDATA%\Llama\.llama.pid</c> right after spawn, so that after
 /// an app crash the next instance still recognizes the surviving server as its
 /// own — and kills it on exit (<see cref="StopServer"/>). Servers started any
 /// other way (manually, whatever the binary) have no PID file and are left
@@ -723,15 +723,14 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Path of the PID file tracking the managed llama server:
-    /// <c>%LOCALAPPDATA%\LlamaApp\.llama.pid</c>. Written by
+    /// <c>%LOCALAPPDATA%\Llama\.llama.pid</c>. Written by
     /// <see cref="StartServerAsync"/> right after the server process is spawned;
     /// read back after an app crash/restart to recognize the surviving server
     /// as ours (managed) — and therefore safe to stop. Deleted when the managed
     /// server is stopped or found dead.
     /// </summary>
     private static string PidFilePath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LlamaApp", ".llama.pid");
+        Path.Combine(AppData.Root, ".llama.pid");
 
     /// <summary>Writes <paramref name="pid"/> to the PID file. Best-effort.</summary>
     private static void WritePidFile(int pid)
@@ -1910,7 +1909,7 @@ public sealed class LlamaManager
             using (var client = new HttpClient())
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
-                client.DefaultRequestHeaders.UserAgent.ParseAdd("LlamaApp/1.0");
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Llama/1.0");
                 using var resp = await client.GetAsync(InstallScriptUrl, cancel);
                 
                 resp.EnsureSuccessStatusCode();

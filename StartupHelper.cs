@@ -3,8 +3,8 @@ using System.IO;
 namespace LlamaApp;
 
 /// <summary>
-/// Manages the "Launch at startup" behavior for LlamaApp by creating/removing
-/// a <c>LlamaApp.lnk</c> shortcut in the user's per-user Startup folder
+/// Manages the "Launch at startup" behavior for Llama by creating/removing
+/// a <c>Llama.lnk</c> shortcut in the user's per-user Startup folder
 /// (<c>%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup</c>). This is the
 /// reliable, MSIX-free way to autostart an unpackaged WinUI 3 app: the shell
 /// runs everything in that folder on sign-in, and the user can see/toggle it
@@ -14,11 +14,15 @@ namespace LlamaApp;
 /// The shortcut is built via the <c>WScript.Shell</c> COM host (late-bound), so
 /// no extra NuGet reference is needed. <see cref="IsRegistered"/> is the
 /// authoritative source of truth for the Settings checkbox — the user may have
-/// disabled the entry from Task Manager without LlamaApp knowing.
+/// disabled the entry from Task Manager without Llama knowing.
 /// </remarks>
 public static class StartupHelper
 {
-    private const string ShortcutFileName = "LlamaApp.lnk";
+    private const string ShortcutFileName = "Llama.lnk";
+
+    // Pre-rename builds registered "LlamaApp.lnk". Kept so the rename doesn't
+    // leave a dead duplicate behind in the Startup folder / Task Manager.
+    private const string LegacyShortcutFileName = "LlamaApp.lnk";
 
     /// <summary>The full path of the startup shortcut we own.</summary>
     private static string ShortcutPath =>
@@ -26,15 +30,23 @@ public static class StartupHelper
             Environment.GetFolderPath(Environment.SpecialFolder.Startup),
             ShortcutFileName);
 
+    /// <summary>The full path of the pre-rename startup shortcut.</summary>
+    private static string LegacyShortcutPath =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Startup),
+            LegacyShortcutFileName);
+
     /// <summary>True if our startup shortcut currently exists on disk.</summary>
     public static bool IsRegistered() => File.Exists(ShortcutPath);
 
     /// <summary>
     /// Creates (or overwrites) the startup shortcut pointing at the running
-    /// executable, so LlamaApp launches on the next sign-in.
+    /// executable, so Llama launches on the next sign-in.
     /// </summary>
     public static void Register()
     {
+        RemoveLegacyShortcut();
+
         var exe = GetExecutablePath();
         if (string.IsNullOrEmpty(exe) || !File.Exists(exe))
             throw new InvalidOperationException(
@@ -53,7 +65,7 @@ public static class StartupHelper
                 shortcut.WorkingDirectory = Path.GetDirectoryName(exe) ?? "";
                 shortcut.WindowStyle = 1; // SW_SHOWNORMAL
                 shortcut.IconLocation = exe + ",0";
-                shortcut.Description = "Launch LlamaApp on sign-in";
+                shortcut.Description = "Launch Llama on sign-in";
                 shortcut.Save();
             }
             finally
@@ -71,6 +83,7 @@ public static class StartupHelper
     /// <summary>Removes the startup shortcut if present; no-op otherwise.</summary>
     public static void Unregister()
     {
+        RemoveLegacyShortcut();
         try
         {
             if (File.Exists(ShortcutPath))
@@ -81,6 +94,21 @@ public static class StartupHelper
             Common.Log.Warn(ex, "could not delete startup shortcut");
             throw;
         }
+    }
+
+    /// <summary>
+    /// Deletes the pre-rename <c>LlamaApp.lnk</c> startup shortcut, if present.
+    /// Best-effort; called once at startup and whenever the shortcut is
+    /// (re)created or removed.
+    /// </summary>
+    public static void RemoveLegacyShortcut()
+    {
+        try
+        {
+            if (File.Exists(LegacyShortcutPath))
+                File.Delete(LegacyShortcutPath);
+        }
+        catch { /* best-effort */ }
     }
 
     /// <summary>

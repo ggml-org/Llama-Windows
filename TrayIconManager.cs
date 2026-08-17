@@ -9,7 +9,7 @@ using Windows.UI.ViewManagement;
 namespace LlamaApp;
 
 /// <summary>
-/// Owns the system-tray (notification area) icon for LlamaApp.
+/// Owns the system-tray (notification area) icon for Llama.
 ///
 /// <para><b>Left-click</b> makes the <see cref="MainWindow"/> flyout visible —
 /// a borderless Mica panel pinned to the bottom-right of the screen (just above
@@ -81,9 +81,9 @@ internal sealed class TrayIconManager : IDisposable
         _lightTaskbarIcon = new Icon(Path.Combine(assetsDir, "llama.ico"));
         _darkTaskbarIcon = new Icon(Path.Combine(assetsDir, "llama-white.ico"));
 
-        _trayIcon = new TrayIcon("LlamaApp")
+        _trayIcon = new TrayIcon("Llama")
         {
-            ToolTip = "LlamaApp",
+            ToolTip = "Llama",
             Icon = TaskbarIconHandle,
         };
         _appliedIconHandle = _trayIcon.Icon;

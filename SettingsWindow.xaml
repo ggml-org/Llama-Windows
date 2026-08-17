@@ -165,7 +165,7 @@
                                         <TextBlock Text="Launch at startup"
                                                    FontSize="14"
                                                    FontWeight="SemiBold" />
-                                        <TextBlock Text="Start LlamaApp automatically when you sign in to Windows."
+                                        <TextBlock Text="Start Llama automatically when you sign in to Windows."
                                                    FontSize="12"
                                                    Opacity="0.6"
                                                    TextWrapping="WrapWholeWords" />
@@ -174,7 +174,7 @@
                                               Grid.Column="2"
                                               VerticalAlignment="Top"
                                               MinWidth="0"
-                                              ToolTipService.ToolTip="Run LlamaApp when Windows starts" />
+                                              ToolTipService.ToolTip="Run Llama when Windows starts" />
                                 </Grid>
                             </Border>
 
@@ -300,7 +300,7 @@
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock Text="Where LlamaApp writes its daily log files — include them when reporting a problem."
+                                    <TextBlock Text="Where Llama writes its daily log files — include them when reporting a problem."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
@@ -420,7 +420,7 @@
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock Text="Port the local llama server listens on (1–65535). Takes effect the next time LlamaApp starts."
+                                    <TextBlock Text="Port the local llama server listens on (1–65535). Takes effect the next time Llama starts."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />

@@ -24,7 +24,7 @@
   <mp:PhoneIdentity PhoneProductId="4e440e29-8151-4465-b20f-fb3acb283925" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
-    <DisplayName>LlamaApp</DisplayName>
+    <DisplayName>Llama</DisplayName>
     <PublisherDisplayName>Morgan Funtowicz</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -49,8 +49,8 @@
       Executable="$targetnametoken$.exe"
       EntryPoint="$targetentrypoint$">
       <uap:VisualElements
-        DisplayName="LlamaApp"
-        Description="LlamaApp"
+        DisplayName="Llama"
+        Description="Llama"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
