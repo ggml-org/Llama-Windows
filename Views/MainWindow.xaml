@@ -62,6 +62,34 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
+                    <!-- Navigation hit target: the row body (logo + name) opens
+                         the model details view; the action icons in column 2
+                         keep their own behavior. A real Button (not a Tapped
+                         handler) keeps keyboard focus + invoke, and it sits
+                         NEXT TO the action cell — no nested buttons. Its
+                         chrome is made transparent via resource overrides so
+                         the row's own hover fill stays the only hover paint. -->
+                    <Button Grid.Column="0" Grid.ColumnSpan="2"
+                            Click="LocalModelDetails_Click"
+                            Tag="{x:Bind}"
+                            Padding="0"
+                            MinWidth="0" MinHeight="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            AutomationProperties.Name="{x:Bind DisplayName}"
+                            AutomationProperties.HelpText="Open model details">
+                        <Button.Resources>
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                        </Button.Resources>
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
                     <!-- Logo tile with a "running" status badge pinned to its
                          bottom-right corner. -->
                     <Grid Grid.Column="0" Width="32" Height="32">
@@ -96,10 +124,32 @@
                     <StackPanel Grid.Column="1"
                                 VerticalAlignment="Center"
                                 Spacing="1">
-                        <TextBlock Text="{x:Bind DisplayName}"
-                                   FontSize="14"
-                                   FontWeight="SemiBold"
-                                   TextTrimming="CharacterEllipsis" />
+                        <!-- Clean name + quant chip inline (the params ride
+                             in the subtitle below). The name column is capped
+                             so a long name ellipsizes instead of pushing the
+                             chip out of view. -->
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" MaxWidth="190" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="{x:Bind RowDisplayName}"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                            <Border Grid.Column="1"
+                                    CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="4,1"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind HasQuant}">
+                                <TextBlock Text="{x:Bind Quant}"
+                                           FontSize="10"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Border>
+                        </Grid>
                         <StackPanel Orientation="Horizontal"
                                     Spacing="6"
                                     VerticalAlignment="Center">
@@ -138,6 +188,8 @@
                             </Border>
                         </StackPanel>
                     </StackPanel>
+                        </Grid>
+                    </Button>
 
                     <!-- Action cell: exactly one of play / download ring /
                          load ring / open glyph / failure affordance, driven by
@@ -425,27 +477,44 @@
                  The tooltip shows the full (possibly ellipsized) model name. -->
             <DataTemplate x:Key="RecommendedModelRowTemplate"
                           x:DataType="local:ModelItem">
-                <Button Padding="0"
-                        MinWidth="0" MinHeight="0"
-                        Background="Transparent"
-                        BorderThickness="0"
-                        CornerRadius="{ThemeResource ControlCornerRadius}"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Stretch"
-                        VerticalContentAlignment="Stretch"
-                        Click="RecommendedModel_Click"
-                        Tag="{x:Bind}"
-                        AutomationProperties.Name="{x:Bind DisplayName}"
-                        AutomationProperties.HelpText="Download this model"
-                        Opacity="{x:Bind RowOpacity, Mode=OneWay}"
-                        ToolTipService.ToolTip="{x:Bind RowToolTip, Mode=OneWay}">
+                <!-- Same split as the Available rows: the row body (logo +
+                     name) opens the details view, the download glyph is its
+                     own button. The one-tap download stays one tap — it just
+                     moved from "anywhere on the row" to the glyph. -->
                 <Grid Padding="8,6"
-                      ColumnSpacing="10">
+                      ColumnSpacing="10"
+                      CornerRadius="{ThemeResource ControlCornerRadius}"
+                      Background="Transparent"
+                      PointerEntered="Row_PointerEntered"
+                      PointerExited="Row_PointerExited"
+                      Opacity="{x:Bind RowOpacity, Mode=OneWay}"
+                      ToolTipService.ToolTip="{x:Bind RowToolTip, Mode=OneWay}">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
+
+                    <Button Grid.Column="0" Grid.ColumnSpan="2"
+                            Click="RecommendedModelDetails_Click"
+                            Tag="{x:Bind}"
+                            Padding="0"
+                            MinWidth="0" MinHeight="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            AutomationProperties.Name="{x:Bind DisplayName}"
+                            AutomationProperties.HelpText="Open model details">
+                        <Button.Resources>
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                        </Button.Resources>
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
                     <Border Grid.Column="0"
                             Width="32" Height="32"
@@ -459,10 +528,30 @@
                     <StackPanel Grid.Column="1"
                                 VerticalAlignment="Center"
                                 Spacing="1">
-                        <TextBlock Text="{x:Bind DisplayName}"
-                                   FontSize="13"
-                                   FontWeight="SemiBold"
-                                   TextTrimming="CharacterEllipsis" />
+                        <!-- Clean name + quant chip inline (same as the
+                             Available rows). -->
+                        <Grid ColumnSpacing="6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" MaxWidth="190" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="{x:Bind RowDisplayName}"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis"
+                                       VerticalAlignment="Center" />
+                            <Border Grid.Column="1"
+                                    CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="4,1"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind HasQuant}">
+                                <TextBlock Text="{x:Bind Quant}"
+                                           FontSize="10"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Border>
+                        </Grid>
                         <StackPanel Orientation="Horizontal" Spacing="4">
                             <!-- params · download size · license — the size is
                                  shown up front so a one-tap row never starts a
@@ -492,17 +581,29 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <!-- Right margin clears the ScrollViewer's overlay
-                         scrollbar (~12px expanded), which would otherwise
-                         cover the glyph when the list scrolls. -->
-                    <FontIcon Grid.Column="2"
-                              Glyph="&#xE896;"
-                              FontSize="16"
-                              Opacity="0.5"
-                              Margin="0,0,12,0"
-                              VerticalAlignment="Center" />
+                        </Grid>
+                    </Button>
+
+                    <!-- One-tap download. Right margin clears the
+                         ScrollViewer's overlay scrollbar (~12px expanded),
+                         which would otherwise cover the glyph when the list
+                         scrolls. -->
+                    <Button Grid.Column="2"
+                            Click="RecommendedModel_Click"
+                            Tag="{x:Bind}"
+                            Padding="6"
+                            MinWidth="0" MinHeight="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Margin="0,0,6,0"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="Download this model"
+                            ToolTipService.ToolTip="Download">
+                        <FontIcon Glyph="&#xE896;"
+                                  FontSize="16"
+                                  Opacity="0.5" />
+                    </Button>
                 </Grid>
-                </Button>
             </DataTemplate>
         </Grid.Resources>
 
@@ -614,7 +715,13 @@
             <Border.Shadow>
                 <ThemeShadow />
             </Border.Shadow>
-            <ScrollViewer VerticalScrollBarVisibility="Auto"
+            <!-- The card hosts two mutually exclusive panels: the models list
+                 and the model details view. MainWindow swaps their visibility
+                 (no window, no frame navigation — the tray flyout's compact
+                 chrome is preserved, and back/Esc return to the list). -->
+            <Grid>
+            <ScrollViewer x:Name="ModelsScrollViewer"
+                          VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Hidden"
                           HorizontalScrollMode="Disabled">
                 <StackPanel Spacing="8">
@@ -705,6 +812,11 @@
                     </ItemsRepeater>
                 </StackPanel>
             </ScrollViewer>
+
+            <local:ModelItemDetailsView x:Name="DetailsView"
+                                        Visibility="Collapsed"
+                                        BackRequested="DetailsView_BackRequested" />
+            </Grid>
         </Border>
 
         <Rectangle Grid.Row="3"

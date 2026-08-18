@@ -20,7 +20,7 @@ namespace LlamaApp.Views
     /// auto-hiding when it loses activation. This mirrors the macOS menu-bar
     /// app on Windows while hosting the three-section models panel.
     /// </summary>
-    public sealed partial class MainWindow : Window
+    public sealed partial class MainWindow : Window, IModelItemDetailsHost
     {
         // Flyout dimensions, in device-independent pixels (DIPs — the units XAML
         // layout uses). AppWindow sizes/positions are in PHYSICAL pixels, so these
@@ -480,7 +480,7 @@ namespace LlamaApp.Views
             try
             {
                 var devices = await LlamaManager.Shared.ListDevicesAsync();
-                var availableRam = SystemMemory.TryGet(out _, out var avail) ? (ulong?)avail : null;
+                var availableRam = LlamaApp.Llama.SystemMemory.TryGet(out _, out var avail) ? (ulong?)avail : null;
 
                 // Snapshot the rows: a catalog retry can repopulate the list
                 // mid-run — updating stale items is harmless, and the fresh
@@ -596,7 +596,18 @@ namespace LlamaApp.Views
             // walk — same approach as the Available-row play/open buttons.
             if (ResolveRowItem(fe) is not { } item)
                 return;
-            
+
+            StartRecommendedDownload(item, fe);
+        }
+
+        /// <summary>
+        /// The one-tap recommended download, shared by the row's download
+        /// glyph and the details view's Download action: disk-space preflight,
+        /// then the model moves Recommended → Available (downloading) and
+        /// <see cref="DownloadAndLaunchAsync"/> drives it.
+        /// </summary>
+        private async void StartRecommendedDownload(ModelItem item, FrameworkElement spaceFlyoutTarget)
+        {
             if (item.IsDownloading)
                 return; // already in flight (double-tap guard)
 
@@ -609,7 +620,7 @@ namespace LlamaApp.Views
             {
                 Log.Info($"download blocked: {((IModel)item).ServerModelId} needs " +
                     $"{item.SizeBytes} bytes, only {freeBytes} free");
-                ShowInsufficientSpaceFlyout(fe, item, freeBytes);
+                ShowInsufficientSpaceFlyout(spaceFlyoutTarget, item, freeBytes);
                 return;
             }
 
@@ -627,7 +638,7 @@ namespace LlamaApp.Views
                 {
                     Log.Info($"download blocked: {((IModel)item).ServerModelId} needs " +
                         $"{fit.RequiredBytes} bytes; {fit.Details}");
-                    ShowInsufficientMemoryFlyout(fe, item, fit);
+                    ShowInsufficientMemoryFlyout(spaceFlyoutTarget, item, fit);
                     return;
                 }
             }
@@ -1107,18 +1118,187 @@ namespace LlamaApp.Views
                 return;
             }
 
+            await DeleteModelFromServerAsync(item);
+        }
+
+        /// <summary>
+        /// The confirmed delete, shared by the row's flyout and the details
+        /// view: asks the server to remove the model and, on success, drops
+        /// the row immediately (the poller's next tick would drop it too, but
+        /// removing now avoids a stale row lingering for up to one poll
+        /// interval). Returns whether the model was deleted.
+        /// </summary>
+        private async Task<bool> DeleteModelFromServerAsync(ModelItem item)
+        {
             Log.Info("delete confirmed: removing " + ((IModel)item).ServerModelId);
             if (await LlamaManager.Shared.DeleteModelAsync(item))
             {
                 _localByServerId.Remove(((IModel)item).ServerModelId);
                 LocalModels.Remove(item);
                 UpdateEmptyState();
+                return true;
             }
-            else
-            {
-                Log.Warn("server rejected delete for " + ((IModel)item).ServerModelId);
-            }
+
+            Log.Warn("server rejected delete for " + ((IModel)item).ServerModelId);
+            return false;
         }
+
+        // ----- Model details view -----
+
+        /// <summary>The details ViewModel currently shown; null when the list is showing.</summary>
+        private ModelItemDetailsViewModel? _detailsViewModel;
+
+        /// <summary>Row body of an Available row: open the model details view.</summary>
+        private void LocalModelDetails_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is FrameworkElement fe && ResolveRowItem(fe) is { } item)
+                ShowDetails(item);
+        }
+
+        /// <summary>Row body of a Recommended row: open the model details view.</summary>
+        private void RecommendedModelDetails_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is FrameworkElement fe && ResolveRowItem(fe) is { } item)
+                ShowDetails(item);
+        }
+
+        /// <summary>
+        /// Swaps the models list for the details view of <paramref name="item"/>.
+        /// The ViewModel is created per show (cheap) and loads its lazy details
+        /// (the GGUF header read) after the view is already visible; the list's
+        /// scroll position is untouched, so Back returns exactly where the user
+        /// left. The context-length preference delegates wrap
+        /// <see cref="Settings.ModelContextLengths"/> — per-model, persisted.
+        /// </summary>
+        private void ShowDetails(ModelItem item)
+        {
+            DisposeDetails();
+            var vm = new ModelItemDetailsViewModel(
+                item,
+                host: this,
+                loadContextPreference: id =>
+                    Settings.Current.ModelContextLengths.TryGetValue(id, out var t) ? t : null,
+                saveContextPreference: (id, t) =>
+                {
+                    Settings.Current.ModelContextLengths[id] = t;
+                    Settings.Current.Save();
+                });
+            _detailsViewModel = vm;
+            DetailsView.SetViewModel(vm);
+            ModelsScrollViewer.Visibility = Visibility.Collapsed;
+            DetailsView.Visibility = Visibility.Visible;
+            _ = vm.InitializeAsync();
+        }
+
+        /// <summary>Back row in the details view: return to the models list.</summary>
+        private void DetailsView_BackRequested(object? sender, EventArgs e) => HideDetails();
+
+        /// <summary>Swaps the details view back for the models list.</summary>
+        private void HideDetails()
+        {
+            DisposeDetails();
+            DetailsView.Visibility = Visibility.Collapsed;
+            ModelsScrollViewer.Visibility = Visibility.Visible;
+        }
+
+        /// <summary>Cancels any in-flight details load and drops the ViewModel.</summary>
+        private void DisposeDetails()
+        {
+            _detailsViewModel?.Dispose();
+            _detailsViewModel = null;
+        }
+
+        // ----- IModelItemDetailsHost: the details view drives the shell's workflows -----
+
+        int IModelItemDetailsHost.ServerPort => LlamaManager.Shared.ServerPort;
+
+        /// <summary>The play-glyph path, reused unchanged by the details Chat action.</summary>
+        Task IModelItemDetailsHost.LoadModelAsync(ModelItem model)
+        {
+            if (model.IsLoading || model.IsLoaded || model.IsDownloading)
+                return Task.CompletedTask;
+            Log.Info("details: loading " + ((IModel)model).ServerModelId);
+            model.LoadFailed = false;
+            model.IsLoading = true;
+            return LoadAndWatchAsync(model);
+        }
+
+        /// <summary>
+        /// The recommended-row path, reused: same disk preflight, same move to
+        /// the Available section. When the download starts the details view
+        /// closes so the user watches the download ring in the list.
+        /// </summary>
+        Task IModelItemDetailsHost.DownloadAsync(ModelItem model)
+        {
+            StartRecommendedDownload(model, DetailsView);
+            if (model.IsDownloading)
+                HideDetails();
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Confirms with the same flyout UX as the row's trash glyph (a modal
+        /// dialog could be stranded by the flyout's hide-on-deactivate), then
+        /// deletes via the shared path and closes the details view.
+        /// </summary>
+        async Task<bool> IModelItemDetailsHost.DeleteAsync(ModelItem model)
+        {
+            if (model.IsLoaded || model.IsLoading || model.IsDownloading)
+                return false;
+
+            var confirmed = new TaskCompletionSource<bool>();
+            var deleteButton = new Button
+            {
+                Content = "Delete",
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                    Windows.UI.Color.FromArgb(255, 248, 81, 73)),
+                HorizontalAlignment = HorizontalAlignment.Right,
+            };
+            var flyout = new Flyout
+            {
+                Content = new StackPanel
+                {
+                    Spacing = 10,
+                    MaxWidth = 240,
+                    Children =
+                    {
+                        new TextBlock { Text = "Delete this model?", FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
+                        new TextBlock
+                        {
+                            Text = "The downloaded files are removed from disk. You can download the model again at any time.",
+                            FontSize = 12,
+                            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                            TextWrapping = TextWrapping.Wrap,
+                        },
+                        deleteButton,
+                    },
+                },
+            };
+            deleteButton.Click += (_, _) => { flyout.Hide(); confirmed.TrySetResult(true); };
+            flyout.Closed += (_, _) => confirmed.TrySetResult(false); // light-dismiss = cancel
+            flyout.ShowAt(DetailsView);
+
+            if (!await confirmed.Task) return false;
+            var deleted = await DeleteModelFromServerAsync(model);
+            if (deleted) HideDetails();
+            return deleted;
+        }
+
+        void IModelItemDetailsHost.CopyText(string text)
+        {
+            var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            package.SetText(text);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+            Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
+        }
+
+        async void IModelItemDetailsHost.OpenUri(string uri)
+        {
+            try { await Windows.System.Launcher.LaunchUriAsync(new Uri(uri)); }
+            catch (Exception ex) { Log.Warn(ex, "open uri failed: " + uri); }
+        }
+
+        void IModelItemDetailsHost.CloseDetails() => HideDetails();
 
         /// <summary>
         /// Opens the running llama server's WebUI in the system browser for the
@@ -1271,10 +1451,16 @@ namespace LlamaApp.Views
                 item.LoadFraction = f;
             });
 
+            // The per-model context preference (chosen in the details view)
+            // rides along as ctx_size; servers that predate the field ignore
+            // the extra JSON member.
+            var contextLength = Settings.Current.ModelContextLengths.TryGetValue(
+                ((IModel)item).ServerModelId, out var t) ? t : (int?)null;
+
             bool ok;
             try
             {
-                ok = await mgr.LoadModelAsync(item, progress);
+                ok = await mgr.LoadModelAsync(item, progress, contextLength);
             }
             catch (Exception ex)
             {
@@ -1961,7 +2147,12 @@ namespace LlamaApp.Views
             Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
         {
             args.Handled = true;
-            HideFlyout();
+            // With the details view open, Esc steps back to the models list
+            // instead of dismissing the whole flyout.
+            if (DetailsView.Visibility == Visibility.Visible)
+                HideDetails();
+            else
+                HideFlyout();
         }
 
         /// <summary>Whether the flyout is currently visible on screen.</summary>

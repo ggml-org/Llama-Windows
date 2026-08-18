@@ -57,6 +57,53 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public string DisplayName => Name.Split('/', StringSplitOptions.RemoveEmptyEntries).Last().Trim();
 
     /// <summary>
+    /// <see cref="DisplayName"/> without the tag-carried parts: the trailing
+    /// "(quant)" suffix and the standalone parameter-count token. Rows (and
+    /// the details header) show this clean name — the quant rides in the
+    /// chip next to it, the params in the subtitle/chip — so multi-quant
+    /// repos stay distinguishable without stuffing everything into the name.
+    /// </summary>
+    public string RowDisplayName
+    {
+        get
+        {
+            var name = DisplayName;
+            if (!string.IsNullOrEmpty(Quant) &&
+                name.EndsWith("(" + Quant + ")", StringComparison.OrdinalIgnoreCase))
+            {
+                name = name[..^(Quant.Length + 2)].TrimEnd();
+            }
+            if (!string.IsNullOrWhiteSpace(Parameters))
+            {
+                // The params phrase is stripped only at a space boundary
+                // ("Gemma 3 1B" → "Gemma 3", "Ministral 3 3B Reasoning" →
+                // "Ministral 3"); inside a hyphenated slug
+                // ("Ministral-3-3B-Reasoning") it is part of the name and stays.
+                var idx = name.IndexOf(Parameters, StringComparison.OrdinalIgnoreCase);
+                while (idx >= 0)
+                {
+                    var startOk = idx == 0 || name[idx - 1] == ' ';
+                    var end = idx + Parameters.Length;
+                    var endOk = end == name.Length || name[end] == ' ';
+                    if (startOk && endOk)
+                    {
+                        var stripped = string.Join(' ',
+                            name.Remove(idx, Parameters.Length)
+                                .Split(' ', StringSplitOptions.RemoveEmptyEntries));
+                        if (stripped.Length > 0) name = stripped;
+                        break;
+                    }
+                    idx = name.IndexOf(Parameters, idx + 1, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            return name;
+        }
+    }
+
+    /// <summary>True when a quant label exists — drives the row's quant chip.</summary>
+    public bool HasQuant => !string.IsNullOrWhiteSpace(Quant);
+
+    /// <summary>
     /// The row's tooltip: the full (possibly ellipsized) name, the catalog's
     /// one-line <see cref="Description"/> on a second line when known — so
     /// you can tell what a model is before downloading it — and the

@@ -1281,12 +1281,17 @@ public sealed class LlamaManager
     /// model reaches a terminal state, reporting each event's fraction. When
     /// <c>null</c>, the method is fire-and-forget: it returns as soon as the
     /// load request is accepted.</param>
+    /// <param name="contextLengthTokens">Optional context size (<c>ctx_size</c>)
+    /// for the spawned model process — the per-model preference chosen in the
+    /// model details view. <c>null</c> lets the server use its own default. Unknown
+    /// JSON fields are ignored by the server's body parser, so an older llama.cpp
+    /// that predates per-model load options simply loads with its default.</param>
     /// <param name="cancel">Cancellation token.</param>
     /// <returns><c>false</c> only when the load definitely didn't happen — the
     /// POST was rejected, or the server rolled the model back to <c>unloaded</c>
     /// (a failed load). <c>true</c> means accepted; the <see cref="ModelsChanged"/>
     /// poller confirms the final <c>loaded</c> transition.</returns>
-    public async Task<bool> LoadModelAsync(IModel model, IProgress<double>? progress = null, CancellationToken cancel = default)
+    public async Task<bool> LoadModelAsync(IModel model, IProgress<double>? progress = null, int? contextLengthTokens = null, CancellationToken cancel = default)
     {
         if (ServerStatus != ServerState.Running)
             return false;
@@ -1303,8 +1308,11 @@ public sealed class LlamaManager
 
         try
         {
-            Log.Info($"loading model {modelId}");
-            var payload = $$"""{"model":"{{modelId}}"}""";
+            Log.Info($"loading model {modelId}" +
+                (contextLengthTokens is { } ctx ? $" (ctx_size={ctx})" : ""));
+            var payload = contextLengthTokens is { } ctxSize
+                ? $$"""{"model":"{{modelId}}","ctx_size":{{ctxSize}}}"""
+                : $$"""{"model":"{{modelId}}"}""";
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
             using var resp = await _http.PostAsync("/models/load", content, budget.Token);
@@ -1566,6 +1574,14 @@ public sealed class LlamaManager
 
     /// <summary>Latest known loaded model id, or <c>null</c> when none is loaded.</summary>
     public string? LoadedModelId => (from m in _lastModelsSnapshot where m.IsLoaded select m.Id).FirstOrDefault();
+
+    /// <summary>
+    /// The most recent <c>GET /models</c> snapshot (refreshed by the 1s poller
+    /// while the server runs). Lets detail views read per-model metadata (e.g.
+    /// the on-disk <see cref="ServerModel.Path"/>) without an extra HTTP round
+    /// trip; may be empty or one poll cycle stale.
+    /// </summary>
+    public IReadOnlyList<ServerModel> LastModelsSnapshot => _lastModelsSnapshot;
 
     /// <summary>
     /// Streams an OpenAI-compatible chat completion for <paramref name="userMessage"/>

@@ -83,6 +83,15 @@ public sealed class Settings
     /// </summary>
     public bool TrayHintShown { get; set; } = false;
 
+    /// <summary>
+    /// Per-model context-length preferences chosen in the model details view,
+    /// keyed by the server model id (<c>repo:quant</c>) — context length is a
+    /// per-model choice, not a global one (a 1B model and a 70B model want very
+    /// different defaults). Applied as <c>ctx_size</c> on the next
+    /// <c>/models/load</c> (see <see cref="Llama.LlamaManager.LoadModelAsync"/>).
+    /// </summary>
+    public Dictionary<string, int> ModelContextLengths { get; set; } = new();
+
     private static Settings Load()
     {
         try
