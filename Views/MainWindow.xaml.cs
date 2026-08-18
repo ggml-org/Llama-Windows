@@ -584,8 +584,10 @@ namespace LlamaApp.Views
             // server to abort the download when the token fires.
             using var cts = new CancellationTokenSource();
             item.DownloadCancellation = cts;
-            // Reset any stale detail from a previous (failed) attempt — the
-            // subtitle shows the live detail line as soon as a size is known.
+            // Reset any stale detail from a previous (failed or paused) attempt
+            // — the subtitle shows the live detail line as soon as a size is
+            // known. Fresh SSE progress events repopulate the byte counts.
+            item.DownloadPaused = false;
             item.DownloadedBytes = 0;
             item.DownloadTotalBytes = 0;
             item.DownloadBytesPerSecond = 0;
@@ -647,6 +649,9 @@ namespace LlamaApp.Views
                 void Complete()
                 {
                     item.IsDownloading = false;
+                    // A pause click that raced the completion is discarded —
+                    // the download is over, there is nothing left to resume.
+                    item.DownloadPaused = false;
                     if (ok)
                     {
                         // Download done — load it. The row now shows the
@@ -670,10 +675,12 @@ namespace LlamaApp.Views
             }
             catch (OperationCanceledException)
             {
-                // User canceled from the row's cancel button — the server has
-                // already been asked to abort (see DownloadModelAsync). Return
-                // the row to the play glyph; a partial download resumes on the
-                // next attempt.
+                // User canceled from the row's cancel button, or paused by
+                // clicking the ring — the server has already been asked to
+                // abort (see DownloadModelAsync). A cancel returns the row to
+                // the play glyph; a pause (DownloadPaused set by the click)
+                // lands it on the resume glyph instead. Either way the partial
+                // bytes stay in the cache and resume on the next attempt.
                 if (queue is null || queue.HasThreadAccess)
                     item.IsDownloading = false;
                 else
@@ -684,6 +691,7 @@ namespace LlamaApp.Views
                 void Fail()
                 {
                     item.IsDownloading = false;
+                    item.DownloadPaused = false;
                     item.DownloadFailed = true;
                     NotifyWhenHidden("Download failed",
                         DownloadFailureToastBody(item, serverMessage));
@@ -784,6 +792,8 @@ namespace LlamaApp.Views
         /// cancels the in-flight download. The server is asked to abort too
         /// (see <see cref="LlamaManager.DownloadModelAsync"/>); the row returns
         /// to the play glyph and a partial download resumes on the next attempt.
+        /// While paused the button abandons the partial instead — the server
+        /// side is already stopped, so there's nothing to cancel.
         /// </summary>
         private void LocalModelCancelDownload_Click(object sender, RoutedEventArgs e)
         {
@@ -793,9 +803,70 @@ namespace LlamaApp.Views
                 return;
             }
 
+            if (item.DownloadPaused)
+            {
+                // Paused: the server-side download already stopped when the
+                // pause was requested — just abandon the partial and return
+                // the row to the play glyph.
+                Log.Info("cancel clicked: abandoning paused download of " + ((IModel)item).ServerModelId);
+                item.DownloadPaused = false;
+                item.DownloadFraction = 0;
+                item.DownloadedBytes = 0;
+                item.DownloadTotalBytes = 0;
+                item.DownloadBytesPerSecond = 0;
+                return;
+            }
+
             Log.Info("cancel clicked: cancelling download of " + ((IModel)item).ServerModelId);
             try { item.DownloadCancellation?.Cancel(); }
             catch (ObjectDisposedException) { /* download finished between check and click */ }
+        }
+
+        /// <summary>
+        /// Fired when the download progress ring is tapped: pauses the
+        /// download. Pause reuses the cancel path — the cancellation unwinds
+        /// <see cref="DownloadAndLaunchAsync"/> and asks the server to abort —
+        /// but with <see cref="ModelItem.DownloadPaused"/> set first, so the
+        /// row lands on the resume glyph instead of the play glyph. The
+        /// partial bytes stay in the cache; resuming continues where it left
+        /// off. No-op for externally-triggered downloads (the ring's button is
+        /// disabled then — see <see cref="ModelItem.CanPauseDownload"/>).
+        /// </summary>
+        private void LocalModelPauseDownload_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
+            {
+                Log.Warn("could not resolve a ModelItem");
+                return;
+            }
+            if (!item.IsDownloading || item.DownloadCancellation is null)
+                return;
+
+            Log.Info("pause clicked: pausing download of " + ((IModel)item).ServerModelId);
+            item.DownloadPaused = true;
+            try { item.DownloadCancellation.Cancel(); }
+            catch (ObjectDisposedException) { /* download finished between check and click */ }
+        }
+
+        /// <summary>
+        /// Fired when the resume glyph on a paused row is tapped: restarts the
+        /// download → load lifecycle. The server resumes the transfer from the
+        /// partial bytes left in the cache by the pause's abort.
+        /// </summary>
+        private void LocalModelResumeDownload_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
+            {
+                Log.Warn("could not resolve a ModelItem");
+                return;
+            }
+            if (!item.DownloadPaused || item.IsDownloading)
+                return;
+
+            Log.Info("resume clicked: resuming download of " + ((IModel)item).ServerModelId);
+            item.DownloadPaused = false;
+            item.IsDownloading = true;
+            _ = DownloadAndLaunchAsync(item);
         }
 
         /// <summary>
