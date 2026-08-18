@@ -964,6 +964,73 @@ public sealed class LlamaManager
         }
     }
 
+    // ---- Device probing / model fit ----
+
+    /// <summary>Cached device probe result + timestamp (see <see cref="ListDevicesAsync"/>).</summary>
+    private (DateTime At, IReadOnlyList<LlamaDevice> Devices) _devicesCache;
+
+    /// <summary>
+    /// Probes the compute devices available to llama.cpp by running
+    /// <c>llama cli --list-devices</c> (see <see cref="DeviceQuery"/>). An
+    /// empty list means no accelerator devices — callers fall back to system
+    /// CPU/RAM (<see cref="SystemMemory"/>) for fit decisions. The result is
+    /// cached for a short window: the probe spawns a process, preflight
+    /// checks can come in bursts, and free-VRAM numbers don't need to be
+    /// fresher than a minute. A failed probe returns an empty list — it
+    /// must never throw or block (fail-open convention).
+    /// </summary>
+    public async Task<IReadOnlyList<LlamaDevice>> ListDevicesAsync(CancellationToken cancel = default)
+    {
+        const double CacheTtlSeconds = 60;
+
+        var cache = _devicesCache;
+        if (cache.Devices is not null &&
+            (DateTime.UtcNow - cache.At).TotalSeconds < CacheTtlSeconds)
+            return cache.Devices;
+
+        var binary = BinaryPath;
+        if (binary is null || !File.Exists(binary))
+            binary = FindOnPath("llama.exe");
+        if (binary is null)
+        {
+            Log.Debug("list-devices skipped: no llama binary resolved yet");
+            return [];
+        }
+
+        var devices = await DeviceQuery.ListDevicesAsync(binary, cancel);
+        _devicesCache = (DateTime.UtcNow, devices);
+        Log.Info(devices.Count == 0
+            ? "list-devices: no accelerator devices (CPU/RAM fallback)"
+            : $"list-devices: {string.Join(", ", devices.Select(d => $"{d.Id} '{d.Name}' {d.FreeBytes / (1 << 20)} MiB free"))}");
+        return devices;
+    }
+
+    /// <summary>
+    /// Decides whether a model can run on this machine BEFORE it is
+    /// downloaded or loaded — from the catalog metadata (parameter count,
+    /// quant, GGUF file size) against a live device probe
+    /// (<see cref="ListDevicesAsync"/>) and system RAM
+    /// (<see cref="SystemMemory"/>). See <see cref="MemoryFit"/> for the
+    /// decision rules. Never throws; unknown inputs fail open.
+    /// </summary>
+    /// <param name="parameterCount">Catalog params label, e.g. <c>"20B"</c>,
+    /// <c>"26B-A4B"</c>, <c>"E4B"</c> — empty/null when unknown.</param>
+    /// <param name="quant">Quant label, e.g. <c>"Q4_K_M"</c>, <c>"mxfp4"</c>.</param>
+    /// <param name="fileSizeBytes">GGUF size in bytes (0 when unknown) — the
+    /// best weight-size signal when present.</param>
+    public async Task<MemoryFitResult> CheckModelFitAsync(
+        string? parameterCount, string? quant, ulong fileSizeBytes,
+        CancellationToken cancel = default)
+    {
+        var devices = await ListDevicesAsync(cancel);
+        ulong? availableRam = SystemMemory.TryGet(out _, out var avail) ? avail : null;
+        var estimate = ModelMemoryEstimator.Estimate(parameterCount, quant, fileSizeBytes);
+        var result = MemoryFit.Check(estimate, devices, availableRam);
+        Log.Info($"fit check: params={parameterCount ?? "<none>"} quant={quant ?? "<none>"} " +
+            $"file={fileSizeBytes}B → fits={result.Fits} target={result.Target} ({result.Details})");
+        return result;
+    }
+
     // ---- Model download ----
 
     /// <summary>

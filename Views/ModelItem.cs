@@ -57,13 +57,26 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public string DisplayName => Name.Split('/', StringSplitOptions.RemoveEmptyEntries).Last().Trim();
 
     /// <summary>
-    /// The row's tooltip: the full (possibly ellipsized) name, plus the
-    /// catalog's one-line <see cref="Description"/> on a second line when
-    /// known — so you can tell what a model is before downloading it.
+    /// The row's tooltip: the full (possibly ellipsized) name, the catalog's
+    /// one-line <see cref="Description"/> on a second line when known — so
+    /// you can tell what a model is before downloading it — and the
+    /// <see cref="FitNote"/> on a last line when the fit evaluation flagged
+    /// the row as too big for this machine. Notifies (via
+    /// <see cref="FitsOnDevice"/>/<see cref="FitNote"/>) because the fit
+    /// evaluation lands after the rows are rendered.
     /// </summary>
-    public string RowToolTip => string.IsNullOrWhiteSpace(Description)
-        ? Name
-        : $"{Name}\n{Description}";
+    public string RowToolTip
+    {
+        get
+        {
+            var head = string.IsNullOrWhiteSpace(Description)
+                ? Name
+                : $"{Name}\n{Description}";
+            return string.IsNullOrWhiteSpace(FitNote)
+                ? head
+                : $"{head}\n{FitNote}";
+        }
+    }
 
     public string Parameters { get; set; } = "";
     public string Size { get; set; } = "";
@@ -78,6 +91,58 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
 
     /// <summary>Quantization label, e.g. "Q4_0", "mxfp4" (used for ServerModelId).</summary>
     public string? Quant { get; set; } = null;
+
+    // ---- Device-fit state (dims Recommended rows the machine can't run) ----
+
+    private bool _fitsOnDevice = true;
+    private string? _fitNote;
+
+    /// <summary>
+    /// Whether this machine can run the model — set by the fit evaluation
+    /// (MainWindow.EvaluateRecommendedFitsAsync) from the
+    /// <c>llama --list-devices</c> probe plus system RAM, after the rows are
+    /// rendered. Defaults to <c>true</c>: an unknown machine size must never
+    /// dim a row (fail open, same as the download preflight). A
+    /// <c>false</c> row renders dimmed (<see cref="RowOpacity"/>) but stays
+    /// clickable — the preflight still has the final say on click.
+    /// </summary>
+    public bool FitsOnDevice
+    {
+        get => _fitsOnDevice;
+        set
+        {
+            if (_fitsOnDevice == value) return;
+
+            _fitsOnDevice = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(RowOpacity));
+            OnPropertyChanged(nameof(RowToolTip));
+        }
+    }
+
+    /// <summary>
+    /// Short reason the model doesn't fit (e.g. "May not fit: needs about
+    /// 14.2 GB…"), surfaced as the tooltip's last line; <c>null</c> while it
+    /// fits or the evaluation hasn't run.
+    /// </summary>
+    public string? FitNote
+    {
+        get => _fitNote;
+        set
+        {
+            if (_fitNote == value) return;
+
+            _fitNote = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(RowToolTip));
+        }
+    }
+
+    /// <summary>
+    /// Row opacity: a Recommended row the fit evaluation says the machine
+    /// can't run renders dimmed instead of full-strength.
+    /// </summary>
+    public double RowOpacity => FitsOnDevice ? 1.0 : 0.4;
     /// <summary>
     /// The resolved brand logo (theme-dependent — see <see cref="ResolveLogo"/>).
     /// Notifies so the shell can re-resolve logos on a theme change.

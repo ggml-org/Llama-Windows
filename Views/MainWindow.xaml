@@ -437,7 +437,8 @@
                         Tag="{x:Bind}"
                         AutomationProperties.Name="{x:Bind DisplayName}"
                         AutomationProperties.HelpText="Download this model"
-                        ToolTipService.ToolTip="{x:Bind RowToolTip}">
+                        Opacity="{x:Bind RowOpacity, Mode=OneWay}"
+                        ToolTipService.ToolTip="{x:Bind RowToolTip, Mode=OneWay}">
                 <Grid Padding="8,6"
                       ColumnSpacing="10">
                     <Grid.ColumnDefinitions>

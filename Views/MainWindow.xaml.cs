@@ -121,6 +121,15 @@ namespace LlamaApp.Views
         // property change, not just status transitions).
         private LlamaManager.ServerState _lastServerStatus;
 
+        /// <summary>
+        /// Last-seen <see cref="LlamaManager.BinaryPath"/> — the Recommended
+        /// fit evaluation needs the binary for its device probe, so a
+        /// catalog that landed before the binary was resolved/installed saw
+        /// no devices; the rows are re-evaluated once one appears (see
+        /// <c>OnStateChanged</c>).
+        /// </summary>
+        private string? _lastBinaryPath;
+
         // Delete-confirmation context: the trash button's attached Flyout opens
         // automatically on click; LocalModelDelete_Click captures the row's model
         // and the flyout here so the flyout's Delete button (which carries no
@@ -437,6 +446,96 @@ namespace LlamaApp.Views
             RecommendedStatusPanel.Visibility = Visibility.Collapsed;
             RetryCatalogButton.Visibility = Visibility.Collapsed;
             RecommendedModelsList.Visibility = Visibility.Visible;
+
+            // Dim the rows the machine can't run — probe the devices once
+            // (`llama --list-devices`, CPU/RAM fallback) and check every
+            // row's estimated footprint against them. Fire-and-forget: the
+            // probe spawns a process and the list should render instantly;
+            // rows update in place once the verdicts land.
+            _ = EvaluateRecommendedFitsAsync();
+        }
+
+        /// <summary>
+        /// Single-flight guard for <see cref="EvaluateRecommendedFitsAsync"/>
+        /// — catalog retry and the binary-appearance re-evaluation can race.
+        /// </summary>
+        private bool _fitEvaluationRunning;
+
+        /// <summary>
+        /// Dims the Recommended rows whose estimated memory footprint doesn't
+        /// fit this machine — and sinks them below the fitting rows, so the
+        /// top of the list is always what this machine can run. Probes the
+        /// accelerator devices once via
+        /// <see cref="LlamaManager.ListDevicesAsync"/> (system RAM when none)
+        /// and runs each row's catalog metadata (params/quant/size) through
+        /// <see cref="ModelMemoryEstimator"/> + <see cref="MemoryFit"/> — the
+        /// same math the download preflight uses, so a dimmed row and a
+        /// blocked download always agree. Unknown estimates leave the row at
+        /// full strength (fail open).
+        /// </summary>
+        private async Task EvaluateRecommendedFitsAsync()
+        {
+            if (_fitEvaluationRunning) return;
+            _fitEvaluationRunning = true;
+            try
+            {
+                var devices = await LlamaManager.Shared.ListDevicesAsync();
+                var availableRam = SystemMemory.TryGet(out _, out var avail) ? (ulong?)avail : null;
+
+                // Snapshot the rows: a catalog retry can repopulate the list
+                // mid-run — updating stale items is harmless, and the fresh
+                // pass covers the new ones.
+                var rows = RecommendedModels.ToList();
+                foreach (var item in rows)
+                {
+                    var estimate = ModelMemoryEstimator.Estimate(
+                        item.Parameters, item.Quant, item.SizeBytes);
+                    var fit = MemoryFit.Check(estimate, devices, availableRam);
+                    // Note first, then the flag: the RowToolTip notification
+                    // from FitsOnDevice already carries the reason.
+                    item.FitNote = fit.Fits ? null : DescribeFitFailure(fit);
+                    item.FitsOnDevice = fit.Fits;
+                }
+
+                // Models the machine can run at the top, rows that don't fit
+                // sink below them (still rendered, still dimmed — the
+                // catalog's order is preserved within each half). Guarded
+                // against the stale-snapshot race: if a retry repopulated the
+                // list mid-run, its own pass owns the ordering.
+                if (RecommendedModels.Count == rows.Count &&
+                    rows.All(RecommendedModels.Contains))
+                {
+                    RecommendedFiltering.ApplyOrder(
+                        RecommendedModels,
+                        RecommendedFiltering.PartitionFitFirst(rows, r => r.FitsOnDevice));
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Fit graying is a hint — a failed probe just leaves every
+                // row at full strength (the download preflight still guards).
+                Log.Warn(ex, "recommended-row fit evaluation failed");
+            }
+            finally
+            {
+                _fitEvaluationRunning = false;
+            }
+        }
+
+        /// <summary>
+        /// The dimmed row's tooltip line: what the model needs versus what
+        /// the machine has. Wording mirrors
+        /// <see cref="ShowInsufficientMemoryFlyout"/> so the dimmed hint and
+        /// the click-time flyout tell the same story.
+        /// </summary>
+        private static string DescribeFitFailure(MemoryFitResult fit)
+        {
+            var required = MemoryFit.FormatBytes(fit.RequiredBytes);
+            return fit.Devices.Count > 0
+                ? $"May not fit: needs about {required}, more than the free memory on " +
+                  $"{DescribeDevices(fit.Devices)} and the usable system memory."
+                : $"May not fit: needs about {required}, but only " +
+                  $"{MemoryFit.FormatBytes(fit.AvailableBytes)} of system memory is usable.";
         }
 
         /// <summary>
@@ -486,7 +585,7 @@ namespace LlamaApp.Views
         /// <see cref="LoadAndWatchAsync"/>) when the download completes — the
         /// row transitions download ring -> load ring -> OpenInNewWindow glyph.
         /// </summary>
-        private void RecommendedModel_Click(object sender, RoutedEventArgs e)
+        private async void RecommendedModel_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not FrameworkElement fe)
                 return;
@@ -512,6 +611,29 @@ namespace LlamaApp.Views
                     $"{item.SizeBytes} bytes, only {freeBytes} free");
                 ShowInsufficientSpaceFlyout(fe, item, freeBytes);
                 return;
+            }
+
+            // Memory preflight: query `llama --list-devices` for the free
+            // VRAM (falling back to system RAM when there are no devices)
+            // and estimate the model's footprint from its params/quant/size.
+            // Block a multi-GB download the machine can't run — unless the
+            // probe or the estimate came back unknown (fail open, same as
+            // the disk check above).
+            try
+            {
+                var fit = await LlamaManager.Shared.CheckModelFitAsync(
+                    item.Parameters, item.Quant, item.SizeBytes);
+                if (!fit.Fits)
+                {
+                    Log.Info($"download blocked: {((IModel)item).ServerModelId} needs " +
+                        $"{fit.RequiredBytes} bytes; {fit.Details}");
+                    ShowInsufficientMemoryFlyout(fe, item, fit);
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.Warn(ex, "memory preflight failed; allowing the download");
             }
 
             // Move the model from Recommended → Available (downloading).
@@ -566,6 +688,59 @@ namespace LlamaApp.Views
             };
             flyout.ShowAt(target);
         }
+
+        /// <summary>
+        /// Shows a light-dismiss flyout on the tapped Recommended row when the
+        /// memory preflight blocks a download (the model wouldn't fit in the
+        /// free VRAM or system RAM). Same flyout-not-dialog rationale as
+        /// <see cref="ShowInsufficientSpaceFlyout"/>.
+        /// </summary>
+        private static void ShowInsufficientMemoryFlyout(FrameworkElement target, ModelItem item, MemoryFitResult fit)
+        {
+            var requiredText = MemoryFit.FormatBytes(fit.RequiredBytes);
+
+            var body = fit.Devices.Count > 0
+                ? $"{item.DisplayName} needs about {requiredText}, but the free memory on " +
+                  $"{DescribeDevices(fit.Devices)} isn't enough (and neither is the free " +
+                  "system memory). Try a smaller model or quant."
+                : $"{item.DisplayName} needs about {requiredText}, but only " +
+                  $"{MemoryFit.FormatBytes(fit.AvailableBytes)} of system memory is usable. " +
+                  "Try a smaller model or quant.";
+
+            var flyout = new Flyout
+            {
+                Content = new StackPanel
+                {
+                    Spacing = 6,
+                    MaxWidth = 260,
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "Not enough memory",
+                            FontSize = 13,
+                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        },
+                        new TextBlock
+                        {
+                            Text = body,
+                            FontSize = 12,
+                            Opacity = 0.7,
+                            TextWrapping = TextWrapping.Wrap,
+                        },
+                    },
+                },
+            };
+            flyout.ShowAt(target);
+        }
+
+        /// <summary>
+        /// Describes the probed devices for the memory flyout, e.g.
+        /// "NVIDIA GeForce RTX 4060 Ti (14.1 GB free)" or the joined list for
+        /// multi-GPU machines.
+        /// </summary>
+        private static string DescribeDevices(IReadOnlyList<LlamaDevice> devices) =>
+            string.Join(", ", devices.Select(d => $"{d.Name} ({MemoryFit.FormatBytes(d.FreeBytes)} free)"));
 
         /// <summary>
         /// Drives a single model's download → load lifecycle. Reports
@@ -1239,6 +1414,16 @@ namespace LlamaApp.Views
             {
                 LoadVersionInfo();
                 UpdateServerStatusUI();
+
+                // A binary just appeared (resolved after startup or freshly
+                // installed): the first fit evaluation may have run without
+                // one and judged every row against CPU/RAM only — re-dim
+                // with the real device probe.
+                var binaryPath = LlamaManager.Shared.BinaryPath;
+                if (binaryPath is not null && _lastBinaryPath is null &&
+                    RecommendedModels.Count > 0)
+                    _ = EvaluateRecommendedFitsAsync();
+                _lastBinaryPath = binaryPath;
 
                 // A crash used to surface only as the footer's 8px dot colour
                 // — toast the reason (LlamaManager.FailureMessage) once per
