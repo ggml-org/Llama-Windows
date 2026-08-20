@@ -102,10 +102,15 @@
                                  and make the cell look like it grows on
                                  hover). The selection ring is a hit-test-
                                  transparent overlay sibling. -->
+                            <!-- Tooltip is the size name, or the fit note when
+                                 none of the size's builds fits this machine —
+                                 the cell dims to match (fit verdicts land after
+                                 render, so both bindings are OneWay). -->
                             <Grid Margin="0,0,4,0"
-                                  ToolTipService.ToolTip="{x:Bind FullName}">
+                                  ToolTipService.ToolTip="{x:Bind CellTooltip, Mode=OneWay}">
                                 <Button Click="SizeOption_Click"
                                         Tag="{x:Bind}"
+                                        Opacity="{x:Bind CellOpacity, Mode=OneWay}"
                                         MinWidth="46" Height="30"
                                         Padding="8,0"
                                         MinHeight="0"
@@ -145,9 +150,16 @@
                 <ItemsControl ItemsSource="{x:Bind ViewModel.Variants, Mode=OneWay}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="local:ModelFamilyVariantOption">
+                            <!-- A variant the machine can't run stays tappable
+                                 (the download preflight shows the numbers in a
+                                 flyout, same as the browse rows) but dims, with
+                                 the fit note on hover. Verdicts land after
+                                 render — OneWay bindings. -->
                             <Button Click="Variant_Click"
                                     Tag="{x:Bind}"
                                     IsEnabled="{x:Bind IsSelectable}"
+                                    Opacity="{x:Bind RowOpacity, Mode=OneWay}"
+                                    ToolTipService.ToolTip="{x:Bind RowTooltip, Mode=OneWay}"
                                     Padding="8,6"
                                     MinWidth="0" MinHeight="0"
                                     Background="Transparent"

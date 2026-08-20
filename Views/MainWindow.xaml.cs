@@ -195,6 +195,7 @@ namespace LlamaApp.Views
             LoadModels();
             LoadVersionInfo();
             UpdateServerStatusUI();
+            _ = UpdateGpuIndicatorAsync();
             UpdateEmptyState();
             _ = LoadAvatarAsync();
 
@@ -836,7 +837,7 @@ namespace LlamaApp.Views
         /// multi-GPU machines.
         /// </summary>
         private static string DescribeDevices(IReadOnlyList<LlamaDevice> devices) =>
-            string.Join(", ", devices.Select(d => $"{d.Name} ({MemoryFit.FormatBytes(d.FreeBytes)} free)"));
+            DeviceStatusPresentation.DescribeDeviceList(devices);
 
         /// <summary>
         /// Drives a single model's download → load lifecycle. Reports
@@ -1267,7 +1268,11 @@ namespace LlamaApp.Views
                 {
                     Settings.Current.ModelContextLengths[id] = t;
                     Settings.Current.Save();
-                });
+                },
+                // The fit-params refinement awaits CLI processes; its verdicts
+                // can land on a thread-pool thread — flip bound properties on
+                // the UI thread.
+                dispatchToUi: action => DispatcherQueue?.TryEnqueue(() => action()));
             _detailsViewModel = vm;
             DetailsView.SetViewModel(vm);
             ModelsPanel.Visibility = Visibility.Collapsed;
@@ -1288,7 +1293,16 @@ namespace LlamaApp.Views
         private void ShowFamilyDetails(ModelFamilyViewModel family)
         {
             DisposeDetails(); // the two details views are mutually exclusive
-            var vm = new ModelFamilyDetailsViewModel(family.Family, host: this);
+            var vm = new ModelFamilyDetailsViewModel(family.Family, host: this,
+                // Same math the browse-list dimming and the download preflight
+                // use (estimator + device/RAM probe), so a dimmed variant,
+                // a dimmed family row, and a blocked download always agree.
+                variantFitProbe: async (size, build, token) =>
+                {
+                    var fit = await LlamaManager.Shared.CheckModelFitAsync(
+                        size.Params, build.Quant, build.SizeBytes, token);
+                    return new VariantFitVerdict(fit.Fits, fit.Fits ? null : DescribeFitFailure(fit));
+                });
             _familyDetailsViewModel = vm;
             FamilyDetailsView.SetViewModel(vm);
             ModelsPanel.Visibility = Visibility.Collapsed;
@@ -1307,17 +1321,18 @@ namespace LlamaApp.Views
         private void HideDetails()
         {
             DisposeDetails();
-            _familyDetailsViewModel = null;
             DetailsView.Visibility = Visibility.Collapsed;
             FamilyDetailsView.Visibility = Visibility.Collapsed;
             ModelsPanel.Visibility = Visibility.Visible;
         }
 
-        /// <summary>Cancels any in-flight details load and drops the ViewModel.</summary>
+        /// <summary>Cancels any in-flight details load and drops the ViewModels.</summary>
         private void DisposeDetails()
         {
             _detailsViewModel?.Dispose();
             _detailsViewModel = null;
+            _familyDetailsViewModel?.Dispose();
+            _familyDetailsViewModel = null;
         }
 
         // ----- IModelItemDetailsHost: the details view drives the shell's workflows -----
@@ -1722,6 +1737,47 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
+        /// Refreshes the footer's GPU indicator from the accelerator device
+        /// probe (<see cref="LlamaManager.ListDevicesAsync"/> — cached for a
+        /// minute there, so the StateChanged bursts don't spawn a process
+        /// each). Shows the chip glyph when the llama binary sees a GPU
+        /// (CUDA/Vulkan) and names the devices in its tooltip; stays hidden
+        /// on CPU-only machines and before the binary is resolved (the
+        /// probe then returns no devices and the state-change re-render
+        /// picks them up once one appears). A failed probe never surfaces —
+        /// the indicator simply stays as-is (fail-open, hint only).
+        /// </summary>
+        private async Task UpdateGpuIndicatorAsync()
+        {
+            IReadOnlyList<LlamaDevice> devices;
+            try
+            {
+                devices = await LlamaManager.Shared.ListDevicesAsync();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.Debug($"GPU indicator probe failed: {ex.Message}");
+                return;
+            }
+
+            var d = DeviceStatusPresentation.Describe(devices);
+
+            // The probe awaits a child process; the continuation can land on
+            // a thread-pool thread, and dependency-object writes must happen
+            // on the UI thread.
+            void Apply()
+            {
+                GpuIndicator.Visibility = d.Visible
+                    ? Microsoft.UI.Xaml.Visibility.Visible
+                    : Microsoft.UI.Xaml.Visibility.Collapsed;
+                Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(GpuIndicator, d.ToolTip);
+            }
+            var dq = DispatcherQueue;
+            if (dq is null || dq.HasThreadAccess) Apply();
+            else dq.TryEnqueue(Apply);
+        }
+
+        /// <summary>
         /// Relaunch button (footer, visible only when the server is down):
         /// re-runs the full ensure pipeline — adopt a server if one reappeared,
         /// otherwise resolve/install the binary and launch it. Single-flighted
@@ -1768,6 +1824,7 @@ namespace LlamaApp.Views
             {
                 LoadVersionInfo();
                 UpdateServerStatusUI();
+                _ = UpdateGpuIndicatorAsync();
 
                 // A binary just appeared (resolved after startup or freshly
                 // installed): the first fit evaluation may have run without

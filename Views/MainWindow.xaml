@@ -873,6 +873,17 @@
                        FontSize="11"
                        FontWeight="SemiBold"
                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+            <!-- GPU indicator: shown only when the llama binary's device
+                 probe (llama - -list-devices) reports accelerator devices
+                 (CUDA / Vulkan). The tooltip names them with their free
+                 memory; the glyph itself stays quiet (dimmed, 11px). -->
+            <FontIcon x:Name="GpuIndicator"
+                      Glyph="&#xE7F8;"
+                      FontSize="11"
+                      Opacity="0.7"
+                      VerticalAlignment="Center"
+                      Visibility="Collapsed"
+                      AutomationProperties.Name="GPU acceleration available" />
             <Button x:Name="ServerRestartButton"
                     Click="ServerRestart_Click"
                     Padding="4"

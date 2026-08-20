@@ -1031,6 +1031,81 @@ public sealed class LlamaManager
         return result;
     }
 
+    /// <summary>
+    /// Cached fit-params probe results + timestamps, keyed by (model path,
+    /// context tokens) — see <see cref="QueryFitParamsAsync"/>.
+    /// </summary>
+    private readonly Dictionary<(string Path, int Ctx), (DateTime At, FitParamsEstimate? Estimate)> _fitParamsCache = new();
+
+    /// <summary>
+    /// Asks the CLI's <c>fit-params</c> tool for llama.cpp's own memory
+    /// estimate of an on-disk model at a context length (see
+    /// <see cref="FitParamsQuery"/>) — the accurate, GPU-aware counterpart
+    /// of the catalog-metadata heuristic (<see cref="CheckModelFitAsync"/>)
+    /// used once the GGUF is actually present. <c>null</c> means "no
+    /// verdict" (no binary, CPU-era build without the tool, unreadable
+    /// model) — callers keep their heuristic then, never block. Results are
+    /// cached per (path, context) for a short window: the context-length
+    /// picker probes a burst of options when it opens, and the estimate
+    /// (unlike free VRAM) doesn't change between them.
+    /// </summary>
+    public async Task<FitParamsEstimate?> QueryFitParamsAsync(
+        string modelPath, int contextTokens, CancellationToken cancel = default)
+    {
+        const double CacheTtlSeconds = 60;
+
+        var key = (modelPath, contextTokens);
+        lock (_fitParamsCache)
+        {
+            if (_fitParamsCache.TryGetValue(key, out var cached) &&
+                (DateTime.UtcNow - cached.At).TotalSeconds < CacheTtlSeconds)
+                return cached.Estimate;
+        }
+
+        var binary = BinaryPath;
+        if (binary is null || !File.Exists(binary))
+            binary = FindOnPath("llama.exe");
+        if (binary is null)
+        {
+            Log.Debug("fit-params skipped: no llama binary resolved yet");
+            return null;
+        }
+
+        var estimate = await FitParamsQuery.QueryAsync(binary, modelPath, contextTokens, cancel);
+        lock (_fitParamsCache)
+        {
+            _fitParamsCache[key] = (DateTime.UtcNow, estimate);
+        }
+        Log.Debug(estimate is null
+            ? $"fit-params: no verdict for {Path.GetFileName(modelPath)} at ctx {contextTokens}"
+            : $"fit-params: {Path.GetFileName(modelPath)} at ctx {contextTokens} needs " +
+              $"{MemoryFit.FormatBytes(estimate.TotalBytes)} ({estimate.Devices.Count} device(s) + host)");
+        return estimate;
+    }
+
+    /// <summary>
+    /// The memory budget a context-length option is compared against:
+    /// the sum of free VRAM across all accelerator devices plus the usable
+    /// share of free system RAM (<see cref="MemoryFit.CpuRamBudgetFraction"/>).
+    /// The budgets are <b>added</b>, not tried one after the other as in
+    /// <see cref="MemoryFit"/>, because a loaded model can split its layers
+    /// across VRAM and RAM (partial offload) — so a context option fits when
+    /// its total requirement fits the combined pool. Fails open exactly like
+    /// the fit checks: no devices AND an unknown RAM probe returns
+    /// <see cref="ulong.MaxValue"/> (gray nothing out on a measurement
+    /// error); with devices but no RAM number, the VRAM sum alone stands.
+    /// </summary>
+    public async Task<ulong> ContextMemoryBudgetAsync(CancellationToken cancel = default)
+    {
+        var devices = await ListDevicesAsync(cancel);
+        var vram = MemoryFit.SumFreeVram(devices);
+
+        if (!SystemMemory.TryGet(out _, out var availableRam))
+            return devices.Count > 0 ? vram : ulong.MaxValue;
+
+        return vram + (ulong)(availableRam * MemoryFit.CpuRamBudgetFraction);
+    }
+
     // ---- Model download ----
 
     /// <summary>
