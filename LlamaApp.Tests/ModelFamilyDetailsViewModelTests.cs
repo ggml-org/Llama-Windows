@@ -169,4 +169,117 @@ public sealed class ModelFamilyDetailsViewModelTests
         Assert.Equal("Gemma", vm.License);
         Assert.Equal("GGUF", vm.Format);
     }
+
+    // ---- Fit evaluation ----
+
+    /// <summary>Probe that fits builds below a size threshold.</summary>
+    private static Func<ModelFamilySize, ModelFamilyBuild, CancellationToken, Task<VariantFitVerdict>>
+        FitBelow(ulong thresholdBytes) =>
+        (_, build, _) => Task.FromResult(new VariantFitVerdict(
+            build.SizeBytes < thresholdBytes,
+            "May not fit: needs about 99 GB."));
+
+    [Fact]
+    public async Task Unfit_Variants_Dim_And_Carry_The_Fit_Note()
+    {
+        // Only the 2.5 GB build fits: the 4.9 GB one must dim (but stay
+        // tappable — the preflight flyout owns the explanation).
+        var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost(),
+            variantFitProbe: FitBelow(4_000_000_000UL));
+        await vm.FitEvaluation;
+
+        var (fits, unfit) = (vm.Variants[0], vm.Variants[1]);
+        Assert.True(fits.FitsOnDevice);
+        Assert.Equal(1.0, fits.RowOpacity);
+        Assert.Null(fits.RowTooltip);
+
+        Assert.False(unfit.FitsOnDevice);
+        Assert.Equal(0.4, unfit.RowOpacity);
+        Assert.Equal("May not fit: needs about 99 GB.", unfit.RowTooltip);
+        Assert.True(unfit.IsSelectable); // dimmed, not disabled
+        Assert.Contains("May not fit", unfit.AccessibleName);
+    }
+
+    [Fact]
+    public async Task Size_Cells_Dim_Only_When_No_Build_Fits()
+    {
+        // 4B has a fitting build (stays lit); 12B's only build (8.1 GB)
+        // doesn't — the cell dims and its tooltip carries the note.
+        var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost(),
+            variantFitProbe: FitBelow(4_000_000_000UL));
+        await vm.FitEvaluation;
+
+        Assert.True(vm.Sizes[0].FitsOnDevice);
+        Assert.Equal("Gemma 3 4B", vm.Sizes[0].CellTooltip);
+
+        Assert.False(vm.Sizes[1].FitsOnDevice);
+        Assert.Equal(0.4, vm.Sizes[1].CellOpacity);
+        Assert.StartsWith("May not fit", vm.Sizes[1].CellTooltip);
+    }
+
+    [Fact]
+    public async Task Verdicts_Survive_A_Size_Switch()
+    {
+        // Rows rebuild from scratch on a size switch — the cached verdict
+        // must re-apply instantly, without waiting for another probe pass.
+        var probeCalls = 0;
+        var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost(),
+            variantFitProbe: (size, build, _) =>
+            {
+                probeCalls++;
+                return Task.FromResult(new VariantFitVerdict(build.SizeBytes < 4_000_000_000UL, "note"));
+            });
+        await vm.FitEvaluation;
+
+        vm.SelectSize(vm.Sizes[1]); // 12B
+
+        var variant = Assert.Single(vm.Variants);
+        Assert.False(variant.FitsOnDevice);
+        Assert.Equal("note", variant.FitNote);
+        Assert.Equal(3, probeCalls); // 3 builds total, no second pass
+    }
+
+    [Fact]
+    public async Task Failed_Probes_Never_Dim()
+    {
+        var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost(),
+            variantFitProbe: (_, _, _) => throw new InvalidOperationException("probe died"));
+        await vm.FitEvaluation;
+
+        Assert.All(vm.Variants, v => Assert.True(v.FitsOnDevice));
+        Assert.All(vm.Sizes, s => Assert.True(s.FitsOnDevice));
+    }
+
+    [Fact]
+    public async Task Installed_Variants_Are_Not_Dimmed_By_Fit_Verdicts()
+    {
+        // What's on disk is on disk — an installed build keeps full opacity
+        // even when the probe says it wouldn't fit now.
+        var host = new FakeHost();
+        host.InstalledIds.Add("ggml-org/gemma-3-4b-it-GGUF:Q8_0");
+        var vm = new ModelFamilyDetailsViewModel(Gemma(), host,
+            variantFitProbe: FitBelow(1UL)); // nothing fits
+        await vm.FitEvaluation;
+
+        Assert.False(vm.Variants[0].FitsOnDevice); // Q4 dimmed
+        Assert.True(vm.Variants[1].IsInstalled);
+        Assert.Equal(1.0, vm.Variants[1].RowOpacity); // installed stays lit
+    }
+
+    [Fact]
+    public async Task Dispose_Cancels_The_Fit_Evaluation()
+    {
+        var gate = new TaskCompletionSource<VariantFitVerdict>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost(),
+            variantFitProbe: (_, _, _) => gate.Task);
+
+        vm.Dispose();
+        gate.SetResult(new VariantFitVerdict(false, "too big"));
+        await vm.FitEvaluation;
+
+        // The verdict arrived after cancellation — nothing was applied.
+        Assert.All(vm.Variants, v => Assert.True(v.FitsOnDevice));
+        Assert.All(vm.Sizes, s => Assert.True(s.FitsOnDevice));
+    }
 }

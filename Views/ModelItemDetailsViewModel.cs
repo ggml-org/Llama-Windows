@@ -8,11 +8,13 @@ namespace LlamaApp.Views;
 
 /// <summary>
 /// Details not already carried by <see cref="ModelItem"/>, loaded lazily when
-/// the details view opens: the on-disk model size and the GGUF context
-/// metadata (max context, KV dimensions). <c>null</c> fields mean "unknown" —
-/// the context selector then shows its standard ladder unconstrained.
+/// the details view opens: the on-disk model size, the GGUF context
+/// metadata (max context, KV dimensions), and the resolved file path (the
+/// <c>llama fit-params</c> refinement needs it to probe the exact GGUF).
+/// <c>null</c> fields mean "unknown" — the context selector then shows its
+/// standard ladder unconstrained.
 /// </summary>
-public sealed record ModelRuntimeDetails(long ModelSizeBytes, GgufContextInfo? ContextInfo);
+public sealed record ModelRuntimeDetails(long ModelSizeBytes, GgufContextInfo? ContextInfo, string? FilePath = null);
 
 /// <summary>
 /// The shell operations <see cref="ModelItemDetailsViewModel"/> needs that it
@@ -79,7 +81,9 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     private readonly Func<string, int?> _loadContextPreference;
     private readonly Action<string, int> _saveContextPreference;
     private readonly Func<string, CancellationToken, Task<ModelRuntimeDetails?>> _runtimeDetailsLoader;
-    private readonly Func<long> _availableMemoryProbe;
+    private readonly Func<CancellationToken, Task<ulong>> _memoryBudgetProbe;
+    private readonly Func<string, int, CancellationToken, Task<bool?>> _fitParamsProbe;
+    private readonly Action<Action>? _dispatchToUi;
 
     private CancellationTokenSource? _loadCts;
     private ContextLengthOption? _selectedContextLength;
@@ -97,14 +101,19 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
         Func<string, int?> loadContextPreference,
         Action<string, int> saveContextPreference,
         Func<string, CancellationToken, Task<ModelRuntimeDetails?>>? runtimeDetailsLoader = null,
-        Func<long>? availableMemoryProbe = null)
+        Func<CancellationToken, Task<ulong>>? memoryBudgetProbe = null,
+        Func<string, int, CancellationToken, Task<bool?>>? fitParamsProbe = null,
+        Action<Action>? dispatchToUi = null)
     {
         Model = model;
         _host = host;
         _loadContextPreference = loadContextPreference;
         _saveContextPreference = saveContextPreference;
         _runtimeDetailsLoader = runtimeDetailsLoader ?? LoadRuntimeDetailsAsync;
-        _availableMemoryProbe = availableMemoryProbe ?? SystemMemory.AvailablePhysicalBytes;
+        _memoryBudgetProbe = memoryBudgetProbe
+            ?? (token => LlamaManager.Shared.ContextMemoryBudgetAsync(token));
+        _fitParamsProbe = fitParamsProbe ?? DefaultFitParamsProbe;
+        _dispatchToUi = dispatchToUi;
 
         // Live state sync: the shared ModelItem already reflects every server
         // state change (the poller drives it), so the details page inherits
@@ -185,8 +194,14 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     /// <summary>Download is offered for Hub models not yet installed.</summary>
     public bool CanDownload => !IsInstalled && !IsBusy;
 
-    /// <summary>The context section only makes sense for an on-disk model.</summary>
-    public bool ContextSectionVisible => IsInstalled;
+    /// <summary>
+    /// The context section shows for on-disk models (GGUF-derived ladder +
+    /// <c>fit-params</c> refinement) and for downloadable rows whose catalog
+    /// size is known — the ladder then grays from the model size against the
+    /// memory budget up front ("can the weights even load"). A Hub row
+    /// without a size gets no ladder: there is nothing to check against.
+    /// </summary>
+    public bool ContextSectionVisible => IsInstalled || Model.SizeBytes > 0;
 
     // ---- Context length selection ----
 
@@ -282,24 +297,35 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     /// context options and restores the persisted per-model selection. Runs
     /// after the view is already showing; cancel-safe (navigating away
     /// cancels via <see cref="Dispose"/>).
+    ///
+    /// <para>Downloadable rows take the same path with no local file: the
+    /// loader is skipped, the ladder falls back to the catalog size, and the
+    /// options are grayed purely from the memory budget. Once the options
+    /// are visible, an on-disk model's fit is re-checked per option with
+    /// <c>llama fit-params</c> (which knows the real devices and free
+    /// memory), refining the heuristic graying in place as verdicts land.</para>
     /// </summary>
     public async Task InitializeAsync(CancellationToken cancel = default)
     {
-        if (!IsInstalled) return; // a Hub row has no local file to interrogate
-
         _loadCts?.Cancel();
         _loadCts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         var token = _loadCts.Token;
 
         IsLoadingDetails = true;
         ErrorMessage = null;
+        ModelRuntimeDetails? details = null;
         try
         {
-            var details = await _runtimeDetailsLoader(ServerModelId, token);
-            token.ThrowIfCancellationRequested();
+            // A Hub row has no local file to interrogate — the catalog size
+            // stands in for the weights and the budget decides the graying.
+            if (IsInstalled)
+            {
+                details = await _runtimeDetailsLoader(ServerModelId, token);
+                token.ThrowIfCancellationRequested();
+            }
 
-            _modelSizeBytes = details?.ModelSizeBytes ?? 0;
-            RebuildContextOptions(details);
+            _modelSizeBytes = details?.ModelSizeBytes ?? (long)Model.SizeBytes;
+            RebuildContextOptions(details, await ProbeMemoryBudgetAsync(token));
             RestoreSelection();
             OnPropertyChanged(nameof(SizeDisplay));
         }
@@ -316,20 +342,119 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
         {
             if (!token.IsCancellationRequested) IsLoadingDetails = false;
         }
+
+        // Options are on screen: ask llama fit-params for the ground truth on
+        // each option's memory fit (real KV dtype, compute buffers, actual
+        // devices) and refine the heuristic graying as verdicts land.
+        if (details?.FilePath is { } path && !token.IsCancellationRequested)
+        {
+            try
+            {
+                await RefineContextFitsAsync(path, token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Navigated away mid-refinement — the heuristic graying stands.
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(ex, "fit-params refinement failed: " + ServerModelId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The memory budget the ladder is grayed against (free VRAM + usable
+    /// free RAM — see <see cref="LlamaManager.ContextMemoryBudgetAsync"/>).
+    /// Fails open: an unknown budget grays nothing out, matching every other
+    /// probe in the app.
+    /// </summary>
+    private async Task<ulong> ProbeMemoryBudgetAsync(CancellationToken token)
+    {
+        try
+        {
+            return await _memoryBudgetProbe(token);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Debug($"memory budget probe failed: {ex.Message}");
+            return ulong.MaxValue;
+        }
+    }
+
+    /// <summary>
+    /// The default fit-params probe: the manager's cached
+    /// <c>llama fit-params</c> estimate for the model at
+    /// <paramref name="contextTokens"/>, compared against the same memory
+    /// budget the ladder used. Tri-state: <c>null</c> when the tool has no
+    /// verdict (missing binary, CPU-era build, unreadable model) — the
+    /// option keeps its heuristic graying then.
+    /// </summary>
+    private static async Task<bool?> DefaultFitParamsProbe(
+        string modelPath, int contextTokens, CancellationToken token)
+    {
+        var manager = LlamaManager.Shared;
+        var estimate = await manager.QueryFitParamsAsync(modelPath, contextTokens, token);
+        if (estimate is null) return null;
+
+        var budget = await manager.ContextMemoryBudgetAsync(token);
+        return budget == ulong.MaxValue || estimate.TotalBytes <= budget;
+    }
+
+    /// <summary>
+    /// Runs the fit-params probe for every supported option of an on-disk
+    /// model, sequentially (each probe spawns a short-lived CLI process;
+    /// a burst of seven is fine, a burst of seven-at-once is not), flipping
+    /// <see cref="ContextLengthOption.FitsInMemory"/> where llama.cpp's own
+    /// accounting disagrees with the heuristic. Unsupported options
+    /// (beyond the model's max context) are skipped — that guard wins
+    /// regardless of memory. A probe failure or a missing verdict leaves
+    /// the option's heuristic state untouched.
+    /// </summary>
+    private async Task RefineContextFitsAsync(string modelPath, CancellationToken token)
+    {
+        foreach (var option in ContextLengths.ToList())
+        {
+            token.ThrowIfCancellationRequested();
+            if (!option.IsSupported) continue;
+
+            bool? fits;
+            try
+            {
+                fits = await _fitParamsProbe(modelPath, option.Tokens, token);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Log.Debug($"fit-params probe threw for ctx {option.Tokens}: {ex.Message}");
+                continue;
+            }
+
+            if (fits is not { } verdict || option.FitsInMemory == verdict) continue;
+
+            // The probe awaits a child process; the continuation can land on
+            // a thread-pool thread — flip the bound property on the UI thread.
+            if (_dispatchToUi is null)
+                option.FitsInMemory = verdict;
+            else
+                _dispatchToUi(() => option.FitsInMemory = verdict);
+        }
     }
 
     /// <summary>
     /// Builds the context ladder: the standard token values, each flagged
     /// unsupported above the model's max context, each carrying its memory
     /// estimate (weights + KV cache) and a fit check against the machine's
-    /// available RAM. With no metadata every option is supported and shows
-    /// the bare model size.
+    /// memory budget (<paramref name="budgetBytes"/> — free VRAM plus the
+    /// usable share of free RAM, since a load can split across them). With
+    /// no GGUF metadata (downloadable rows, unreadable header) every option
+    /// is supported and shows the bare model size — the graying then answers
+    /// "can the weights even load".
     /// </summary>
     internal static List<ContextLengthOption> BuildOptions(
-        ModelRuntimeDetails? details, long availableMemoryBytes = long.MaxValue)
+        ModelRuntimeDetails? details, long modelSizeBytes, ulong budgetBytes = ulong.MaxValue)
     {
         var info = details?.ContextInfo;
-        var size = details?.ModelSizeBytes ?? 0;
+        var size = details?.ModelSizeBytes > 0 ? details.ModelSizeBytes : modelSizeBytes;
         return StandardContextTokens.Select(tokens =>
         {
             var estimate = info is not null
@@ -342,15 +467,15 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
                 MaxContextTokens = info?.ContextLength ?? 0,
                 EstimatedMemoryBytes = estimate,
                 IsSupported = info is null || tokens <= info.ContextLength,
-                FitsInMemory = estimate <= 0 || estimate <= availableMemoryBytes,
+                FitsInMemory = estimate <= 0 || (ulong)estimate <= budgetBytes,
             };
         }).ToList();
     }
 
-    private void RebuildContextOptions(ModelRuntimeDetails? details)
+    private void RebuildContextOptions(ModelRuntimeDetails? details, ulong budgetBytes)
     {
         ContextLengths.Clear();
-        foreach (var option in BuildOptions(details, _availableMemoryProbe()))
+        foreach (var option in BuildOptions(details, _modelSizeBytes, budgetBytes))
             ContextLengths.Add(option);
     }
 
@@ -407,7 +532,7 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
         }
 
         var info = await GgufMetadata.ReadContextInfoAsync(path, cancel);
-        return new ModelRuntimeDetails(size, info);
+        return new ModelRuntimeDetails(size, info, path);
     }
 
     /// <summary>

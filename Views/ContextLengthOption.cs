@@ -16,6 +16,7 @@ namespace LlamaApp.Views;
 public sealed class ContextLengthOption : INotifyPropertyChanged
 {
     private bool _isSelected;
+    private bool _fitsInMemory = true;
 
     /// <summary>The context length in tokens (e.g. 32768).</summary>
     public int Tokens { get; init; }
@@ -55,11 +56,28 @@ public sealed class ContextLengthOption : INotifyPropertyChanged
 
     /// <summary>
     /// False when the estimated memory at this context length exceeds the
-    /// machine's currently available physical RAM — the cell shows disabled
-    /// rather than offering a configuration that can't load. True when the
+    /// machine's memory budget (free VRAM across all accelerator devices
+    /// plus the usable share of free RAM) — the cell shows disabled rather
+    /// than offering a configuration that can't load. True when the
     /// estimate is unknown (never gray out on a guess).
+    ///
+    /// <para>Settable, not init-only: the picker first grays from the fast
+    /// weights + KV heuristic, then <c>llama fit-params</c> verdicts land
+    /// per option (for on-disk models) and flip this in place — raising
+    /// <see cref="IsSelectable"/>/<see cref="TooltipText"/> with it.</para>
     /// </summary>
-    public bool FitsInMemory { get; init; } = true;
+    public bool FitsInMemory
+    {
+        get => _fitsInMemory;
+        set
+        {
+            if (_fitsInMemory == value) return;
+            _fitsInMemory = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsSelectable));
+            OnPropertyChanged(nameof(TooltipText));
+        }
+    }
 
     /// <summary>Whether the option can be selected — both guards must pass.</summary>
     public bool IsSelectable => IsSupported && FitsInMemory;

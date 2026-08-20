@@ -73,19 +73,25 @@ public sealed class ModelItemDetailsViewModelTests
 
     private static ModelItemDetailsViewModel MakeVm(
         ModelItem item, FakeHost host, FakePreferences prefs,
-        Func<long>? availableMemory = null)
-        => MakeVm(item, host, prefs, Details32K, availableMemory);
+        Func<ulong>? memoryBudget = null)
+        => MakeVm(item, host, prefs, Details32K, memoryBudget);
 
     private static ModelItemDetailsViewModel MakeVm(
         ModelItem item,
         FakeHost host,
         FakePreferences prefs,
         ModelRuntimeDetails? details,
-        Func<long>? availableMemory = null)
+        Func<ulong>? memoryBudget = null,
+        Func<string, int, CancellationToken, Task<bool?>>? fitParamsProbe = null,
+        Action<Action>? dispatchToUi = null)
         => new(item, host, prefs.Load, prefs.Save,
             runtimeDetailsLoader: (_, _) => Task.FromResult(details),
-            // Deterministic by default: everything fits in memory.
-            availableMemoryProbe: availableMemory ?? (() => long.MaxValue));
+            // Deterministic by default: an unbounded budget, everything fits.
+            // No FilePath on the fixture details, so the fit-params
+            // refinement stays out of the way unless a test opts in.
+            memoryBudgetProbe: _ => Task.FromResult(memoryBudget is null ? ulong.MaxValue : memoryBudget()),
+            fitParamsProbe: fitParamsProbe,
+            dispatchToUi: dispatchToUi);
 
     // ---- Construction / derived presentation ----
 
@@ -213,7 +219,7 @@ public sealed class ModelItemDetailsViewModelTests
             ModelSizeBytes: 4_000_000_000L,
             ContextInfo: new GgufContextInfo("llama", 262144, 32, 4096, 32, 8, 128));
         var vm = MakeVm(InstalledItem(), new FakeHost(), new FakePreferences(),
-            details256K, availableMemory: () => 9_000_000_000L);
+            details256K, memoryBudget: () => 9_000_000_000UL);
         await vm.InitializeAsync();
 
         Assert.Equal(
@@ -239,6 +245,113 @@ public sealed class ModelItemDetailsViewModelTests
     }
 
     [Fact]
+    public async Task Downloadable_Models_Show_The_Ladder_Grayed_From_The_Catalog_Size()
+    {
+        // A Hub row with a known size gets the ladder (no GGUF header yet —
+        // every option shows the bare weights) and is grayed out of the box
+        // when the weights fit nowhere: the budget is VRAM + usable RAM, so
+        // a 20 GB model is fine on a 16 GB GPU + 8 GB usable RAM machine…
+        var hub = HubItem();
+        hub.SizeBytes = 20_000_000_000UL;
+        var vm = MakeVm(hub, new FakeHost(), new FakePreferences(),
+            details: null, memoryBudget: () => 24_000_000_000UL);
+        await vm.InitializeAsync();
+
+        Assert.True(vm.ContextSectionVisible);
+        Assert.Equal(7, vm.ContextLengths.Count);
+        Assert.All(vm.ContextLengths, o => Assert.True(o.IsSupported));
+        Assert.All(vm.ContextLengths, o => Assert.True(o.FitsInMemory));
+        Assert.All(vm.ContextLengths, o => Assert.Equal(20_000_000_000L, o.EstimatedMemoryBytes));
+    }
+
+    [Fact]
+    public async Task Downloadable_Models_Whose_Weights_Fit_Nowhere_Gray_Every_Option()
+    {
+        // …but grayed entirely when the weights alone exceed the budget —
+        // "can this model even load here", answered before the download.
+        var hub = HubItem();
+        hub.SizeBytes = 40_000_000_000UL;
+        var vm = MakeVm(hub, new FakeHost(), new FakePreferences(),
+            details: null, memoryBudget: () => 24_000_000_000UL);
+        await vm.InitializeAsync();
+
+        Assert.True(vm.ContextSectionVisible);
+        Assert.All(vm.ContextLengths, o => Assert.False(o.FitsInMemory));
+        Assert.All(vm.ContextLengths, o => Assert.False(o.IsSelectable));
+        Assert.All(vm.ContextLengths, o => Assert.StartsWith("Model requires at least ", o.TooltipText));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_Refines_Option_Fit_With_FitParams_Verdicts()
+    {
+        // Heuristic budget is unbounded (everything fits), then fit-params
+        // says only 16k and below actually fit — the 32k option must flip
+        // to grayed. Unsupported options (64k+, above the 32k max) are
+        // never probed.
+        var probed = new List<int>();
+        var vm = MakeVm(InstalledItem(), new FakeHost(), new FakePreferences(),
+            details: Details32K with { FilePath = "/fake/model.gguf" },
+            fitParamsProbe: (_, tokens, _) =>
+            {
+                probed.Add(tokens);
+                return Task.FromResult<bool?>(tokens <= 16384);
+            });
+        await vm.InitializeAsync();
+
+        Assert.Equal([4096, 8192, 16384, 32768], probed);
+        Assert.Equal(
+            [true, true, true, false, true, true, true],
+            vm.ContextLengths.Select(o => o.FitsInMemory).ToArray());
+        Assert.False(vm.ContextLengths[3].IsSelectable);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_Keeps_Heuristic_Graying_When_FitParams_Has_No_Verdict()
+    {
+        // A null verdict (no binary, CPU-era build, unreadable model) keeps
+        // the heuristic: a budget-grayed option stays grayed, a fitting one
+        // stays enabled — fit-params never overrides with "unknown".
+        var vm = MakeVm(InstalledItem(), new FakeHost(), new FakePreferences(),
+            details: Details32K with { FilePath = "/fake/model.gguf" },
+            memoryBudget: () => 5_000_000_000UL,
+            fitParamsProbe: (_, _, _) => Task.FromResult<bool?>(null));
+        await vm.InitializeAsync();
+
+        // 4k (~4.5 GB) fits the 5 GB budget, 8k (~5.1 GB) and up don't.
+        Assert.Equal(
+            [true, false, false, false, false, false, false],
+            vm.ContextLengths.Select(o => o.FitsInMemory).ToArray());
+    }
+
+    [Fact]
+    public async Task FitParams_Refinement_Flips_Options_Through_The_Ui_Dispatcher()
+    {
+        // Verdicts land from a process await — the ViewModel must not touch
+        // bound properties directly when a dispatcher is provided; running
+        // the queued actions applies the flip (with change notifications).
+        var dispatched = new List<Action>();
+        var vm = MakeVm(InstalledItem(), new FakeHost(), new FakePreferences(),
+            details: Details32K with { FilePath = "/fake/model.gguf" },
+            fitParamsProbe: (_, tokens, _) => Task.FromResult<bool?>(tokens <= 8192),
+            dispatchToUi: dispatched.Add);
+        await vm.InitializeAsync();
+
+        var option = vm.ContextLengths[2]; // 16k — fits the heuristic, fails fit-params
+        Assert.True(option.FitsInMemory); // queued, not applied yet
+        Assert.NotEmpty(dispatched);
+
+        var raised = new List<string?>();
+        option.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+        dispatched.ForEach(a => a());
+
+        Assert.False(option.FitsInMemory);
+        Assert.False(option.IsSelectable);
+        Assert.Contains("FitsInMemory", raised);
+        Assert.Contains("IsSelectable", raised);
+        Assert.Contains("TooltipText", raised);
+    }
+
+    [Fact]
     public async Task Context_Capped_Options_Explain_The_Cap_On_Hover()
     {
         var vm = MakeVm(InstalledItem(), new FakeHost(), new FakePreferences());
@@ -259,7 +372,7 @@ public sealed class ModelItemDetailsViewModelTests
         var prefs = new FakePreferences();
         prefs.Saved["unsloth/Qwen3-4B-GGUF:Q4_K_M"] = 16384;
         var vm = MakeVm(InstalledItem(), new FakeHost(), prefs,
-            availableMemory: () => 5_000_000_000L);
+            memoryBudget: () => 5_000_000_000UL);
         await vm.InitializeAsync();
 
         Assert.Equal(4096, vm.SelectedContextLength?.Tokens);

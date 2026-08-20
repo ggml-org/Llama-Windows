@@ -124,10 +124,12 @@
                 </StackPanel>
             </Grid>
 
-            <!-- Context length · memory use (installed models only — a Hub row
-                 has no local file to measure). Data-driven: the options come
+            <!-- Context length · memory use. Data-driven: the options come
                  from the ViewModel, the memory math from the runtime layer.
-                 Only this section shows progress while the GGUF header loads;
+                 On-disk models get the GGUF-derived ladder, later refined by
+                 llama fit-params; downloadable rows with a catalog size get
+                 the ladder grayed from the size against the memory budget.
+                 Only this section shows progress while the details load;
                  the rest of the page renders immediately. -->
             <StackPanel Spacing="6"
                         Visibility="{x:Bind ViewModel.ContextSectionVisible, Mode=OneWay}">
@@ -171,8 +173,9 @@
                      The memory requirement moved to the hover tooltip — carried
                      on the wrapping Grid because a disabled button never shows
                      its own tooltip. Cells disable when the option exceeds the
-                     model's max context or the available RAM. The accent ring
-                     marks the selection. -->
+                     model's max context or the machine's memory budget (free
+                     VRAM + usable RAM, refined by llama fit-params for
+                     on-disk models). The accent ring marks the selection. -->
                 <ItemsControl ItemsSource="{x:Bind ViewModel.ContextLengths, Mode=OneWay}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
