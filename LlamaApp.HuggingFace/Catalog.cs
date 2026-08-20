@@ -22,10 +22,37 @@ public sealed class Catalog : IModelSource
     };
 
     /// <summary>
+    /// Fetches the catalog and returns the family → size → build hierarchy as
+    /// public <see cref="ModelFamily"/> objects — the shape the browse list
+    /// renders (one row per family, sizes and quants a click deeper).
+    /// </summary>
+    public static async Task<IReadOnlyList<ModelFamily>> FetchFamiliesAsync(CancellationToken cancel = default)
+    {
+        var families = await FetchCatalogFamiliesAsync(cancel);
+        if (families.Length == 0)
+            return [];
+
+        return families.Select(ToModelFamily).ToList();
+    }
+
+    /// <summary>
     /// Fetches the catalog and returns one <see cref="Repository"/> per build
     /// (quant) across all families and sizes.
     /// </summary>
     public static async Task<IReadOnlyList<Repository>> FetchAsync(CancellationToken cancel = default)
+    {
+        var families = await FetchFamiliesAsync(cancel);
+        if (families.Count == 0)
+            return [];
+
+        return Flatten(families);
+    }
+
+    /// <summary>
+    /// Downloads and deserializes catalog.json into the internal DTOs. Shared
+    /// by both public fetches so a single HTTP request feeds both shapes.
+    /// </summary>
+    private static async Task<CatalogFamily[]> FetchCatalogFamiliesAsync(CancellationToken cancel)
     {
         using var client = new HttpClient();
         client.DefaultRequestHeaders.UserAgent.ParseAdd("Llama/1.0");
@@ -35,21 +62,39 @@ public sealed class Catalog : IModelSource
         response.EnsureSuccessStatusCode();
 
         var stream = await response.Content.ReadAsStreamAsync(cancel);
-        var families = await JsonSerializer.DeserializeAsync<CatalogFamily[]>(stream, JsonOptions, cancel);
-        if (families is null || families.Length == 0)
-            return [];
-
-        return Flatten(families);
+        return await JsonSerializer.DeserializeAsync<CatalogFamily[]>(stream, JsonOptions, cancel) ?? [];
     }
 
-    /// <summary>
-    /// Flattens the nested family → size → build structure into a flat list of
-    /// <see cref="Repository"/> records, one per build (quant). Internal for
-    /// unit tests.
-    /// </summary>
-    internal static List<Repository> Flatten(CatalogFamily[] families)
+    /// <summary>Maps one internal DTO family onto the public <see cref="ModelFamily"/> shape.</summary>
+    private static ModelFamily ToModelFamily(CatalogFamily family) => new()
     {
-        var repos = new List<Repository>(families.Length * 4);
+        Name = family.Name,
+        Brand = family.Brand,
+        Description = family.Description,
+        License = family.License,
+        Featured = family.Featured,
+        Sizes = family.Sizes.Select(size => new ModelFamilySize
+        {
+            Name = size.Name,
+            Params = size.Params,
+            Vision = size.Vision,
+            Builds = size.Builds.Select(build => new ModelFamilyBuild
+            {
+                Quant = build.Quant,
+                Size = build.Size,
+                SizeBytes = build.SizeBytes,
+                Repo = build.Repo,
+            }).ToList(),
+        }).ToList(),
+    };
+
+    /// <summary>
+    /// Flattens the family → size → build hierarchy into a flat list of
+    /// <see cref="Repository"/> records, one per build (quant).
+    /// </summary>
+    public static List<Repository> Flatten(IReadOnlyList<ModelFamily> families)
+    {
+        var repos = new List<Repository>(families.Count * 4);
         repos.AddRange(
             from family in families
             from size in family.Sizes
@@ -72,6 +117,14 @@ public sealed class Catalog : IModelSource
 
         return repos;
     }
+
+    /// <summary>
+    /// Flattens the nested family → size → build structure into a flat list of
+    /// <see cref="Repository"/> records, one per build (quant). Internal for
+    /// unit tests.
+    /// </summary>
+    internal static List<Repository> Flatten(CatalogFamily[] families)
+        => Flatten(families.Select(ToModelFamily).ToList());
 
     // ---- IModelSource ----
 

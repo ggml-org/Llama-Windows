@@ -57,6 +57,53 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public string DisplayName => Name.Split('/', StringSplitOptions.RemoveEmptyEntries).Last().Trim();
 
     /// <summary>
+    /// <see cref="DisplayName"/> without the tag-carried parts: the trailing
+    /// "(quant)" suffix and the standalone parameter-count token. Rows (and
+    /// the details header) show this clean name — the quant rides in the
+    /// chip next to it, the params in the subtitle/chip — so multi-quant
+    /// repos stay distinguishable without stuffing everything into the name.
+    /// </summary>
+    public string RowDisplayName
+    {
+        get
+        {
+            var name = DisplayName;
+            if (!string.IsNullOrEmpty(Quant) &&
+                name.EndsWith("(" + Quant + ")", StringComparison.OrdinalIgnoreCase))
+            {
+                name = name[..^(Quant.Length + 2)].TrimEnd();
+            }
+            if (!string.IsNullOrWhiteSpace(Parameters))
+            {
+                // The params phrase is stripped only at a space boundary
+                // ("Gemma 3 1B" → "Gemma 3", "Ministral 3 3B Reasoning" →
+                // "Ministral 3"); inside a hyphenated slug
+                // ("Ministral-3-3B-Reasoning") it is part of the name and stays.
+                var idx = name.IndexOf(Parameters, StringComparison.OrdinalIgnoreCase);
+                while (idx >= 0)
+                {
+                    var startOk = idx == 0 || name[idx - 1] == ' ';
+                    var end = idx + Parameters.Length;
+                    var endOk = end == name.Length || name[end] == ' ';
+                    if (startOk && endOk)
+                    {
+                        var stripped = string.Join(' ',
+                            name.Remove(idx, Parameters.Length)
+                                .Split(' ', StringSplitOptions.RemoveEmptyEntries));
+                        if (stripped.Length > 0) name = stripped;
+                        break;
+                    }
+                    idx = name.IndexOf(Parameters, idx + 1, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            return name;
+        }
+    }
+
+    /// <summary>True when a quant label exists — drives the row's quant chip.</summary>
+    public bool HasQuant => !string.IsNullOrWhiteSpace(Quant);
+
+    /// <summary>
     /// The row's tooltip: the full (possibly ellipsized) name, the catalog's
     /// one-line <see cref="Description"/> on a second line when known — so
     /// you can tell what a model is before downloading it — and the
@@ -184,6 +231,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(ResumeDownloadVisible));
             OnPropertyChanged(nameof(PausedPercentTextVisible));
             OnPropertyChanged(nameof(SubtitleText));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -202,6 +250,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(DownloadPercentTextVisible));
             OnPropertyChanged(nameof(PausedPercentTextVisible));
             OnPropertyChanged(nameof(IsIndeterminateDownload));
+            NotifyAccessibleNameChanged(); // the accessible name carries the percent
         }
     }
 
@@ -248,6 +297,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(CancelDownloadVisible));
             OnPropertyChanged(nameof(PausedPercentTextVisible));
             OnPropertyChanged(nameof(SubtitleText));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -266,6 +316,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(DownloadDetailText));
             OnPropertyChanged(nameof(SubtitleText));
+            NotifyAccessibleNameChanged(); // the accessible name carries the percent
         }
     }
 
@@ -311,6 +362,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -331,6 +383,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -361,6 +414,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(OpenGlyphVisible));
             OnPropertyChanged(nameof(IsIndeterminateLoad));
             OnPropertyChanged(nameof(LoadPercentTextVisible));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -403,6 +457,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(PlayGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -516,6 +571,30 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             ? DownloadProgressPresentation.FormatPausedDetail(DownloadedBytes, DownloadTotalBytes)
             : string.Join(" · ", new[] { Parameters, Size }
                 .Where(s => !string.IsNullOrWhiteSpace(s)));
+
+    // ---- Row state signals ----
+    // The running state is a green badge pinned to the logo tile; every other
+    // state already has its own affordance (load ring, warning dot + retry,
+    // progress ring). Screen readers get the state from the row's accessible
+    // name, so no state is color-only.
+
+    /// <summary>
+    /// The row's accessible name, e.g. "Gemma 3, ready" / "Gemma 3, running"
+    /// / "Gemma 3, downloading 42%".
+    /// </summary>
+    public string RowAccessibleName => $"{RowDisplayName}, {AccessibleStatusText}";
+
+    private string AccessibleStatusText =>
+        IsDownloading ? (DownloadFraction > 0 ? $"downloading {DownloadProgressPercent:0}%" : "downloading")
+        : DownloadPaused ? "download paused"
+        : DownloadFailed || LoadFailed ? "error"
+        : IsLoaded ? "running"
+        : IsLoading ? "starting"
+        : "ready";
+
+    /// <summary>Re-notifies the row's accessible name (called from the state setters).</summary>
+    private void NotifyAccessibleNameChanged()
+        => OnPropertyChanged(nameof(RowAccessibleName));
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? prop = null)

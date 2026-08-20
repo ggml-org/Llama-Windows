@@ -4,7 +4,7 @@ using LlamaApp.HuggingFace;
 namespace LlamaApp.Views
 {
     /// <summary>
-    /// Pure filtering rules for the Recommended Models list — kept separate
+    /// Pure filtering rules for the catalog browse list — kept separate
     /// from <see cref="MainWindow"/> so they stay unit-testable, mirroring
     /// <see cref="ServerStatusPresentation"/>.
     /// </summary>
@@ -21,10 +21,19 @@ namespace LlamaApp.Views
             => repos.Where(r => r.Featured).ToList();
 
         /// <summary>
+        /// The family-level counterpart of <see cref="FilterForDisplay"/>:
+        /// only catalog families marked <c>featured</c> get a browse row,
+        /// catalog order preserved. Catalog order is the display policy
+        /// within a fit group — no quality ranking or provider endorsement.
+        /// </summary>
+        public static List<ModelFamily> FilterFamiliesForDisplay(IEnumerable<ModelFamily> families)
+            => families.Where(f => f.Featured).ToList();
+
+        /// <summary>
         /// Stable partition: items the machine can run first, the rest below
         /// — original order preserved within each group, so the catalog's
         /// curation keeps its say inside the fitting half. The verdict comes
-        /// from the fit evaluation (<c>MainWindow.EvaluateRecommendedFitsAsync</c>),
+        /// from the fit evaluation (<c>MainWindow.EvaluateFamilyFitsAsync</c>),
         /// which lands after the rows are rendered — hence the ordering is
         /// applied after the fact, not at populate time.
         /// </summary>
@@ -41,9 +50,9 @@ namespace LlamaApp.Views
         /// <paramref name="order"/> (same elements, new sequence) using
         /// <see cref="ObservableCollection{T}.Move"/> rather than a
         /// clear-and-refill: Move translates to item-level change
-        /// notifications, so the ItemsRepeater re-flows the rows without
-        /// tearing them down — no flash, and any row state (dimming, rings)
-        /// survives the shuffle. No-op when the order already matches.
+        /// notifications, so the list re-flows the rows without tearing them
+        /// down — no flash, and any row state (dimming, rings) survives the
+        /// shuffle. No-op when the order already matches.
         /// </summary>
         public static void ApplyOrder<T>(ObservableCollection<T> collection, IReadOnlyList<T> order)
             where T : class

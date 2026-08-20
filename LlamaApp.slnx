@@ -1,10 +1,34 @@
 <Solution>
-    <Project Path="LlamaApp.Common/LlamaApp.Common.csproj" />
+    <!-- No "Any CPU" solution platform on purpose. LlamaApp is a single-project
+         MSIX app (WindowsPackageType=MSIX) with an apphost .exe, and an MSIX
+         package must declare a concrete ProcessorArchitecture — an AnyCPU build
+         fails with "Packaged .NET applications with an app host exe cannot be
+         ProcessorArchitecture neutral". Mirrors LlamaApp.sln. -->
+    <Configurations>
+        <Platform Name="x86" />
+        <Platform Name="x64" />
+        <Platform Name="ARM64" />
+    </Configurations>
+    <!-- The three helper libraries are pure managed (net10.0) and only build
+         Any CPU, so every solution platform maps onto their Any CPU config. -->
+    <Project Path="LlamaApp.Common/LlamaApp.Common.csproj">
+        <Platform Solution="*|*" Project="Any CPU" />
+    </Project>
+    <!-- slnx does not read <Platforms> out of the .csproj: with no explicit
+         mapping a project silently falls back to "Any CPU". Spell out the
+         identity mapping so the app really builds x86/x64/ARM64. -->
     <Project Path="LlamaApp.csproj">
+        <Platform Solution="*|x86" Project="x86" />
+        <Platform Solution="*|x64" Project="x64" />
+        <Platform Solution="*|ARM64" Project="ARM64" />
         <Deploy />
     </Project>
-    <Project Path="LlamaApp.HuggingFace/LlamaApp.HuggingFace.csproj" />
-    <Project Path="LlamaApp.LlamaCpp/LlamaApp.LlamaCpp.csproj" />
+    <Project Path="LlamaApp.HuggingFace/LlamaApp.HuggingFace.csproj">
+        <Platform Solution="*|*" Project="Any CPU" />
+    </Project>
+    <Project Path="LlamaApp.LlamaCpp/LlamaApp.LlamaCpp.csproj">
+        <Platform Solution="*|*" Project="Any CPU" />
+    </Project>
     <Project Path="LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj" />
     <Project Path="LlamaApp.Tests/LlamaApp.Tests.csproj" />
     <Properties Name="Visual Studio">

@@ -13,12 +13,13 @@ namespace LlamaApp.Tests;
 public class EmptyStatePresentationTests
 {
     [Fact]
-    public void Running_Points_At_Recommended_Section()
+    public void Running_Points_At_Browse_Section()
     {
         var text = EmptyStatePresentation.Describe(
             LlamaManager.ServerState.Running, LlamaManager.InstallState.Idle);
 
-        Assert.Contains("No models yet", text);
+        Assert.Contains("No models installed yet", text);
+        Assert.Contains("below", text);
     }
 
     [Fact]
