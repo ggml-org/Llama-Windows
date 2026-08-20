@@ -22,10 +22,10 @@ namespace LlamaApp.Views
             LlamaManager.ServerState status,
             LlamaManager.InstallState installState) => status switch
         {
-            // Server up, list genuinely empty: point at the Recommended
-            // section instead of a dead-end "No model yet".
+            // Server up, list genuinely empty: point at the browse section
+            // below instead of a dead-end "No model yet".
             LlamaManager.ServerState.Running =>
-                "No models yet — pick one below to get started",
+                "No models installed yet — choose a model below to get started",
             LlamaManager.ServerState.Starting =>
                 "Starting the llama server…",
             // Crashed / failed to start: say so and point at the footer's

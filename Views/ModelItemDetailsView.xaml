@@ -28,7 +28,8 @@
 
             <!-- Back to the list. Chromeless; the glyph + dim label read as a
                  breadcrumb rather than a button. -->
-            <Button Click="Back_Click"
+            <Button x:Name="BackButton"
+                    Click="Back_Click"
                     Padding="4,2"
                     MinWidth="0" MinHeight="0"
                     Background="Transparent"

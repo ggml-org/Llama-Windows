@@ -20,7 +20,7 @@ namespace LlamaApp.Views
     /// auto-hiding when it loses activation. This mirrors the macOS menu-bar
     /// app on Windows while hosting the three-section models panel.
     /// </summary>
-    public sealed partial class MainWindow : Window, IModelItemDetailsHost
+    public sealed partial class MainWindow : Window, IModelItemDetailsHost, IModelFamilyDetailsHost
     {
         // Flyout dimensions, in device-independent pixels (DIPs — the units XAML
         // layout uses). AppWindow sizes/positions are in PHYSICAL pixels, so these
@@ -73,21 +73,36 @@ namespace LlamaApp.Views
         /// <summary>Locally installed models — shown with a run glyph.</summary>
         public ObservableCollection<ModelItem> LocalModels { get; } = [];
 
-        /// <summary>Recommended Hub models — shown with a download glyph.</summary>
-        public ObservableCollection<ModelItem> RecommendedModels { get; } = [];
+        /// <summary>
+        /// The rows of the single models list: installed model rows, the
+        /// "Browse more" separator, then catalog family rows. Built from
+        /// <see cref="LocalModels"/> + <see cref="Families"/> by
+        /// <see cref="RebuildItems"/>/<see cref="RebuildBrowseTail"/>; the
+        /// 1s poller never touches it (property updates flow via bindings).
+        /// </summary>
+        public ObservableCollection<ModelListItemViewModel> Items { get; } = [];
+
+        /// <summary>The catalog's featured model families (browse section).</summary>
+        public ObservableCollection<ModelFamilyViewModel> Families { get; } = [];
+
+        // Wrapper cache: an installed row keeps the same list-item view-model
+        // across unrelated rebuilds, so the ListView's realized containers
+        // (and scroll position) survive membership churn.
+        private readonly Dictionary<ModelItem, InstalledModelListItemViewModel> _installedWrappers = new();
 
         /// <summary>
-        /// The remote catalog, fetched once and shared by both sections: the
-        /// Recommended section lists it directly, the Available section uses it
-        /// to enrich server-reported models (display name, params, size, brand
-        /// logo). Resolved before the per-section loaders run.
+        /// The remote catalog, fetched once as model families and shared by
+        /// both sections: the browse section lists the families directly, the
+        /// installed section uses the flattened form to enrich server-
+        /// reported models (display name, params, size, brand logo). Resolved
+        /// before the per-section loaders run.
         /// </summary>
-        private Task<List<Repository>> _catalogTask = null!;
+        private Task<List<ModelFamily>> _familiesTask = null!;
 
         // <summary>
         // The catalog reshaped into a bare-repo-id → <see cref="Repository"/>
         // lookup, collapsing the per-quant duplicates. Built EXACTLY ONCE, as a
-        // continuation over <see cref="_catalogTask"/> — the awaiters (initial
+        // continuation over <see cref="_familiesTask"/> — the awaiters (initial
         // populate, the per-second poller reconcile, the download-row builders)
         // all share the same projected task, so the GroupBy/ToDictionary runs
         // once no matter how many callers race it or how often the 1s poller
@@ -122,10 +137,10 @@ namespace LlamaApp.Views
         private LlamaManager.ServerState _lastServerStatus;
 
         /// <summary>
-        /// Last-seen <see cref="LlamaManager.BinaryPath"/> — the Recommended
-        /// fit evaluation needs the binary for its device probe, so a
-        /// catalog that landed before the binary was resolved/installed saw
-        /// no devices; the rows are re-evaluated once one appears (see
+        /// Last-seen <see cref="LlamaManager.BinaryPath"/> — the browse
+        /// families' fit evaluation needs the binary for its device probe, so
+        /// a catalog that landed before the binary was resolved/installed saw
+        /// no devices; the families are re-evaluated once one appears (see
         /// <c>OnStateChanged</c>).
         /// </summary>
         private string? _lastBinaryPath;
@@ -167,6 +182,16 @@ namespace LlamaApp.Views
             Closed += MainWindow_Closed;
             Activated += MainWindow_Activated;
 
+            // The single list mirrors LocalModels membership (installed rows)
+            // plus the browse tail (separator + families). Property updates
+            // (download progress, load state) flow through bindings without
+            // touching the collection — the 1s poller never rebuilds rows.
+            LocalModels.CollectionChanged += (_, _) =>
+            {
+                RebuildItems();
+                RebuildBrowseTail();
+            };
+
             LoadModels();
             LoadVersionInfo();
             UpdateServerStatusUI();
@@ -190,51 +215,52 @@ namespace LlamaApp.Views
         // ---- Data ----
 
         /// <summary>
-        /// Populates the model lists. The Recommended section comes straight from
-        /// the remote catalog; the Available section is fetched from the running
-        /// llama server's <c>GET /models</c> once it's reachable. Both share a
-        /// single catalog fetch (the Available rows are enriched from it).
+        /// Populates the model list. The browse section (catalog families)
+        /// comes straight from the remote catalog; the installed rows are
+        /// fetched from the running llama server's <c>GET /models</c> once
+        /// it's reachable. Both share a single catalog fetch (the installed
+        /// rows are enriched from it).
         /// </summary>
         private void LoadModels()
         {
             StartCatalogFetch();
-            _ = LoadRecommendedModelsAsync();
+            _ = LoadFamiliesAsync();
             _ = LoadLocalModelsAsync();
         }
 
         /// <summary>
         /// (Re)fetches the remote catalog and re-projects the repo-id lookup.
-        /// Split out of <see cref="LoadModels"/> so the Recommended section's
-        /// Retry button can refetch without touching the Available list.
+        /// Split out of <see cref="LoadModels"/> so the browse section's
+        /// "Try again" button can refetch without touching the installed list.
         /// </summary>
         private void StartCatalogFetch()
         {
-            _catalogTask = FetchCatalogAsync();
+            _familiesTask = FetchFamiliesAsync();
             // Project the fetched catalog into a repo-id lookup exactly once — a
             // continuation that runs when the fetch completes, shared by every
             // caller of GetCatalogByRepoAsync. ContinueWith(NotOnFaulted,
-            // TaskScheduler.Default) so an (impossible — FetchCatalogAsync never
+            // TaskScheduler.Default) so an (impossible — FetchFamiliesAsync never
             // faults) fault still yields a usable empty dictionary rather than
             // a faulted task awaited by callers that don't expect a throw.
-            _catalogByRepoTask = _catalogTask.ContinueWith(
-                t => t.Result
+            _catalogByRepoTask = _familiesTask.ContinueWith(
+                t => Catalog.Flatten(t.Result)
                     .GroupBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
                     .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase),
                 TaskContinuationOptions.NotOnFaulted | TaskContinuationOptions.RunContinuationsAsynchronously);
         }
 
         /// <summary>
-        /// Fetches the remote catalog once into <see cref="_catalogRepos"/> for
-        /// both sections. Never throws — a network failure just yields an empty
-        /// list (the Recommended section stays empty, Available rows aren't
-        /// enriched).
+        /// Fetches the remote catalog once as model families for both
+        /// sections. Never throws — a network failure just yields an empty
+        /// list (the browse section shows its inline error, installed rows
+        /// aren't enriched).
         /// </summary>
-        private async Task<List<Repository>> FetchCatalogAsync()
+        private async Task<List<ModelFamily>> FetchFamiliesAsync()
         {
-            try { return (await Catalog.FetchAsync()).ToList(); }
+            try { return (await Catalog.FetchFamiliesAsync()).ToList(); }
             catch (Exception ex)
             {
-                Log.Warn(ex, "catalog fetch failed; Recommended stays empty");
+                Log.Warn(ex, "catalog fetch failed; browse section stays empty");
                 return [];
             }
         }
@@ -331,7 +357,7 @@ namespace LlamaApp.Views
         /// <see cref="Repository"/> lookup, collapsing the per-quant duplicates
         /// (a repo can appear several times in the flattened catalog). The
         /// projection is materialized once by a continuation over
-        /// <see cref="_catalogTask"/> in <see cref="LoadModels"/>; callers just
+        /// <see cref="_familiesTask"/> in <see cref="LoadModels"/>; callers just
         /// await the shared <see cref="_catalogByRepoTask"/> so a high-frequency
         /// caller (the 1s <c>/models</c> poller via <see cref="ReconcileAsync"/>)
         /// doesn’t re-GroupBy the catalog on every tick.
@@ -393,87 +419,72 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Fetches the remote catalog and populates <see cref="RecommendedModels"/>.
-        /// Shares the single catalog fetch with the Available section.
+        /// Loads the catalog's model families into the browse section of the
+        /// single list. Shares the single catalog fetch with the installed
+        /// section. Async and non-blocking: while the fetch is in flight the
+        /// status line below the list says so, and installed models stay
+        /// fully usable.
         /// </summary>
-        private async Task LoadRecommendedModelsAsync()
+        private async Task LoadFamiliesAsync()
         {
-            List<Repository> repos;
-            try { repos = await _catalogTask; }
-            catch (Exception ex) { Log.Warn(ex, "recommended models load failed"); repos = []; }
+            List<ModelFamily> families;
+            try { families = await _familiesTask; }
+            catch (Exception ex) { Log.Warn(ex, "model families load failed"); families = []; }
 
             // An empty catalog after the fetch means it couldn't be loaded
             // (network/parse failure) — say so and offer a retry instead of
             // leaving the section silently blank.
-            if (repos.Count == 0)
+            if (families.Count == 0)
             {
-                RecommendedModelsList.Visibility = Visibility.Collapsed;
-                RecommendedStatusPanel.Visibility = Visibility.Visible;
-                RecommendedStatusText.Text = "Couldn't load the model catalog. Check your connection and try again.";
+                BrowseStatusRing.IsActive = false;
+                BrowseStatusRing.Visibility = Visibility.Collapsed;
+                BrowseStatusText.Text = "Couldn't load the model catalog. Check your connection and try again.";
                 RetryCatalogButton.Visibility = Visibility.Visible;
+                BrowseStatusPanel.Visibility = Visibility.Visible;
+                RebuildBrowseTail();
                 return;
             }
 
-            RecommendedModels.Clear(); // idempotent — safe on catalog retry
+            Families.Clear(); // idempotent — safe on catalog retry
 
-            // Build a display name that disambiguate quants: "GPT-OSS 20B (mxfp4)".
-            // Only featured families are shown (catalog order preserved).
-            foreach (var repo in RecommendedFiltering.FilterForDisplay(repos))
-            {
-                var label = !string.IsNullOrEmpty(repo.DisplayName)
-                    ? !string.IsNullOrEmpty(repo.Quant)
-                        ? $"{repo.DisplayName} ({repo.Quant})"
-                        : repo.DisplayName
-                    : repo.Name;
+            // Only featured families are shown, in catalog order (the
+            // catalog's own ordering is the deterministic display policy —
+            // no quality ranking or provider endorsement).
+            foreach (var family in RecommendedFiltering.FilterFamiliesForDisplay(families))
+                Families.Add(new ModelFamilyViewModel(family, ModelItem.ResolveLogo));
 
-                RecommendedModels.Add(new ModelItem
-                {
-                    Name = label,
-                    RepoName = repo.Name,
-                    Description = repo.Description,
-                    Parameters = repo.Parameters,
-                    Size = repo.Size,
-                    SizeBytes = repo.SizeBytes,
-                    License = repo.License,
-                    Vision = repo.Vision,
-                    Quant = repo.Quant,
-                    Downloadable = true,
-                    Brand = repo.Brand,
-                    Logo = ModelItem.ResolveLogo(repo.Brand),
-                });
-            }
+            BrowseStatusPanel.Visibility = Visibility.Collapsed;
+            RebuildBrowseTail();
 
-            RecommendedStatusPanel.Visibility = Visibility.Collapsed;
-            RetryCatalogButton.Visibility = Visibility.Collapsed;
-            RecommendedModelsList.Visibility = Visibility.Visible;
-
-            // Dim the rows the machine can't run — probe the devices once
-            // (`llama --list-devices`, CPU/RAM fallback) and check every
-            // row's estimated footprint against them. Fire-and-forget: the
-            // probe spawns a process and the list should render instantly;
-            // rows update in place once the verdicts land.
-            _ = EvaluateRecommendedFitsAsync();
+            // Dim the families the machine can't run — probe the devices
+            // once (`llama --list-devices`, CPU/RAM fallback) and check
+            // every build's estimated footprint against them. Fire-and-
+            // forget: the probe spawns a process and the list should render
+            // instantly; rows update in place once the verdicts land.
+            _ = EvaluateFamilyFitsAsync();
         }
 
         /// <summary>
-        /// Single-flight guard for <see cref="EvaluateRecommendedFitsAsync"/>
+        /// Single-flight guard for <see cref="EvaluateFamilyFitsAsync"/>
         /// — catalog retry and the binary-appearance re-evaluation can race.
         /// </summary>
         private bool _fitEvaluationRunning;
 
         /// <summary>
-        /// Dims the Recommended rows whose estimated memory footprint doesn't
-        /// fit this machine — and sinks them below the fitting rows, so the
-        /// top of the list is always what this machine can run. Probes the
-        /// accelerator devices once via
+        /// Dims the browse families whose every downloadable build is
+        /// estimated not to fit this machine — and sinks them below the
+        /// fitting families, so the top of the browse section is always
+        /// what this machine can run (a family fits when ANY of its builds
+        /// fits — the details view lets the user pick a smaller size/quant).
+        /// Probes the accelerator devices once via
         /// <see cref="LlamaManager.ListDevicesAsync"/> (system RAM when none)
-        /// and runs each row's catalog metadata (params/quant/size) through
+        /// and runs each build's catalog metadata (params/quant/size) through
         /// <see cref="ModelMemoryEstimator"/> + <see cref="MemoryFit"/> — the
-        /// same math the download preflight uses, so a dimmed row and a
-        /// blocked download always agree. Unknown estimates leave the row at
-        /// full strength (fail open).
+        /// same math the download preflight uses, so a dimmed family and a
+        /// blocked download always agree. Unknown estimates leave the family
+        /// at full strength (fail open).
         /// </summary>
-        private async Task EvaluateRecommendedFitsAsync()
+        private async Task EvaluateFamilyFitsAsync()
         {
             if (_fitEvaluationRunning) return;
             _fitEvaluationRunning = true;
@@ -485,36 +496,56 @@ namespace LlamaApp.Views
                 // Snapshot the rows: a catalog retry can repopulate the list
                 // mid-run — updating stale items is harmless, and the fresh
                 // pass covers the new ones.
-                var rows = RecommendedModels.ToList();
-                foreach (var item in rows)
+                var rows = Families.ToList();
+                foreach (var family in rows)
                 {
-                    var estimate = ModelMemoryEstimator.Estimate(
-                        item.Parameters, item.Quant, item.SizeBytes);
-                    var fit = MemoryFit.Check(estimate, devices, availableRam);
+                    // The note quotes the least-demanding build that still
+                    // didn't fit — the family's best shot — so the tooltip
+                    // reads honest ("even the smallest doesn't fit").
+                    MemoryFitResult? bestFit = null;
+                    foreach (var size in family.Family.Sizes)
+                    {
+                        foreach (var build in size.Builds)
+                        {
+                            var estimate = ModelMemoryEstimator.Estimate(
+                                size.Params, build.Quant, build.SizeBytes);
+                            var fit = MemoryFit.Check(estimate, devices, availableRam);
+                            if (fit.Fits)
+                            {
+                                bestFit = fit;
+                                break;
+                            }
+                            if (bestFit is null || fit.RequiredBytes < bestFit.RequiredBytes)
+                                bestFit = fit;
+                        }
+                        if (bestFit is { Fits: true }) break;
+                    }
+
                     // Note first, then the flag: the RowToolTip notification
                     // from FitsOnDevice already carries the reason.
-                    item.FitNote = fit.Fits ? null : DescribeFitFailure(fit);
-                    item.FitsOnDevice = fit.Fits;
+                    family.FitNote = bestFit is { Fits: true } ? null : DescribeFitFailure(bestFit!);
+                    family.FitsOnDevice = bestFit is not { Fits: false };
                 }
 
-                // Models the machine can run at the top, rows that don't fit
-                // sink below them (still rendered, still dimmed — the
-                // catalog's order is preserved within each half). Guarded
-                // against the stale-snapshot race: if a retry repopulated the
-                // list mid-run, its own pass owns the ordering.
-                if (RecommendedModels.Count == rows.Count &&
-                    rows.All(RecommendedModels.Contains))
+                // Fitting families on top, the rest sink below them (still
+                // rendered, still dimmed — catalog order is preserved within
+                // each half). Guarded against the stale-snapshot race: if a
+                // retry repopulated the list mid-run, its own pass owns the
+                // ordering.
+                if (Families.Count == rows.Count &&
+                    rows.All(Families.Contains))
                 {
                     RecommendedFiltering.ApplyOrder(
-                        RecommendedModels,
-                        RecommendedFiltering.PartitionFitFirst(rows, r => r.FitsOnDevice));
+                        Families,
+                        RecommendedFiltering.PartitionFitFirst(rows, f => f.FitsOnDevice));
+                    RebuildBrowseTail();
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // Fit graying is a hint — a failed probe just leaves every
-                // row at full strength (the download preflight still guards).
-                Log.Warn(ex, "recommended-row fit evaluation failed");
+                // family at full strength (the download preflight still guards).
+                Log.Warn(ex, "family fit evaluation failed");
             }
             finally
             {
@@ -523,8 +554,8 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// The dimmed row's tooltip line: what the model needs versus what
-        /// the machine has. Wording mirrors
+        /// The dimmed family's tooltip line: what even its smallest build
+        /// needs versus what the machine has. Wording mirrors
         /// <see cref="ShowInsufficientMemoryFlyout"/> so the dimmed hint and
         /// the click-time flyout tell the same story.
         /// </summary>
@@ -539,16 +570,95 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Retry button shown when the catalog fetch fails: refetches the catalog
-        /// and repopulates the Recommended section. The Available list is left
-        /// alone — it comes from the running server, not the catalog.
+        /// "Try again" shown when the catalog fetch fails: refetches the
+        /// catalog and repopulates the browse section. The installed list is
+        /// left alone — it comes from the running server, not the catalog.
         /// </summary>
         private void RetryCatalog_Click(object sender, RoutedEventArgs e)
         {
-            RecommendedStatusText.Text = "Loading models…";
+            BrowseStatusRing.IsActive = true;
+            BrowseStatusRing.Visibility = Visibility.Visible;
+            BrowseStatusText.Text = "Loading models…";
             RetryCatalogButton.Visibility = Visibility.Collapsed;
             StartCatalogFetch();
-            _ = LoadRecommendedModelsAsync();
+            _ = LoadFamiliesAsync();
+        }
+
+        /// <summary>
+        /// Re-syncs the list's installed prefix with <see cref="LocalModels"/>:
+        /// wrappers are cached per model so an unchanged row keeps its
+        /// view-model (and the ListView its realized container) across
+        /// unrelated rebuilds. Never touches the browse tail.
+        /// </summary>
+        private void RebuildItems()
+        {
+            // Drop wrappers whose model left the collection.
+            var current = new HashSet<ModelItem>(LocalModels);
+            foreach (var model in _installedWrappers.Keys.Where(m => !current.Contains(m)).ToList())
+            {
+                Items.Remove(_installedWrappers[model]);
+                _installedWrappers.Remove(model);
+            }
+
+            // Ensure every local model has a wrapper at its position.
+            for (var i = 0; i < LocalModels.Count; i++)
+            {
+                var model = LocalModels[i];
+                if (!_installedWrappers.TryGetValue(model, out var wrapper))
+                {
+                    wrapper = new InstalledModelListItemViewModel(model);
+                    _installedWrappers[model] = wrapper;
+                }
+                var index = Items.IndexOf(wrapper);
+                if (index < 0)
+                    Items.Insert(Math.Min(i, Items.Count), wrapper);
+                else if (index != i)
+                {
+                    Items.RemoveAt(index);
+                    Items.Insert(i, wrapper);
+                }
+            }
+
+            UpdateRowDividers();
+        }
+
+        /// <summary>
+        /// Rebuilds the list's browse tail (everything after the installed
+        /// prefix): the "Browse more" separator (only when there is something
+        /// on both sides of it) plus the catalog family rows. The
+        /// loading/error status line lives below the ListView, not in it.
+        /// </summary>
+        private void RebuildBrowseTail()
+        {
+            for (var i = Items.Count - 1; i >= LocalModels.Count; i--)
+                Items.RemoveAt(i);
+
+            if (Families.Count > 0)
+            {
+                if (LocalModels.Count > 0)
+                    Items.Add(new BrowseSeparatorListItemViewModel());
+                foreach (var family in Families)
+                    Items.Add(new ModelFamilyListItemViewModel(family));
+            }
+
+            UpdateRowDividers();
+        }
+
+        /// <summary>
+        /// Toggles the subtle row dividers: between content rows only —
+        /// never adjacent to the "Browse more" separator, never on the last
+        /// row.
+        /// </summary>
+        private void UpdateRowDividers()
+        {
+            ModelListItemViewModel? previous = null;
+            foreach (var item in Items)
+            {
+                item.ShowDivider = previous is not null
+                    && previous.Kind != ModelListItemKind.BrowseSeparator
+                    && item.Kind != ModelListItemKind.BrowseSeparator;
+                previous = item;
+            }
         }
 
         /// <summary>
@@ -559,7 +669,6 @@ namespace LlamaApp.Views
         {
             var empty = LocalModels.Count == 0;
             NoLocalModelsText.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
-            LocalModelsList.Visibility = empty ? Visibility.Collapsed : Visibility.Visible;
             if (empty)
             {
                 // Honest per-state text (mapping rules live in
@@ -576,37 +685,14 @@ namespace LlamaApp.Views
         // ---- Model download + launch ----
 
         /// <summary>
-        /// Fired when a row in the Recommended Models section is invoked —
-        /// clicked, or Enter/Space on the focused row (the row root is a
-        /// chromeless Button, so keyboard and screen-reader invokes land here
-        /// too). Moves the model to the Available section with a progress ring,
-        /// kicks off <see cref="LlamaManager.DownloadModelAsync"/> via the
-        /// running llama server, then loads it (see
-        /// <see cref="LoadAndWatchAsync"/>) when the download completes — the
-        /// row transitions download ring -> load ring -> OpenInNewWindow glyph.
+        /// The one-tap catalog download, shared by the family details view's
+        /// variant rows (and the installed-details view's Download action):
+        /// disk-space and memory preflights, then the model moves into the
+        /// installed section (downloading) and <see cref="DownloadAndLaunchAsync"/>
+        /// drives it. The family row stays in the browse list — other
+        /// sizes/variants of the family remain installable.
         /// </summary>
-        private async void RecommendedModel_Click(object sender, RoutedEventArgs e)
-        {
-            if (sender is not FrameworkElement fe)
-                return;
-            
-            // x:Bind doesn't set DataContext inside a DataTemplate (compiled
-            // bindings bypass the property), so read the row's model from its
-            // Tag (bound via Tag="{x:Bind}") and fall back to a visual-tree
-            // walk — same approach as the Available-row play/open buttons.
-            if (ResolveRowItem(fe) is not { } item)
-                return;
-
-            StartRecommendedDownload(item, fe);
-        }
-
-        /// <summary>
-        /// The one-tap recommended download, shared by the row's download
-        /// glyph and the details view's Download action: disk-space preflight,
-        /// then the model moves Recommended → Available (downloading) and
-        /// <see cref="DownloadAndLaunchAsync"/> drives it.
-        /// </summary>
-        private async void StartRecommendedDownload(ModelItem item, FrameworkElement spaceFlyoutTarget)
+        private async Task StartRecommendedDownloadAsync(ModelItem item, FrameworkElement spaceFlyoutTarget)
         {
             if (item.IsDownloading)
                 return; // already in flight (double-tap guard)
@@ -647,8 +733,7 @@ namespace LlamaApp.Views
                 Log.Warn(ex, "memory preflight failed; allowing the download");
             }
 
-            // Move the model from Recommended → Available (downloading).
-            RecommendedModels.Remove(item);
+            // Move the model into the installed section (downloading).
             item.Downloadable = false;
             item.IsDownloading = true;
             _localByServerId[((IModel)item).ServerModelId] = item;
@@ -1148,18 +1233,18 @@ namespace LlamaApp.Views
         /// <summary>The details ViewModel currently shown; null when the list is showing.</summary>
         private ModelItemDetailsViewModel? _detailsViewModel;
 
-        /// <summary>Row body of an Available row: open the model details view.</summary>
+        /// <summary>Row body of an installed row: open the model details view.</summary>
         private void LocalModelDetails_Click(object sender, RoutedEventArgs e)
         {
             if (sender is FrameworkElement fe && ResolveRowItem(fe) is { } item)
                 ShowDetails(item);
         }
 
-        /// <summary>Row body of a Recommended row: open the model details view.</summary>
-        private void RecommendedModelDetails_Click(object sender, RoutedEventArgs e)
+        /// <summary>A family row: open the family details view.</summary>
+        private void ModelFamily_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is FrameworkElement fe && ResolveRowItem(fe) is { } item)
-                ShowDetails(item);
+            if (sender is FrameworkElement fe && fe.Tag is ModelFamilyViewModel family)
+                ShowFamilyDetails(family);
         }
 
         /// <summary>
@@ -1185,20 +1270,47 @@ namespace LlamaApp.Views
                 });
             _detailsViewModel = vm;
             DetailsView.SetViewModel(vm);
-            ModelsScrollViewer.Visibility = Visibility.Collapsed;
+            ModelsPanel.Visibility = Visibility.Collapsed;
+            FamilyDetailsView.Visibility = Visibility.Collapsed;
             DetailsView.Visibility = Visibility.Visible;
+            DetailsView.FocusFirst();
             _ = vm.InitializeAsync();
+        }
+
+        /// <summary>The family details ViewModel currently shown; null when the list is showing.</summary>
+        private ModelFamilyDetailsViewModel? _familyDetailsViewModel;
+
+        /// <summary>
+        /// Swaps the models list for the details view of a catalog family —
+        /// the size → variant → download hierarchy. The ViewModel is created
+        /// per show (cheap: everything comes from the fetched catalog).
+        /// </summary>
+        private void ShowFamilyDetails(ModelFamilyViewModel family)
+        {
+            DisposeDetails(); // the two details views are mutually exclusive
+            var vm = new ModelFamilyDetailsViewModel(family.Family, host: this);
+            _familyDetailsViewModel = vm;
+            FamilyDetailsView.SetViewModel(vm);
+            ModelsPanel.Visibility = Visibility.Collapsed;
+            DetailsView.Visibility = Visibility.Collapsed;
+            FamilyDetailsView.Visibility = Visibility.Visible;
+            FamilyDetailsView.FocusFirst();
         }
 
         /// <summary>Back row in the details view: return to the models list.</summary>
         private void DetailsView_BackRequested(object? sender, EventArgs e) => HideDetails();
 
+        /// <summary>Back row in the family details view: return to the models list.</summary>
+        private void FamilyDetailsView_BackRequested(object? sender, EventArgs e) => HideDetails();
+
         /// <summary>Swaps the details view back for the models list.</summary>
         private void HideDetails()
         {
             DisposeDetails();
+            _familyDetailsViewModel = null;
             DetailsView.Visibility = Visibility.Collapsed;
-            ModelsScrollViewer.Visibility = Visibility.Visible;
+            FamilyDetailsView.Visibility = Visibility.Collapsed;
+            ModelsPanel.Visibility = Visibility.Visible;
         }
 
         /// <summary>Cancels any in-flight details load and drops the ViewModel.</summary>
@@ -1224,16 +1336,18 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// The recommended-row path, reused: same disk preflight, same move to
-        /// the Available section. When the download starts the details view
-        /// closes so the user watches the download ring in the list.
+        /// The catalog download path, reused: same disk + memory preflights,
+        /// same move into the installed section. When the download starts the
+        /// details view closes so the user watches the download ring in the
+        /// list.
         /// </summary>
-        Task IModelItemDetailsHost.DownloadAsync(ModelItem model)
+        async Task IModelItemDetailsHost.DownloadAsync(ModelItem model)
         {
-            StartRecommendedDownload(model, DetailsView);
+            // Await the preflights (disk + memory): IsDownloading only
+            // flips once both pass, and only then may the details close.
+            await StartRecommendedDownloadAsync(model, DetailsView);
             if (model.IsDownloading)
                 HideDetails();
-            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -1300,6 +1414,58 @@ namespace LlamaApp.Views
 
         void IModelItemDetailsHost.CloseDetails() => HideDetails();
 
+        // ----- IModelFamilyDetailsHost: the family details view drives the shell's workflows -----
+
+        /// <summary>
+        /// True when this exact build (repo + quant) is already installed —
+        /// the variant row then reads "Installed" instead of offering a
+        /// duplicate download. Same id forms the installed rows are keyed by
+        /// (repo:quant; the server reports a bare repo mid-download).
+        /// </summary>
+        bool IModelFamilyDetailsHost.IsVariantInstalled(ModelFamily family, ModelFamilySize size, ModelFamilyBuild build)
+        {
+            var serverId = build.Repo + ":" + build.Quant;
+            return _localByServerId.ContainsKey(serverId) || FindLocalByRepo(serverId) is not null;
+        }
+
+        /// <summary>
+        /// The catalog download path, reused for a family variant: materialize
+        /// the build as the <see cref="ModelItem"/> the app already
+        /// understands, run the same disk preflight + download workflow, then
+        /// close the details view so the user watches the download ring in
+        /// the list.
+        /// </summary>
+        void IModelFamilyDetailsHost.DownloadVariant(ModelFamily family, ModelFamilySize size, ModelFamilyBuild build)
+        {
+            var item = new ModelItem
+            {
+                Name = $"{size.Name} ({build.Quant})",
+                RepoName = build.Repo,
+                Description = family.Description,
+                Parameters = size.Params,
+                Size = build.Size,
+                SizeBytes = build.SizeBytes,
+                License = family.License,
+                Vision = size.Vision,
+                Quant = build.Quant,
+                Downloadable = true,
+                Brand = family.Brand,
+                Logo = ModelItem.ResolveLogo(family.Brand),
+            };
+            _ = StartVariantDownloadAsync(item);
+
+            // Await the preflights (disk + memory): IsDownloading only flips
+            // once both pass, and only then may the details close.
+            async Task StartVariantDownloadAsync(ModelItem model)
+            {
+                await StartRecommendedDownloadAsync(model, FamilyDetailsView);
+                if (model.IsDownloading)
+                    HideDetails();
+            }
+        }
+
+        void IModelFamilyDetailsHost.CloseDetails() => HideDetails();
+
         /// <summary>
         /// Opens the running llama server's WebUI in the system browser for the
         /// selected model — the action behind the OpenInNewWindow glyph on a
@@ -1322,9 +1488,9 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Unloads a loaded model from the running llama server — the action behind
-        /// the power glyph next to the OpenInNewWindow glyph on a loaded Available
-        /// row. Sends <c>POST /models/unload</c> and clears the row's loaded state
+        /// Stops a loaded model on the running llama server — the action behind
+        /// the stop glyph next to the OpenInNewWindow glyph on a loaded row.
+        /// Sends <c>POST /models/unload</c> and clears the row's loaded state
         /// once the server accepts the request; the poller will confirm the status
         /// change on its next tick.
         /// </summary>
@@ -1374,8 +1540,10 @@ namespace LlamaApp.Views
         /// </summary>
         private void RefreshRowLogos()
         {
-            foreach (var item in LocalModels.Concat(RecommendedModels))
+            foreach (var item in LocalModels)
                 item.Logo = ModelItem.ResolveLogo(item.Brand);
+            foreach (var family in Families)
+                family.Logo = ModelItem.ResolveLogo(family.Brand);
         }
 
         /// <summary>
@@ -1603,12 +1771,12 @@ namespace LlamaApp.Views
 
                 // A binary just appeared (resolved after startup or freshly
                 // installed): the first fit evaluation may have run without
-                // one and judged every row against CPU/RAM only — re-dim
+                // one and judged every family against CPU/RAM only — re-dim
                 // with the real device probe.
                 var binaryPath = LlamaManager.Shared.BinaryPath;
                 if (binaryPath is not null && _lastBinaryPath is null &&
-                    RecommendedModels.Count > 0)
-                    _ = EvaluateRecommendedFitsAsync();
+                    Families.Count > 0)
+                    _ = EvaluateFamilyFitsAsync();
                 _lastBinaryPath = binaryPath;
 
                 // A crash used to surface only as the footer's 8px dot colour
@@ -2147,9 +2315,10 @@ namespace LlamaApp.Views
             Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
         {
             args.Handled = true;
-            // With the details view open, Esc steps back to the models list
+            // With a details view open, Esc steps back to the models list
             // instead of dismissing the whole flyout.
-            if (DetailsView.Visibility == Visibility.Visible)
+            if (DetailsView.Visibility == Visibility.Visible ||
+                FamilyDetailsView.Visibility == Visibility.Visible)
                 HideDetails();
             else
                 HideFlyout();

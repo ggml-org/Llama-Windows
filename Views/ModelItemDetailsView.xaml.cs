@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Input;
 
 namespace LlamaApp.Views;
 
@@ -31,6 +32,9 @@ public sealed partial class ModelItemDetailsView : UserControl
         ViewModel = viewModel;
         Bindings.Update();
     }
+
+    /// <summary>Moves keyboard focus into the view when it opens (best effort).</summary>
+    public void FocusFirst() => BackButton.Focus(FocusState.Programmatic);
 
     private void Back_Click(object sender, RoutedEventArgs e)
         => BackRequested?.Invoke(this, EventArgs.Empty);

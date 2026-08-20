@@ -104,7 +104,9 @@ public class CatalogTests
     [Fact]
     public void Flatten_Empty_Input_Returns_Empty_List()
     {
-        Assert.Empty(Catalog.Flatten([]));
+        // Explicit element type: Flatten has two overloads (internal DTO
+        // families, public ModelFamily list).
+        Assert.Empty(Catalog.Flatten(Array.Empty<Catalog.CatalogFamily>()));
     }
 
     [Fact]

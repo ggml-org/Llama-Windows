@@ -231,6 +231,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(ResumeDownloadVisible));
             OnPropertyChanged(nameof(PausedPercentTextVisible));
             OnPropertyChanged(nameof(SubtitleText));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -249,6 +250,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(DownloadPercentTextVisible));
             OnPropertyChanged(nameof(PausedPercentTextVisible));
             OnPropertyChanged(nameof(IsIndeterminateDownload));
+            NotifyAccessibleNameChanged(); // the accessible name carries the percent
         }
     }
 
@@ -295,6 +297,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(CancelDownloadVisible));
             OnPropertyChanged(nameof(PausedPercentTextVisible));
             OnPropertyChanged(nameof(SubtitleText));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -313,6 +316,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(DownloadDetailText));
             OnPropertyChanged(nameof(SubtitleText));
+            NotifyAccessibleNameChanged(); // the accessible name carries the percent
         }
     }
 
@@ -358,6 +362,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -378,6 +383,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -408,6 +414,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(OpenGlyphVisible));
             OnPropertyChanged(nameof(IsIndeterminateLoad));
             OnPropertyChanged(nameof(LoadPercentTextVisible));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -450,6 +457,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(PlayGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -563,6 +571,30 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             ? DownloadProgressPresentation.FormatPausedDetail(DownloadedBytes, DownloadTotalBytes)
             : string.Join(" · ", new[] { Parameters, Size }
                 .Where(s => !string.IsNullOrWhiteSpace(s)));
+
+    // ---- Row state signals ----
+    // The running state is a green badge pinned to the logo tile; every other
+    // state already has its own affordance (load ring, warning dot + retry,
+    // progress ring). Screen readers get the state from the row's accessible
+    // name, so no state is color-only.
+
+    /// <summary>
+    /// The row's accessible name, e.g. "Gemma 3, ready" / "Gemma 3, running"
+    /// / "Gemma 3, downloading 42%".
+    /// </summary>
+    public string RowAccessibleName => $"{RowDisplayName}, {AccessibleStatusText}";
+
+    private string AccessibleStatusText =>
+        IsDownloading ? (DownloadFraction > 0 ? $"downloading {DownloadProgressPercent:0}%" : "downloading")
+        : DownloadPaused ? "download paused"
+        : DownloadFailed || LoadFailed ? "error"
+        : IsLoaded ? "running"
+        : IsLoading ? "starting"
+        : "ready";
+
+    /// <summary>Re-notifies the row's accessible name (called from the state setters).</summary>
+    private void NotifyAccessibleNameChanged()
+        => OnPropertyChanged(nameof(RowAccessibleName));
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? prop = null)
