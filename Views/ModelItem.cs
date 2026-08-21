@@ -260,20 +260,15 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// (MainWindow.DownloadAndLaunchAsync) when the download starts and cleared
     /// when it ends; the row's cancel button calls
     /// <see cref="CancellationTokenSource.Cancel"/> on it. Stays null for
-    /// downloads the app didn't start (WebUI / CLI) — those can't be canceled
-    /// from the row, so the setter notifies <see cref="CancelDownloadVisible"/>
-    /// to keep the cancel button in sync.
+    /// downloads the app didn't start (WebUI / CLI) — those are paused and
+    /// canceled via direct server-side calls instead (see MainWindow's
+    /// pause/cancel handlers). No row state derives from this anymore, so the
+    /// setter raises no notifications.
     /// </summary>
     public CancellationTokenSource? DownloadCancellation
     {
         get => _downloadCancellation;
-        set
-        {
-            if (ReferenceEquals(_downloadCancellation, value)) return;
-            _downloadCancellation = value;
-            OnPropertyChanged(nameof(CancelDownloadVisible));
-            OnPropertyChanged(nameof(CanPauseDownload));
-        }
+        set => _downloadCancellation = value;
     }
 
     /// <summary>
@@ -525,24 +520,24 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         DownloadPaused && !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed;
 
     /// <summary>
-    /// True when the progress ring's pause click can act — an app-driven
-    /// download is in flight. Externally-triggered downloads (WebUI / CLI)
-    /// have no <see cref="DownloadCancellation"/> source, so the ring's pause
-    /// button disables rather than offering a no-op pause (same rule as the
-    /// cancel button).
+    /// True when the progress ring's pause click can act — any download in
+    /// flight. App-driven downloads pause through their driver's cancellation
+    /// source; externally-triggered ones (WebUI / CLI) are paused with a
+    /// direct server-side stop (<see cref="LlamaManager.PauseServerDownloadAsync"/>),
+    /// which works for any download regardless of who started it.
     /// </summary>
-    public bool CanPauseDownload => IsDownloading && DownloadCancellation is not null;
+    public bool CanPauseDownload => IsDownloading;
 
     /// <summary>
-    /// True when the row's cancel-download button should be visible — while an
-    /// app-driven download is in flight, or while paused (there it abandons
-    /// the partial download and returns the row to the play glyph).
-    /// Externally-triggered downloads (WebUI / CLI) have no
-    /// <see cref="DownloadCancellation"/> source, so the button hides rather
-    /// than offering a no-op cancel.
+    /// True when the row's cancel-download button should be visible — while
+    /// any download is in flight, or while paused (there it abandons the
+    /// partial download and returns the row to the play glyph). Externally-
+    /// triggered downloads (WebUI / CLI) are cancellable too: the server-side
+    /// abort (<see cref="LlamaManager.CancelServerDownloadAsync"/>) works for
+    /// any download — no driver-owned cancellation source needed.
     /// </summary>
     public bool CancelDownloadVisible =>
-        (IsDownloading && DownloadCancellation is not null) ||
+        IsDownloading ||
         (DownloadPaused && !IsDownloading);
 
     /// <summary>True when the load ring should be visible.</summary>

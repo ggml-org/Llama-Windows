@@ -158,12 +158,13 @@ public class ModelItemStateMachineTests
     }
 
     [Fact]
-    public void Cancel_Button_Shown_Only_For_App_Driven_Downloads()
+    public void Cancel_Button_Shown_For_Any_Download()
     {
-        // An externally-triggered download (WebUI / CLI) has no cancellation
-        // source — the button must hide rather than offer a no-op cancel.
+        // An externally-triggered download (WebUI / CLI) has no driver-owned
+        // cancellation source, but the server-side abort works for any
+        // download — the button stays available.
         var item = new ModelItem { IsDownloading = true };
-        Assert.False(item.CancelDownloadVisible);
+        Assert.True(item.CancelDownloadVisible);
 
         // The driver assigns the source when the download starts...
         item.DownloadCancellation = new CancellationTokenSource();
@@ -171,7 +172,7 @@ public class ModelItemStateMachineTests
 
         // ...and clears it when the download ends (before IsDownloading flips).
         item.DownloadCancellation = null;
-        Assert.False(item.CancelDownloadVisible);
+        Assert.True(item.CancelDownloadVisible);
     }
 
     [Fact]
@@ -189,18 +190,20 @@ public class ModelItemStateMachineTests
     }
 
     [Fact]
-    public void DownloadCancellation_Raises_Cancel_Visibility_Notification()
+    public void DownloadCancellation_Raises_No_Notifications()
     {
+        // No row state derives from the cancellation source anymore (external
+        // downloads are paused/canceled server-side directly) — assigning it
+        // must not repaint anything.
         var item = new ModelItem { IsDownloading = true };
         var raised = new List<string?>();
         item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
 
         item.DownloadCancellation = new CancellationTokenSource();
-        Assert.Contains(nameof(ModelItem.CancelDownloadVisible), raised);
+        Assert.Empty(raised);
 
-        raised.Clear();
         item.DownloadCancellation = null;
-        Assert.Contains(nameof(ModelItem.CancelDownloadVisible), raised);
+        Assert.Empty(raised);
     }
 
     [Fact]
@@ -282,16 +285,16 @@ public class ModelItemStateMachineTests
     }
 
     [Fact]
-    public void Pause_Requires_An_App_Driven_Download_In_Flight()
+    public void Pause_Requires_A_Download_In_Flight()
     {
         var item = new ModelItem();
         Assert.False(item.CanPauseDownload); // idle
 
-        // An externally-triggered download (WebUI / CLI) has no cancellation
-        // source — the ring's pause button disables rather than offering a
-        // no-op pause (same rule as the cancel button).
+        // An externally-triggered download (WebUI / CLI) has no driver-owned
+        // cancellation source, but the server-side pause works for any
+        // download — the ring's pause button stays available.
         item.IsDownloading = true;
-        Assert.False(item.CanPauseDownload);
+        Assert.True(item.CanPauseDownload);
 
         item.DownloadCancellation = new CancellationTokenSource();
         Assert.True(item.CanPauseDownload);
@@ -301,17 +304,13 @@ public class ModelItemStateMachineTests
     }
 
     [Fact]
-    public void CanPauseDownload_Raises_Notifications_On_Both_Inputs()
+    public void CanPauseDownload_Raises_Notification_On_Download_State()
     {
         var item = new ModelItem();
         var raised = new List<string?>();
         item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
 
         item.IsDownloading = true;
-        Assert.Contains(nameof(ModelItem.CanPauseDownload), raised);
-
-        raised.Clear();
-        item.DownloadCancellation = new CancellationTokenSource();
         Assert.Contains(nameof(ModelItem.CanPauseDownload), raised);
     }
 

@@ -341,6 +341,19 @@ namespace LlamaApp.Views
         {
             var byRepo = await GetCatalogByRepoAsync();
 
+            // Re-check the trigger's condition ("only while the list is
+            // empty") at APPLY time: a download started (or the poller added
+            // a row) while this pass was waiting for the server. Clearing
+            // here would orphan the in-flight download's row — its driver
+            // keeps running, but the visible replacement row is poller-owned
+            // and loses the pause/cancel affordances. The poller reconciles
+            // the fetched models into the list within a second anyway.
+            if (LocalModels.Count > 0)
+            {
+                Log.Info("initial populate skipped: rows appeared while fetching (a download is likely in flight)");
+                return;
+            }
+
             LocalModels.Clear();
             _localByServerId.Clear();
             foreach (var sm in serverModels)
@@ -624,25 +637,53 @@ namespace LlamaApp.Views
             UpdateRowDividers();
         }
 
+        /// <summary>Wrapper cache for the browse tail — see <see cref="RebuildBrowseTail"/>.</summary>
+        private readonly Dictionary<ModelFamilyViewModel, ModelFamilyListItemViewModel> _familyWrappers = new();
+        private BrowseSeparatorListItemViewModel? _browseSeparator;
+
         /// <summary>
-        /// Rebuilds the list's browse tail (everything after the installed
+        /// Reconciles the list's browse tail (everything after the installed
         /// prefix): the "Browse more" separator (only when there is something
         /// on both sides of it) plus the catalog family rows. The
         /// loading/error status line lives below the ListView, not in it.
+        ///
+        /// <para>Wrappers are cached per family and the tail is left untouched
+        /// when its content hasn't changed: an installed-row add/remove (a
+        /// delete, a download start) only shifts the tail's POSITION, and a
+        /// tear-down/re-add would make the ListView recreate every family
+        /// row's container — a full visible repaint of the browse section.</para>
         /// </summary>
         private void RebuildBrowseTail()
         {
-            for (var i = Items.Count - 1; i >= LocalModels.Count; i--)
-                Items.RemoveAt(i);
-
+            // The desired tail, reusing cached wrappers so unchanged rows keep
+            // their realized containers.
+            var desired = new List<ModelListItemViewModel>();
             if (Families.Count > 0)
             {
                 if (LocalModels.Count > 0)
-                    Items.Add(new BrowseSeparatorListItemViewModel());
+                    desired.Add(_browseSeparator ??= new BrowseSeparatorListItemViewModel());
                 foreach (var family in Families)
-                    Items.Add(new ModelFamilyListItemViewModel(family));
+                {
+                    if (!_familyWrappers.TryGetValue(family, out var wrapper))
+                        _familyWrappers[family] = wrapper = new ModelFamilyListItemViewModel(family);
+                    desired.Add(wrapper);
+                }
             }
 
+            // No-op when the tail is already exactly right (content AND order).
+            var tailStart = LocalModels.Count;
+            if (Items.Count - tailStart != desired.Count ||
+                !desired.SequenceEqual(Items.Skip(tailStart)))
+            {
+                for (var i = Items.Count - 1; i >= tailStart; i--)
+                    Items.RemoveAt(i);
+                foreach (var item in desired)
+                    Items.Add(item);
+            }
+
+            // Divider adjacency can change even when the tail's content didn't
+            // (the last installed row's divider depends on what follows it);
+            // the setter no-ops on unchanged values, so this never repaints.
             UpdateRowDividers();
         }
 
@@ -1080,8 +1121,11 @@ namespace LlamaApp.Views
         /// partial bytes — the next attempt starts from zero. While paused the
         /// button abandons the partial instead: the server side is already
         /// stopped, so all that's left is deleting the leftover bytes.
+        /// Externally-triggered downloads (WebUI / CLI / another app instance)
+        /// have no driver to cancel — the server-side abort is called directly
+        /// (it works for any download, regardless of who started it).
         /// </summary>
-        private void LocalModelCancelDownload_Click(object sender, RoutedEventArgs e)
+        private async void LocalModelCancelDownload_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
             {
@@ -1107,36 +1151,67 @@ namespace LlamaApp.Views
                 return;
             }
 
-            Log.Info("cancel clicked: cancelling download of " + ((IModel)item).ServerModelId);
-            try { item.DownloadCancellation?.Cancel(); }
-            catch (ObjectDisposedException) { /* download finished between check and click */ }
+            if (item.DownloadCancellation is { } cts)
+            {
+                // App-driven: cancel the driver — it asks the server to abort
+                // as it unwinds (see DownloadAndLaunchAsync).
+                Log.Info("cancel clicked: cancelling download of " + ((IModel)item).ServerModelId);
+                try { cts.Cancel(); }
+                catch (ObjectDisposedException) { /* download finished between check and click */ }
+                return;
+            }
+
+            // External download: no driver owns it. Await the abort BEFORE the
+            // row leaves the downloading state (same ordering as the driver
+            // path) so the poller can't bounce the row back onto the ring.
+            if (!item.IsDownloading) return;
+            Log.Info("cancel clicked: cancelling external download of " + ((IModel)item).ServerModelId);
+            StopExternalDownloadWatch(item);
+            await LlamaManager.Shared.CancelServerDownloadAsync(((IModel)item).Name);
+            item.IsDownloading = false;
+            item.DownloadFraction = 0;
+            item.DownloadedBytes = 0;
+            item.DownloadTotalBytes = 0;
+            item.DownloadBytesPerSecond = 0;
         }
 
         /// <summary>
         /// Fired when the download progress ring is tapped: pauses the
-        /// download. Pause reuses the cancel path — the cancellation unwinds
-        /// <see cref="DownloadAndLaunchAsync"/>, which asks the server to stop
-        /// the download child WITHOUT deleting the partial bytes
-        /// (<see cref="LlamaManager.PauseServerDownloadAsync"/>) — but with
-        /// <see cref="ModelItem.DownloadPaused"/> set first, so the row lands
-        /// on the resume glyph instead of the play glyph. Resuming continues
-        /// where it left off. No-op for externally-triggered downloads (the
-        /// ring's button is disabled then — see <see cref="ModelItem.CanPauseDownload"/>).
+        /// download. For an app-driven download, pause reuses the cancel path
+        /// — the cancellation unwinds <see cref="DownloadAndLaunchAsync"/>,
+        /// which asks the server to stop the download child WITHOUT deleting
+        /// the partial bytes (<see cref="LlamaManager.PauseServerDownloadAsync"/>)
+        /// — but with <see cref="ModelItem.DownloadPaused"/> set first, so the
+        /// row lands on the resume glyph instead of the play glyph. An
+        /// externally-triggered download (WebUI / CLI) has no driver: the
+        /// server-side stop is called directly (it keeps the partials too).
+        /// Either way, resuming continues where it left off.
         /// </summary>
-        private void LocalModelPauseDownload_Click(object sender, RoutedEventArgs e)
+        private async void LocalModelPauseDownload_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
             {
                 Log.Warn("could not resolve a ModelItem");
                 return;
             }
-            if (!item.IsDownloading || item.DownloadCancellation is null)
-                return;
+            if (!item.IsDownloading) return;
 
             Log.Info("pause clicked: pausing download of " + ((IModel)item).ServerModelId);
             item.DownloadPaused = true;
-            try { item.DownloadCancellation.Cancel(); }
-            catch (ObjectDisposedException) { /* download finished between check and click */ }
+
+            if (item.DownloadCancellation is { } cts)
+            {
+                try { cts.Cancel(); }
+                catch (ObjectDisposedException) { /* download finished between check and click */ }
+                return;
+            }
+
+            // External download: no driver to cancel — stop the progress watch
+            // and pause server-side directly. Awaited before the row leaves
+            // the downloading state so the poller can't bounce it back.
+            StopExternalDownloadWatch(item);
+            await LlamaManager.Shared.PauseServerDownloadAsync(((IModel)item).Name);
+            item.IsDownloading = false;
         }
 
         /// <summary>

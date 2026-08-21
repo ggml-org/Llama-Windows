@@ -328,10 +328,15 @@
                              — multi-GB downloads need real progress feedback.
                              The ring is itself a button: click to pause the
                              download (the row swaps to the resume glyph below;
-                             clicking that resumes). Disabled for externally-
-                             triggered downloads (WebUI/CLI), which have no
-                             cancellation source — same rule as the cancel
-                             button, so pause is never a no-op. -->
+                             clicking that resumes). Works for externally-
+                             triggered downloads (WebUI/CLI) too — the pause
+                             handler stops those server-side directly. The
+                             visual-state backgrounds MUST stay transparent:
+                             a Button's PointerOver/Pressed/Disabled states
+                             override the local Background, and a gray box
+                             hugging the ring reads as "the progress indicator
+                             has a background". The row's own hover fill is
+                             feedback enough. -->
                         <Button Visibility="{x:Bind Model.ProgressRingVisible, Mode=OneWay}"
                                 IsEnabled="{x:Bind Model.CanPauseDownload, Mode=OneWay}"
                                 Click="LocalModelPauseDownload_Click"
@@ -343,6 +348,11 @@
                                 VerticalAlignment="Center"
                                 AutomationProperties.Name="Pause download"
                                 ToolTipService.ToolTip="Pause download">
+                            <Button.Resources>
+                                <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
+                            </Button.Resources>
                             <StackPanel VerticalAlignment="Center"
                                         Spacing="2">
                                 <ProgressRing Width="20" Height="20"
@@ -364,7 +374,10 @@
                              "resume the download" distinct from "load the
                              model" on an Available row. The cancel button
                              stays visible so a paused download can still be
-                             abandoned. -->
+                             abandoned. Same transparent-state overrides as the
+                             ring button above — the resume glyph occupies the
+                             ring's slot and must not gain a background box.
+                             -->
                         <Button Visibility="{x:Bind Model.ResumeDownloadVisible, Mode=OneWay}"
                                 Click="LocalModelResumeDownload_Click"
                                 Tag="{x:Bind Model}"
@@ -375,6 +388,11 @@
                                 VerticalAlignment="Center"
                                 AutomationProperties.Name="Resume download"
                                 ToolTipService.ToolTip="Resume download">
+                            <Button.Resources>
+                                <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
+                            </Button.Resources>
                             <StackPanel VerticalAlignment="Center"
                                         Spacing="2">
                                 <FontIcon Glyph="&#xE896;"
@@ -390,13 +408,12 @@
                         </Button>
 
                         <!-- Cancel download: stops the in-flight download (the
-                             server is asked to abort too; a partial download
-                             resumes on the next attempt). Sits at the trailing
-                             edge like the other row actions and shares their
-                             metrics. Hidden for externally-triggered downloads
-                             (WebUI / CLI), which have no cancellation source —
-                             CancelDownloadVisible excludes them so the button
-                             is never a no-op. Also shown while the download is
+                             server is asked to abort too, discarding the
+                             partial bytes). Sits at the trailing edge like the
+                             other row actions and shares their metrics. Shown
+                             for externally-triggered downloads (WebUI / CLI)
+                             too — the cancel handler aborts those server-side
+                             directly. Also shown while the download is
                              paused — there it abandons the partial (the server
                              side is already stopped) and returns the row to
                              the play glyph. The glyph MUST exist in both
