@@ -1129,8 +1129,10 @@ public sealed class LlamaManager
     /// the Hugging Face repo id (e.g. <c>ggml-org/gpt-oss-20b-GGUF</c>).</param>
     /// <param name="progress">Receives <see cref="ModelDownloadProgress"/> updates
     /// as the server streams them. May be <c>null</c>.</param>
-    /// <param name="cancel">Cancels the download (closes the SSE stream and
-    /// asks the server to stop via <c>DELETE /models/{name}</c>).</param>
+    /// <param name="cancel">Cancels the download (closes the SSE stream). The
+    /// caller then tells the server what to do with the in-flight download —
+    /// <see cref="PauseServerDownloadAsync"/> keeps the partial bytes for a
+    /// later resume, <see cref="CancelServerDownloadAsync"/> discards them.</param>
     /// <returns><c>true</c> if the download finished successfully;
     /// <c>false</c> on failure or cancellation.</returns>
     public async Task<bool> DownloadModelAsync(IModel model, IProgress<ModelDownloadProgress>? progress = null, CancellationToken cancel = default)
@@ -1243,8 +1245,10 @@ public sealed class LlamaManager
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
-            // User canceled — ask the server to stop the download.
-            await CancelServerDownloadAsync(modelName);
+            // User canceled — unwind the stream. The server-side download is
+            // still running at this point; stopping it is the caller's call
+            // (pause keeps the partials, cancel discards them), because only
+            // the caller knows which of the two the user asked for.
             progress?.Report(new ModelDownloadProgress(
                 modelName, 0, 0, Done: false, Failed: false, Message: "Cancelled"));
             throw;
@@ -1958,18 +1962,68 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Asks the server to cancel an in-flight download via
-    /// <c>DELETE /models/{name}</c>. Best-effort — the server may have already
-    /// finished or the request may fail; either way the SSE stream is closed
-    /// by the caller's cancellation.
+    /// <c>DELETE /models?model=&lt;name&gt;</c> — the router registers no
+    /// <c>/models/{name}</c> route, so the query-parameter form (same as
+    /// <see cref="DeleteModelAsync"/>) is the only one the server accepts; the
+    /// path form 404s and the download silently keeps going. The server stops
+    /// the download child process and removes the (partial) files from the
+    /// cache — a cancel starts over from byte zero, matching the macOS app's
+    /// discard semantics. For a stop that keeps the partials, see
+    /// <see cref="PauseServerDownloadAsync"/>.
     /// </summary>
-    private async Task CancelServerDownloadAsync(string modelName)
+    /// <param name="modelName">The bare repo id the download was POSTed with —
+    /// mid-download that is how the server keys the model (the quant resolves
+    /// only on completion).</param>
+    /// <remarks>Best-effort — the server may have already finished or the
+    /// request may fail; either way the caller's SSE stream is already
+    /// closed.</remarks>
+    public async Task CancelServerDownloadAsync(string modelName)
     {
         try
         {
+            var url = $"/models?model={Uri.EscapeDataString(modelName)}";
             using var budget = WithTimeout(TimeSpan.FromSeconds(10), CancellationToken.None);
-            using var resp = await _http.DeleteAsync($"/models/{Uri.EscapeDataString(modelName)}", budget.Token);
+            using var resp = await _http.DeleteAsync(url, budget.Token);
+            if (!resp.IsSuccessStatusCode)
+                Log.Warn($"server rejected download cancel for {modelName} ({(int)resp.StatusCode})");
         }
-        catch { /* Best-effort — don't surface cancel cleanup failures. */ }
+        catch (Exception ex)
+        {
+            // Best-effort — don't surface cancel cleanup failures.
+            Log.Warn(ex, $"download cancel request for {modelName} threw");
+        }
+    }
+
+    /// <summary>
+    /// Asks the server to stop an in-flight download while KEEPING the
+    /// partial bytes in the cache, so the next attempt resumes where it left
+    /// off — the pause counterpart of <see cref="CancelServerDownloadAsync"/>.
+    /// Uses <c>POST /models/unload</c>: the router cancels a downloading
+    /// model's child process on unload without touching the cache (unlike
+    /// <c>DELETE /models</c>, which also removes the partial files).
+    /// </summary>
+    /// <param name="modelName">The bare repo id the download was POSTed with —
+    /// mid-download that is how the server keys the model (the quant resolves
+    /// only on completion).</param>
+    /// <remarks>Best-effort — a failure leaves the download running
+    /// server-side; the row's state stays truthful regardless (the poller
+    /// re-marks it downloading).</remarks>
+    public async Task PauseServerDownloadAsync(string modelName)
+    {
+        try
+        {
+            var payload = $$"""{"model":"{{modelName}}"}""";
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            using var budget = WithTimeout(TimeSpan.FromSeconds(10), CancellationToken.None);
+            using var resp = await _http.PostAsync("/models/unload", content, budget.Token);
+            if (!resp.IsSuccessStatusCode)
+                Log.Warn($"server rejected download pause for {modelName} ({(int)resp.StatusCode})");
+        }
+        catch (Exception ex)
+        {
+            // Best-effort — don't surface pause cleanup failures.
+            Log.Warn(ex, $"download pause request for {modelName} threw");
+        }
     }
 
     // ---- Resolution ----

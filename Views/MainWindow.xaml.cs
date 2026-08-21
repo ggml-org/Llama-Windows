@@ -852,8 +852,9 @@ namespace LlamaApp.Views
             var queue = DispatcherQueue; // marshal progress back to the UI thread
 
             // Per-download cancellation: the row's cancel button cancels this
-            // source. DownloadModelAsync closes the SSE stream and asks the
-            // server to abort the download when the token fires.
+            // source. DownloadModelAsync closes the SSE stream when the token
+            // fires; the catch below then tells the server to stop the
+            // download (pause keeps the partials, cancel discards them).
             using var cts = new CancellationTokenSource();
             item.DownloadCancellation = cts;
             // Reset any stale detail from a previous (failed or paused) attempt
@@ -948,11 +949,23 @@ namespace LlamaApp.Views
             catch (OperationCanceledException)
             {
                 // User canceled from the row's cancel button, or paused by
-                // clicking the ring — the server has already been asked to
-                // abort (see DownloadModelAsync). A cancel returns the row to
-                // the play glyph; a pause (DownloadPaused set by the click)
-                // lands it on the resume glyph instead. Either way the partial
-                // bytes stay in the cache and resume on the next attempt.
+                // clicking the ring — the SSE stream is closed (see
+                // DownloadModelAsync), but the server-side download is still
+                // running: tell the server to stop it. A pause (DownloadPaused
+                // set by the click) unloads the download child and keeps the
+                // partial bytes so a resume continues where it left off; a
+                // cancel deletes them (the next attempt starts from zero).
+                // Awaited BEFORE the row leaves the downloading state: both
+                // server endpoints return once the teardown is done, so the
+                // poller can't observe a still-downloading model afterwards
+                // and bounce the row back onto the ring.
+                if (item.DownloadPaused)
+                    await mgr.PauseServerDownloadAsync(((IModel)item).Name);
+                else
+                    await mgr.CancelServerDownloadAsync(((IModel)item).Name);
+
+                // A cancel returns the row to the play glyph; a pause lands it
+                // on the resume glyph instead.
                 if (queue is null || queue.HasThreadAccess)
                     item.IsDownloading = false;
                 else
@@ -1062,10 +1075,10 @@ namespace LlamaApp.Views
         /// <summary>
         /// Fired when the cancel glyph next to the download ring is tapped:
         /// cancels the in-flight download. The server is asked to abort too
-        /// (see <see cref="LlamaManager.DownloadModelAsync"/>); the row returns
-        /// to the play glyph and a partial download resumes on the next attempt.
-        /// While paused the button abandons the partial instead — the server
-        /// side is already stopped, so there's nothing to cancel.
+        /// (see <see cref="DownloadAndLaunchAsync"/>), which discards the
+        /// partial bytes — the next attempt starts from zero. While paused the
+        /// button abandons the partial instead: the server side is already
+        /// stopped, so all that's left is deleting the leftover bytes.
         /// </summary>
         private void LocalModelCancelDownload_Click(object sender, RoutedEventArgs e)
         {
@@ -1078,14 +1091,18 @@ namespace LlamaApp.Views
             if (item.DownloadPaused)
             {
                 // Paused: the server-side download already stopped when the
-                // pause was requested — just abandon the partial and return
-                // the row to the play glyph.
+                // pause was requested — abandon the partial and return the row
+                // to the play glyph. The DELETE also discards the leftover
+                // bytes in the cache (best-effort: if the server already
+                // dropped the transient entry the request 404s and the bytes
+                // simply resume on the next attempt).
                 Log.Info("cancel clicked: abandoning paused download of " + ((IModel)item).ServerModelId);
                 item.DownloadPaused = false;
                 item.DownloadFraction = 0;
                 item.DownloadedBytes = 0;
                 item.DownloadTotalBytes = 0;
                 item.DownloadBytesPerSecond = 0;
+                _ = LlamaManager.Shared.CancelServerDownloadAsync(((IModel)item).Name);
                 return;
             }
 
@@ -1097,12 +1114,13 @@ namespace LlamaApp.Views
         /// <summary>
         /// Fired when the download progress ring is tapped: pauses the
         /// download. Pause reuses the cancel path — the cancellation unwinds
-        /// <see cref="DownloadAndLaunchAsync"/> and asks the server to abort —
-        /// but with <see cref="ModelItem.DownloadPaused"/> set first, so the
-        /// row lands on the resume glyph instead of the play glyph. The
-        /// partial bytes stay in the cache; resuming continues where it left
-        /// off. No-op for externally-triggered downloads (the ring's button is
-        /// disabled then — see <see cref="ModelItem.CanPauseDownload"/>).
+        /// <see cref="DownloadAndLaunchAsync"/>, which asks the server to stop
+        /// the download child WITHOUT deleting the partial bytes
+        /// (<see cref="LlamaManager.PauseServerDownloadAsync"/>) — but with
+        /// <see cref="ModelItem.DownloadPaused"/> set first, so the row lands
+        /// on the resume glyph instead of the play glyph. Resuming continues
+        /// where it left off. No-op for externally-triggered downloads (the
+        /// ring's button is disabled then — see <see cref="ModelItem.CanPauseDownload"/>).
         /// </summary>
         private void LocalModelPauseDownload_Click(object sender, RoutedEventArgs e)
         {
