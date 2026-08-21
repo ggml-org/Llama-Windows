@@ -1178,11 +1178,33 @@ public sealed class LlamaManager
             if (!postResp.IsSuccessStatusCode)
             {
                 var body = await postResp.Content.ReadAsStringAsync(cancel);
-                await sseCts.CancelAsync();
-                progress?.Report(new ModelDownloadProgress(
-                    modelName, 0, 0, Done: false, Failed: true,
-                    Message: $"Server rejected the request ({(int)postResp.StatusCode}): {body}"));
-                return false;
+
+                // The router rejects a duplicate POST ("model '…' already
+                // exists") — the same model is mid-download from the WebUI /
+                // the CLI / a previous app instance, or already fully on disk.
+                // Join the in-flight download instead of failing: the row
+                // keeps its progress AND its pause/cancel affordances, and the
+                // download → load flow completes normally. An already-complete
+                // model reports success right away so the caller loads it.
+                var duplicate = ClassifyDuplicateDownload(body, await GetModelStatusAsync(modelName, cancel));
+                if (duplicate == DuplicateDownloadAction.AlreadyComplete)
+                {
+                    Log.Info($"download already complete server-side: {modelName}");
+                    progress?.Report(new ModelDownloadProgress(
+                        modelName, 0, 0, Done: true, Failed: false, Message: "Already downloaded"));
+                    return true;
+                }
+                if (duplicate == DuplicateDownloadAction.Fail)
+                {
+                    await sseCts.CancelAsync();
+                    progress?.Report(new ModelDownloadProgress(
+                        modelName, 0, 0, Done: false, Failed: true,
+                        Message: $"Server rejected the request ({(int)postResp.StatusCode}): {body}"));
+                    return false;
+                }
+                Log.Info($"download already in flight server-side; joining it: {modelName}");
+                // Fall through to the SSE loop below — the stream was opened
+                // before the POST, so no progress events were missed.
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1566,6 +1588,51 @@ public sealed class LlamaManager
             Log.Error(ex, "model delete request threw");
             return (false, ex.Message);
         }
+    }
+
+    /// <summary>What to do when a download POST is rejected as a duplicate.</summary>
+    internal enum DuplicateDownloadAction
+    {
+        /// <summary>The rejection is a real error — fail the download.</summary>
+        Fail,
+        /// <summary>The model is mid-download server-side — watch the SSE stream to its end.</summary>
+        Join,
+        /// <summary>The model is already fully on disk — report success so the caller loads it.</summary>
+        AlreadyComplete,
+    }
+
+    /// <summary>
+    /// Classifies a rejected download POST: the router's
+    /// <c>"model '…' already exists"</c> error means a download for the model
+    /// is already in flight (join it) or the model is already cached (nothing
+    /// to do). Any other rejection is a genuine failure. A null
+    /// <paramref name="modelStatus"/> (the status lookup failed) joins: the
+    /// duplicate POST proves the server knows the model, and the realistic
+    /// case is an in-flight download.
+    /// </summary>
+    internal static DuplicateDownloadAction ClassifyDuplicateDownload(string errorBody, string? modelStatus)
+    {
+        if (!ExtractServerErrorMessage(errorBody).Contains("already exists", StringComparison.OrdinalIgnoreCase))
+            return DuplicateDownloadAction.Fail;
+        return modelStatus is null ||
+               modelStatus.Equals("downloading", StringComparison.OrdinalIgnoreCase)
+            ? DuplicateDownloadAction.Join
+            : DuplicateDownloadAction.AlreadyComplete;
+    }
+
+    /// <summary>
+    /// The server-reported status of a single model (<c>downloading</c>,
+    /// <c>unloaded</c>, …), matched by bare repo id (mid-download models are
+    /// keyed without their quant). Null when the model isn't listed or the
+    /// fetch failed.
+    /// </summary>
+    private async Task<string?> GetModelStatusAsync(string repoName, CancellationToken cancel)
+    {
+        var models = await GetModelsAsync(cancel);
+        var match = models.FirstOrDefault(m =>
+            string.Equals(m.Id, repoName, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(m.Id.Split(':')[0], repoName, StringComparison.OrdinalIgnoreCase));
+        return match?.Status;
     }
 
     /// <summary>

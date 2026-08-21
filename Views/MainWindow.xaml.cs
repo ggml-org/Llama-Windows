@@ -911,7 +911,11 @@ namespace LlamaApp.Views
             // chunk (potentially hundreds/sec), and each one would otherwise
             // enqueue a UI-thread callback. The ring + percent caption only need
             // ~10 updates/sec. Terminal events (Done/Failed) always pass through
-            // so the final state lands immediately.
+            // so the final state lands immediately — and so does the 100%
+            // progress event: the final chunks of a download arrive in a
+            // millisecond burst (the child's on_done right after its last
+            // on_update), and throttling them away leaves the ring frozen a
+            // notch below 100% at completion.
             long lastProgressApplyMs = 0;
             long lastSampleBytes = 0, lastSampleMs = 0;
             double bytesPerSecond = 0;
@@ -919,7 +923,8 @@ namespace LlamaApp.Views
             var progress = new Progress<ModelDownloadProgress>(p =>
             {
                 var now = Environment.TickCount64;
-                if (!p.Done && !p.Failed && now - lastProgressApplyMs < 100) return;
+                var isComplete = p.TotalBytes > 0 && p.DownloadedBytes >= p.TotalBytes;
+                if (!p.Done && !p.Failed && !isComplete && now - lastProgressApplyMs < 100) return;
                 lastProgressApplyMs = now;
 
                 // The server's rejection detail (POST error body, stream
@@ -950,6 +955,14 @@ namespace LlamaApp.Views
                         item.DownloadedBytes = p.DownloadedBytes;
                         item.DownloadTotalBytes = p.TotalBytes;
                         item.DownloadBytesPerSecond = bytesPerSecond;
+                    }
+                    else if (p.Done && !p.Failed && item.DownloadTotalBytes > 0)
+                    {
+                        // The completion report carries no byte counts — pin
+                        // the ring at 100% so the download visibly finishes
+                        // instead of hanging at the last throttled fraction.
+                        item.DownloadFraction = 1;
+                        item.DownloadedBytes = item.DownloadTotalBytes;
                     }
                 }
                 if (queue is null || queue.HasThreadAccess)
@@ -2128,6 +2141,10 @@ namespace LlamaApp.Views
                         item.IsLoaded = false;
                         item.IsLoading = false;
                         item.IsDownloading = true;
+                        // Server-truth downloading clears a stale failure —
+                        // e.g. a duplicate-download POST that was rejected
+                        // while the server-side download kept going.
+                        item.DownloadFailed = false;
                         // A download the app didn't start (WebUI/CLI) has no
                         // driver wiring byte progress — watch it over SSE
                         // ourselves, or the row sits on the indeterminate ring
@@ -2236,10 +2253,14 @@ namespace LlamaApp.Views
             double bytesPerSecond = 0;
             var progress = new Progress<ModelDownloadProgress>(p =>
             {
-                // Same throttle as DownloadAndLaunchAsync: ~10 UI updates/s, and
-                // total==0 events (stream noise) never touch the fraction.
+                // Same throttle as DownloadAndLaunchAsync: ~10 UI updates/s,
+                // total==0 events (stream noise) never touch the fraction, and
+                // the 100% event always passes (the final chunks arrive in a
+                // millisecond burst — throttling them away freezes the ring a
+                // notch below 100% at completion).
                 var now = Environment.TickCount64;
-                if (!p.Done && now - lastApplyMs < 100) return;
+                var isComplete = p.TotalBytes > 0 && p.DownloadedBytes >= p.TotalBytes;
+                if (!p.Done && !isComplete && now - lastApplyMs < 100) return;
                 lastApplyMs = now;
 
                 // Same speed estimate as the app-driven path, so an external
@@ -2263,6 +2284,13 @@ namespace LlamaApp.Views
                     item.DownloadedBytes = p.DownloadedBytes;
                     item.DownloadTotalBytes = p.TotalBytes;
                     item.DownloadBytesPerSecond = bytesPerSecond;
+                }
+                else if (p.Done && !p.Failed && item.DownloadTotalBytes > 0)
+                {
+                    // Pin 100% on completion — the completion report carries
+                    // no byte counts (see DownloadAndLaunchAsync).
+                    item.DownloadFraction = 1;
+                    item.DownloadedBytes = item.DownloadTotalBytes;
                 }
             });
 
