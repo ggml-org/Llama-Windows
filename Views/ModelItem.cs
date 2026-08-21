@@ -221,6 +221,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isDownloading = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(ProgressRingVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
@@ -293,6 +294,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _downloadPaused = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(ResumeDownloadVisible));
             OnPropertyChanged(nameof(CancelDownloadVisible));
             OnPropertyChanged(nameof(PausedPercentTextVisible));
@@ -362,6 +364,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             NotifyAccessibleNameChanged();
         }
     }
@@ -383,6 +386,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             NotifyAccessibleNameChanged();
         }
     }
@@ -410,6 +414,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isLoading = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
             OnPropertyChanged(nameof(IsIndeterminateLoad));
@@ -455,6 +460,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isLoaded = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
             NotifyAccessibleNameChanged();
@@ -475,6 +481,36 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// failed load shows the same affordance so the rejection isn't silent.
     /// </summary>
     public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed && !LoadFailed && !DownloadPaused;
+
+    /// <summary>
+    /// Whether the server allows removing this model from the cache (the
+    /// <c>can_remove</c> flag in <c>GET /models</c> — false for models sourced
+    /// from a presets file or <c>--models-dir</c>, which the router refuses
+    /// to delete). Fed by the poller (<c>BuildLocalItem</c>/<c>ReconcileAsync</c>).
+    /// Defaults to <c>true</c>: a row the server hasn't described yet (freshly
+    /// downloaded, snapshot still pending) keeps the affordance — fail open,
+    /// like every other probe in the app; a wrongful delete attempt is
+    /// surfaced by the failure flyout instead of being silently hidden.
+    /// </summary>
+    public bool CanRemove
+    {
+        get => _canRemove;
+        set
+        {
+            if (_canRemove == value) return;
+            _canRemove = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
+        }
+    }
+    private bool _canRemove = true;
+
+    /// <summary>
+    /// True when the row's delete (bin) affordance should be visible: an idle
+    /// row the server can actually remove. Offering delete for a model the
+    /// router will refuse (can_remove=false) made the bin icon a silent no-op.
+    /// </summary>
+    public bool DeleteGlyphVisible => PlayGlyphVisible && CanRemove;
 
     /// <summary>True when the download progress ring should be visible.</summary>
     public bool ProgressRingVisible => IsDownloading;

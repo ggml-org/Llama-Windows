@@ -269,12 +269,15 @@
                         </Button>
 
                         <!-- Delete button: remove the model from the server's
-                             cache (DELETE /models/{name}). Sits to the left of
-                             the play glyph; shown only while the model is
-                             unloaded (PlayGlyphVisible) so a loaded/loading
-                             row isn't accidentally deleted mid-use. Opens a
-                             confirmation flyout — deleting re-downloads GBs. -->
-                        <Button Visibility="{x:Bind Model.PlayGlyphVisible, Mode=OneWay}"
+                             cache (DELETE /models?model=<id>). Sits to the left
+                             of the play glyph; shown only while the model is
+                             unloaded and the server says it can be removed
+                             (DeleteGlyphVisible) — a loaded/loading row must
+                             not be deleted mid-use, and a non-removable row
+                             (preset/models_dir source) would just be rejected.
+                             Opens a confirmation flyout — deleting means
+                             re-downloading GBs. -->
+                        <Button Visibility="{x:Bind Model.DeleteGlyphVisible, Mode=OneWay}"
                                 Click="LocalModelDelete_Click"
                                 Tag="{x:Bind Model}"
                                 Padding="6"

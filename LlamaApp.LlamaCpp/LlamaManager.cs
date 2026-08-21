@@ -1532,17 +1532,20 @@ public sealed class LlamaManager
     /// The server deletes the on-disk GGUF and drops it from the model list;
     /// the <see cref="ModelsChanged"/> poller will surface the removal on its
     /// next tick (the server also emits a <c>model_remove</c> SSE event).
-    /// Returns <c>false</c> (without throwing) when the server isn't running or
-    /// rejects the request.
+    /// Returns <c>Ok=false</c> (without throwing) when the server isn't running
+    /// or rejects the request — with the server's reason in <c>Error</c> when
+    /// one was reported (e.g. <c>not removable (not from cache)</c> for models
+    /// sourced from a presets file or <c>--models-dir</c>, which the router
+    /// refuses to delete — see <c>can_remove</c> in <c>GET /models</c>).
     /// </summary>
     /// <param name="model">The model to delete; <see cref="Common.IModel.ServerModelId"/>
     /// is the canonical id the server knows.</param>
     /// <param name="cancel">Cancellation token.</param>
-    /// <returns><c>true</c> if the server accepted the delete request.</returns>
-    public async Task<bool> DeleteModelAsync(IModel model, CancellationToken cancel = default)
+    /// <returns><c>Ok=true</c> if the server accepted the delete request.</returns>
+    public async Task<(bool Ok, string? Error)> DeleteModelAsync(IModel model, CancellationToken cancel = default)
     {
         if (ServerStatus != ServerState.Running)
-            return false;
+            return (false, "The llama server is not running.");
 
         try
         {
@@ -1552,15 +1555,42 @@ public sealed class LlamaManager
             using var resp = await _http.DeleteAsync(url, budget.Token);
             if (!resp.IsSuccessStatusCode)
             {
-                Log.Warn($"server rejected model delete ({(int)resp.StatusCode})");
+                var body = await resp.Content.ReadAsStringAsync(cancel);
+                Log.Warn($"server rejected model delete ({(int)resp.StatusCode}): {body}");
+                return (false, ExtractServerErrorMessage(body));
             }
-            return resp.IsSuccessStatusCode;
+            return (true, null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Error(ex, "model delete request threw");
-            return false;
+            return (false, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Pulls the human-readable <c>error.message</c> out of a llama-server
+    /// error body (<c>{"error":{"message":"…"}}</c>). Falls back to the
+    /// raw body (truncated) when it isn't the expected JSON shape, so the UI
+    /// never shows an empty reason.
+    /// </summary>
+    internal static string ExtractServerErrorMessage(string body)
+    {
+        const int maxLen = 140;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("error", out var err) &&
+                err.TryGetProperty("message", out var msg) &&
+                msg.GetString() is { Length: > 0 } text)
+            {
+                return text.Length > maxLen ? text[..maxLen] + "…" : text;
+            }
+        }
+        catch (JsonException) { /* not JSON — fall through to the raw body */ }
+
+        var trimmed = body.Trim();
+        return trimmed.Length > maxLen ? trimmed[..maxLen] + "…" : trimmed;
     }
 
     /// <summary>

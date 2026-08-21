@@ -386,6 +386,7 @@ namespace LlamaApp.Views
                 Size = matched?.Size ?? "",
                 License = matched?.License ?? "",
                 Vision = sm.SupportsImage, // authoritative — from the server
+                CanRemove = sm.CanRemove,  // authoritative — from the server
                 Downloadable = false,
                 Brand = matched?.Brand,
                 Logo = ModelItem.ResolveLogo(matched?.Brand),
@@ -1222,7 +1223,7 @@ namespace LlamaApp.Views
                 return;
             }
 
-            await DeleteModelFromServerAsync(item);
+            await DeleteModelFromServerAsync(item, ModelsList);
         }
 
         /// <summary>
@@ -1230,12 +1231,15 @@ namespace LlamaApp.Views
         /// view: asks the server to remove the model and, on success, drops
         /// the row immediately (the poller's next tick would drop it too, but
         /// removing now avoids a stale row lingering for up to one poll
-        /// interval). Returns whether the model was deleted.
+        /// interval). A rejection is surfaced in a flyout with the server's
+        /// reason — a silent no-op is how "the delete button does nothing"
+        /// gets reported. Returns whether the model was deleted.
         /// </summary>
-        private async Task<bool> DeleteModelFromServerAsync(ModelItem item)
+        private async Task<bool> DeleteModelFromServerAsync(ModelItem item, FrameworkElement anchor)
         {
             Log.Info("delete confirmed: removing " + ((IModel)item).ServerModelId);
-            if (await LlamaManager.Shared.DeleteModelAsync(item))
+            var (ok, error) = await LlamaManager.Shared.DeleteModelAsync(item);
+            if (ok)
             {
                 _localByServerId.Remove(((IModel)item).ServerModelId);
                 LocalModels.Remove(item);
@@ -1243,8 +1247,50 @@ namespace LlamaApp.Views
                 return true;
             }
 
-            Log.Warn("server rejected delete for " + ((IModel)item).ServerModelId);
+            Log.Warn($"server rejected delete for {((IModel)item).ServerModelId}: {error}");
+            ShowDeleteFailedFlyout(anchor, item, error);
             return false;
+        }
+
+        /// <summary>
+        /// Shows a light-dismiss flyout when the server rejects a delete —
+        /// e.g. the model comes from a presets file or <c>--models-dir</c>,
+        /// which the router refuses to remove (<c>can_remove=false</c>). A
+        /// flyout, not a toast: a delete is always confirmed from the open
+        /// flyout, where <see cref="NotifyWhenHidden"/> would suppress it.
+        /// Same flyout-not-dialog rationale as <see cref="ShowInsufficientSpaceFlyout"/>.
+        /// </summary>
+        private static void ShowDeleteFailedFlyout(FrameworkElement target, ModelItem item, string? serverMessage)
+        {
+            var detail = string.IsNullOrWhiteSpace(serverMessage)
+                ? "The llama server refused to delete it."
+                : $"The llama server refused: {serverMessage}";
+
+            var flyout = new Flyout
+            {
+                Content = new StackPanel
+                {
+                    Spacing = 6,
+                    MaxWidth = 260,
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = $"Couldn't delete {item.DisplayName}",
+                            FontSize = 13,
+                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        },
+                        new TextBlock
+                        {
+                            Text = detail,
+                            FontSize = 12,
+                            Opacity = 0.7,
+                            TextWrapping = TextWrapping.Wrap,
+                        },
+                    },
+                },
+            };
+            flyout.ShowAt(target);
         }
 
         // ----- Model details view -----
@@ -1426,7 +1472,7 @@ namespace LlamaApp.Views
             flyout.ShowAt(DetailsView);
 
             if (!await confirmed.Task) return false;
-            var deleted = await DeleteModelFromServerAsync(model);
+            var deleted = await DeleteModelFromServerAsync(model, DetailsView);
             if (deleted) HideDetails();
             return deleted;
         }
@@ -1970,6 +2016,11 @@ namespace LlamaApp.Views
 
                 if (item is not null)
                 {
+                    // The server's say on removability can change across polls
+                    // (a presets/models-dir edit flips can_remove) — keep the
+                    // row's delete affordance in step.
+                    item.CanRemove = sm.CanRemove;
+
                     // Map the server's model states onto the row:
                     //   loaded     -> OpenInNewWindow glyph (IsLoaded, ring off)
                     //   sleeping   -> same as loaded (ServerModel.IsLoaded covers

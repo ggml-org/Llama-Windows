@@ -87,6 +87,67 @@ public class ModelItemStateMachineTests
         Assert.True(item.PlayGlyphVisible);
     }
 
+    // ----- Delete (bin) button visibility ----------------------------------
+
+    [Fact]
+    public void Delete_Button_Shown_For_An_Idle_Removable_Row()
+    {
+        var item = new ModelItem();
+        Assert.True(item.DeleteGlyphVisible);
+    }
+
+    [Fact]
+    public void Delete_Button_Hidden_When_The_Server_Says_Not_Removable()
+    {
+        // can_remove=false (preset / --models-dir source): the router refuses
+        // DELETE for those — offering the bin icon was a guaranteed silent
+        // no-op ("the delete button does nothing").
+        var item = new ModelItem { CanRemove = false };
+        Assert.False(item.DeleteGlyphVisible);
+        Assert.True(item.PlayGlyphVisible); // the row itself stays normal
+    }
+
+    [Fact]
+    public void Delete_Button_Follows_The_Play_Glyph_States()
+    {
+        // Every state that hides the play glyph hides the bin too.
+        var item = new ModelItem { IsLoaded = true };
+        Assert.False(item.DeleteGlyphVisible);
+
+        item = new ModelItem { IsLoading = true };
+        Assert.False(item.DeleteGlyphVisible);
+
+        item = new ModelItem { IsDownloading = true };
+        Assert.False(item.DeleteGlyphVisible);
+
+        item = new ModelItem { DownloadFailed = true };
+        Assert.False(item.DeleteGlyphVisible);
+    }
+
+    [Fact]
+    public void CanRemove_Raises_Delete_Visibility_Notification()
+    {
+        var item = new ModelItem();
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.CanRemove = false;
+        Assert.Contains(nameof(ModelItem.DeleteGlyphVisible), raised);
+    }
+
+    [Fact]
+    public void State_Changes_Raise_Delete_Visibility_Notification()
+    {
+        // The bin shares the play glyph's visibility inputs — each must
+        // re-notify DeleteGlyphVisible or the button lags one state behind.
+        var item = new ModelItem();
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.IsLoaded = true;
+        Assert.Contains(nameof(ModelItem.DeleteGlyphVisible), raised);
+    }
+
     // ----- Cancel-download button visibility -------------------------------
 
     [Fact]
