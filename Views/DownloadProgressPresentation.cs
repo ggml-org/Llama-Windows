@@ -45,14 +45,6 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Builds the detail line for a paused download: "Paused · 3.2 GB of
-        /// 12.1 GB" — the frozen byte counts with no speed/ETA (both are
-        /// meaningless once the stream is stopped).
-        /// </summary>
-        public static string FormatPausedDetail(long downloadedBytes, long totalBytes)
-            => $"Paused · {FormatBytes(downloadedBytes)} of {FormatBytes(totalBytes)}";
-
-        /// <summary>
         /// Coarse ETA label: "~30 s left" under a minute, "~N min left" up to
         /// 90 minutes, "~N h left" beyond. Deliberately imprecise — a
         /// second-accurate countdown would lie about a fluctuating stream.

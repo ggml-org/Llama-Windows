@@ -326,97 +326,30 @@
                         <!-- Download progress ring (downloading from the Hub)
                              with a percent caption once the byte count is known
                              — multi-GB downloads need real progress feedback.
-                             The ring is itself a button: click to pause the
-                             download (the row swaps to the resume glyph below;
-                             clicking that resumes). Works for externally-
-                             triggered downloads (WebUI/CLI) too — the pause
-                             handler stops those server-side directly. The
-                             visual-state backgrounds MUST stay transparent:
-                             a Button's PointerOver/Pressed/Disabled states
-                             override the local Background, and a gray box
-                             hugging the ring reads as "the progress indicator
-                             has a background". The row's own hover fill is
-                             feedback enough. -->
-                        <Button Visibility="{x:Bind Model.ProgressRingVisible, Mode=OneWay}"
-                                IsEnabled="{x:Bind Model.CanPauseDownload, Mode=OneWay}"
-                                Click="LocalModelPauseDownload_Click"
-                                Tag="{x:Bind Model}"
-                                Padding="0"
-                                MinWidth="0" MinHeight="0"
-                                Background="Transparent"
-                                BorderThickness="0"
-                                VerticalAlignment="Center"
-                                AutomationProperties.Name="Pause download"
-                                ToolTipService.ToolTip="Pause download">
-                            <Button.Resources>
-                                <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
-                                <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
-                                <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
-                            </Button.Resources>
-                            <StackPanel VerticalAlignment="Center"
-                                        Spacing="2">
-                                <ProgressRing Width="20" Height="20"
-                                              Value="{x:Bind Model.DownloadProgressPercent, Mode=OneWay}"
-                                              Maximum="100"
-                                              IsIndeterminate="{x:Bind Model.IsIndeterminateDownload, Mode=OneWay}"
-                                              HorizontalAlignment="Center" />
-                                <TextBlock Text="{x:Bind Model.DownloadProgressText, Mode=OneWay}"
-                                           Visibility="{x:Bind Model.DownloadPercentTextVisible, Mode=OneWay}"
-                                           FontSize="10"
-                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                           HorizontalAlignment="Center" />
-                            </StackPanel>
-                        </Button>
-
-                        <!-- Paused: resume glyph in the ring's slot, with the
-                             frozen percent below so the paused slot keeps the
-                             ring's shape. The download glyph (not play) keeps
-                             "resume the download" distinct from "load the
-                             model" on an Available row. The cancel button
-                             stays visible so a paused download can still be
-                             abandoned. Same transparent-state overrides as the
-                             ring button above — the resume glyph occupies the
-                             ring's slot and must not gain a background box.
-                             -->
-                        <Button Visibility="{x:Bind Model.ResumeDownloadVisible, Mode=OneWay}"
-                                Click="LocalModelResumeDownload_Click"
-                                Tag="{x:Bind Model}"
-                                Padding="0"
-                                MinWidth="0" MinHeight="0"
-                                Background="Transparent"
-                                BorderThickness="0"
-                                VerticalAlignment="Center"
-                                AutomationProperties.Name="Resume download"
-                                ToolTipService.ToolTip="Resume download">
-                            <Button.Resources>
-                                <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
-                                <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
-                                <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
-                            </Button.Resources>
-                            <StackPanel VerticalAlignment="Center"
-                                        Spacing="2">
-                                <FontIcon Glyph="&#xE896;"
-                                          FontSize="16"
-                                          Opacity="0.5"
+                             Plain presentation (not a button): stopping a
+                             download is the cancel button's job. -->
+                        <StackPanel Visibility="{x:Bind Model.ProgressRingVisible, Mode=OneWay}"
+                                    VerticalAlignment="Center"
+                                    Spacing="2">
+                            <ProgressRing Width="20" Height="20"
+                                          Value="{x:Bind Model.DownloadProgressPercent, Mode=OneWay}"
+                                          Maximum="100"
+                                          IsIndeterminate="{x:Bind Model.IsIndeterminateDownload, Mode=OneWay}"
                                           HorizontalAlignment="Center" />
-                                <TextBlock Text="{x:Bind Model.DownloadProgressText, Mode=OneWay}"
-                                           Visibility="{x:Bind Model.PausedPercentTextVisible, Mode=OneWay}"
-                                           FontSize="10"
-                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                           HorizontalAlignment="Center" />
-                            </StackPanel>
-                        </Button>
+                            <TextBlock Text="{x:Bind Model.DownloadProgressText, Mode=OneWay}"
+                                       Visibility="{x:Bind Model.DownloadPercentTextVisible, Mode=OneWay}"
+                                       FontSize="10"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       HorizontalAlignment="Center" />
+                        </StackPanel>
 
                         <!-- Cancel download: stops the in-flight download (the
-                             server is asked to abort too, discarding the
-                             partial bytes). Sits at the trailing edge like the
-                             other row actions and shares their metrics. Shown
-                             for externally-triggered downloads (WebUI / CLI)
-                             too — the cancel handler aborts those server-side
-                             directly. Also shown while the download is
-                             paused — there it abandons the partial (the server
-                             side is already stopped) and returns the row to
-                             the play glyph. The glyph MUST exist in both
+                             server is asked to stop it too). Sits at the
+                             trailing edge like the other row actions and
+                             shares their metrics. Shown for externally-
+                             triggered downloads (WebUI / CLI) too — the cancel
+                             handler stops those server-side directly. The
+                             glyph MUST exist in both
                              Segoe Fluent Icons and Segoe MDL2 Assets (see the
                              vision-marker comment above): U+E711 (Cancel) does.
                              The download -> load transition drops this button,

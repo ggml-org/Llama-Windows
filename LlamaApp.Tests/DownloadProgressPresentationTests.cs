@@ -51,24 +51,6 @@ public class DownloadProgressPresentationTests
         Assert.Equal("12.1 GB of 12.1 GB · 45 MB/s", text);
     }
 
-    [Fact]
-    public void FormatPausedDetail_Shows_Frozen_Bytes_Without_Speed_Or_Eta()
-    {
-        // A paused download's speed/ETA are meaningless — only the frozen
-        // byte counts are shown, with a "Paused" marker.
-        Assert.Equal(
-            "Paused · 3.2 GB of 12.1 GB",
-            DownloadProgressPresentation.FormatPausedDetail(3_200_000_000, 12_100_000_000));
-    }
-
-    [Fact]
-    public void FormatPausedDetail_Formats_Small_Counts()
-    {
-        Assert.Equal(
-            "Paused · 45 MB of 500 MB",
-            DownloadProgressPresentation.FormatPausedDetail(45_000_000, 500_000_000));
-    }
-
     [Theory]
     [InlineData(5, "~5 s left")]
     [InlineData(59, "~59 s left")]

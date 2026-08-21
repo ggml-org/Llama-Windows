@@ -9,19 +9,14 @@ using Xunit;
 namespace LlamaApp.LlamaCpp.Tests;
 
 /// <summary>
-/// Integration tests for the download-control requests
-/// (<see cref="LlamaManager.CancelServerDownloadAsync"/> /
-/// <see cref="LlamaManager.PauseServerDownloadAsync"/>) and the
+/// Integration tests for the download-cancel request
+/// (<see cref="LlamaManager.CancelServerDownloadAsync"/>) and the
 /// duplicate-download join (<see cref="LlamaManager.DownloadModelAsync"/>)
-/// against a real local HTTP listener. The llama.cpp router registers
-/// <c>DELETE /models</c> with the model name as a QUERY parameter — no
-/// <c>/models/{name}</c> route exists, so the path form 404s and the
-/// download silently keeps going (the "clicking X doesn't cancel" bug);
-/// pause goes to <c>POST /models/unload</c> with a JSON body, which stops
-/// the download child without deleting the partial files. A duplicate
-/// download POST is rejected with <c>"already exists"</c> — the app must
-/// join the in-flight download rather than fail (the "pause/cancel
-/// disappeared" bug).
+/// against a real local HTTP listener. Cancelling an in-flight download
+/// goes to <c>POST /models/unload</c> with a JSON body: the router cancels
+/// a downloading model's child process on unload. A duplicate download POST
+/// is rejected with <c>"already exists"</c> — the app must join the
+/// in-flight download rather than fail (the "cancel disappeared" bug).
 /// </summary>
 public class LlamaManagerDownloadControlTests
 {
@@ -46,7 +41,7 @@ public class LlamaManagerDownloadControlTests
     private static LlamaManager Mgr => _mgr ??= LlamaManager.Initialize(Port);
 
     [Fact]
-    public async Task Cancel_And_Pause_Use_The_Routes_The_Server_Registers()
+    public async Task Cancel_Uses_The_Route_The_Server_Registers()
     {
         using var listener = new HttpListener();
         listener.Prefixes.Add($"http://127.0.0.1:{Port}/");
@@ -82,21 +77,14 @@ public class LlamaManagerDownloadControlTests
 
         const string repo = "ggml-org/gpt-oss-20b-GGUF";
         await Mgr.CancelServerDownloadAsync(repo);
-        await Mgr.PauseServerDownloadAsync(repo);
 
         listener.Stop();
         await serve;
 
-        // Cancel: DELETE /models?model=<repo> — the query-parameter form is
-        // the only one the router accepts (and the one that aborts the
-        // download + removes the partials server-side).
-        Assert.Contains(requests, r =>
-            r.Method == "DELETE" && r.Path == "/models" && r.Model == repo);
-
-        // Pause: POST /models/unload {"model": "<repo>"} — stops the download
-        // child, keeps the partial bytes for a later resume.
-        var pause = Assert.Single(requests, r => r.Method == "POST" && r.Path == "/models/unload");
-        using var json = JsonDocument.Parse(pause.Body);
+        // Cancel: POST /models/unload {"model": "<repo>"} — the router
+        // cancels a downloading model's child process on unload.
+        var cancel = Assert.Single(requests, r => r.Method == "POST" && r.Path == "/models/unload");
+        using var json = JsonDocument.Parse(cancel.Body);
         Assert.Equal(repo, json.RootElement.GetProperty("model").GetString());
     }
 
