@@ -20,7 +20,6 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private long _downloadTotalBytes;
     private double _downloadBytesPerSecond;
     private bool _downloadFailed;
-    private bool _downloadPaused;
     private CancellationTokenSource? _downloadCancellation;
     private bool _isLoading;
     private double _loadFraction;
@@ -221,15 +220,13 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isDownloading = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(ProgressRingVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
             OnPropertyChanged(nameof(IsIndeterminateDownload));
             OnPropertyChanged(nameof(DownloadPercentTextVisible));
             OnPropertyChanged(nameof(CancelDownloadVisible));
-            OnPropertyChanged(nameof(CanPauseDownload));
-            OnPropertyChanged(nameof(ResumeDownloadVisible));
-            OnPropertyChanged(nameof(PausedPercentTextVisible));
             OnPropertyChanged(nameof(SubtitleText));
             NotifyAccessibleNameChanged();
         }
@@ -248,7 +245,6 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(DownloadProgressPercent));
             OnPropertyChanged(nameof(DownloadProgressText));
             OnPropertyChanged(nameof(DownloadPercentTextVisible));
-            OnPropertyChanged(nameof(PausedPercentTextVisible));
             OnPropertyChanged(nameof(IsIndeterminateDownload));
             NotifyAccessibleNameChanged(); // the accessible name carries the percent
         }
@@ -259,46 +255,15 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// (MainWindow.DownloadAndLaunchAsync) when the download starts and cleared
     /// when it ends; the row's cancel button calls
     /// <see cref="CancellationTokenSource.Cancel"/> on it. Stays null for
-    /// downloads the app didn't start (WebUI / CLI) — those can't be canceled
-    /// from the row, so the setter notifies <see cref="CancelDownloadVisible"/>
-    /// to keep the cancel button in sync.
+    /// downloads the app didn't start (WebUI / CLI) — those are canceled via
+    /// a direct server-side call instead (see MainWindow's cancel handler).
+    /// No row state derives from this anymore, so the setter raises no
+    /// notifications.
     /// </summary>
     public CancellationTokenSource? DownloadCancellation
     {
         get => _downloadCancellation;
-        set
-        {
-            if (ReferenceEquals(_downloadCancellation, value)) return;
-            _downloadCancellation = value;
-            OnPropertyChanged(nameof(CancelDownloadVisible));
-            OnPropertyChanged(nameof(CanPauseDownload));
-        }
-    }
-
-    /// <summary>
-    /// True when the user paused the download by clicking the progress ring.
-    /// The server-side download is already aborted (pause reuses the cancel
-    /// path — the partial bytes stay in the cache and the server resumes them
-    /// on the next attempt), so the row swaps the ring for a resume glyph in
-    /// the same slot; clicking it restarts the download. Set by the row's
-    /// pause button before the cancellation unwinds; cleared by the download
-    /// driver on (re)start, completion, or failure.
-    /// </summary>
-    public bool DownloadPaused
-    {
-        get => _downloadPaused;
-        set
-        {
-            if (_downloadPaused == value) return;
-            _downloadPaused = value;
-            OnPropertyChanged();
-            OnPropertyChanged(nameof(PlayGlyphVisible));
-            OnPropertyChanged(nameof(ResumeDownloadVisible));
-            OnPropertyChanged(nameof(CancelDownloadVisible));
-            OnPropertyChanged(nameof(PausedPercentTextVisible));
-            OnPropertyChanged(nameof(SubtitleText));
-            NotifyAccessibleNameChanged();
-        }
+        set => _downloadCancellation = value;
     }
 
     /// <summary>
@@ -362,6 +327,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             NotifyAccessibleNameChanged();
         }
     }
@@ -383,6 +349,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             NotifyAccessibleNameChanged();
         }
     }
@@ -410,6 +377,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isLoading = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
             OnPropertyChanged(nameof(IsIndeterminateLoad));
@@ -455,6 +423,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isLoaded = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
             NotifyAccessibleNameChanged();
@@ -474,40 +443,49 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// model isn't (fully) cached, so loading it would just be rejected. A
     /// failed load shows the same affordance so the rejection isn't silent.
     /// </summary>
-    public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed && !LoadFailed && !DownloadPaused;
+    public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed && !LoadFailed;
+
+    /// <summary>
+    /// Whether the server allows removing this model from the cache (the
+    /// <c>can_remove</c> flag in <c>GET /models</c> — false for models sourced
+    /// from a presets file or <c>--models-dir</c>, which the router refuses
+    /// to delete). Fed by the poller (<c>BuildLocalItem</c>/<c>ReconcileAsync</c>).
+    /// Defaults to <c>true</c>: a row the server hasn't described yet (freshly
+    /// downloaded, snapshot still pending) keeps the affordance — fail open,
+    /// like every other probe in the app; a wrongful delete attempt is
+    /// surfaced by the failure flyout instead of being silently hidden.
+    /// </summary>
+    public bool CanRemove
+    {
+        get => _canRemove;
+        set
+        {
+            if (_canRemove == value) return;
+            _canRemove = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
+        }
+    }
+    private bool _canRemove = true;
+
+    /// <summary>
+    /// True when the row's delete (bin) affordance should be visible: an idle
+    /// row the server can actually remove. Offering delete for a model the
+    /// router will refuse (can_remove=false) made the bin icon a silent no-op.
+    /// </summary>
+    public bool DeleteGlyphVisible => PlayGlyphVisible && CanRemove;
 
     /// <summary>True when the download progress ring should be visible.</summary>
     public bool ProgressRingVisible => IsDownloading;
 
     /// <summary>
-    /// True when the row's resume-download affordance should be visible — the
-    /// paused state, occupying the progress ring's slot so pause/resume
-    /// toggles in place. Excludes the transitional states a racing completion
-    /// could otherwise leave behind (load ring up, or the failure pair).
+    /// True when the row's cancel-download button should be visible — while
+    /// any download is in flight. Externally-triggered downloads (WebUI /
+    /// CLI) are cancellable too: the server-side cancel
+    /// (<see cref="LlamaManager.CancelServerDownloadAsync"/>) works for any
+    /// download — no driver-owned cancellation source needed.
     /// </summary>
-    public bool ResumeDownloadVisible =>
-        DownloadPaused && !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed;
-
-    /// <summary>
-    /// True when the progress ring's pause click can act — an app-driven
-    /// download is in flight. Externally-triggered downloads (WebUI / CLI)
-    /// have no <see cref="DownloadCancellation"/> source, so the ring's pause
-    /// button disables rather than offering a no-op pause (same rule as the
-    /// cancel button).
-    /// </summary>
-    public bool CanPauseDownload => IsDownloading && DownloadCancellation is not null;
-
-    /// <summary>
-    /// True when the row's cancel-download button should be visible — while an
-    /// app-driven download is in flight, or while paused (there it abandons
-    /// the partial download and returns the row to the play glyph).
-    /// Externally-triggered downloads (WebUI / CLI) have no
-    /// <see cref="DownloadCancellation"/> source, so the button hides rather
-    /// than offering a no-op cancel.
-    /// </summary>
-    public bool CancelDownloadVisible =>
-        (IsDownloading && DownloadCancellation is not null) ||
-        (DownloadPaused && !IsDownloading);
+    public bool CancelDownloadVisible => IsDownloading;
 
     /// <summary>True when the load ring should be visible.</summary>
     public bool LoadingRingVisible => IsLoading && !IsDownloading;
@@ -529,13 +507,6 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// a known byte count (an indeterminate ring shows no caption).
     /// </summary>
     public bool DownloadPercentTextVisible => IsDownloading && DownloadFraction > 0;
-
-    /// <summary>
-    /// True when the frozen percent caption should show under the paused
-    /// row's resume glyph — the download's last known completion, kept so the
-    /// paused slot keeps the ring's shape.
-    /// </summary>
-    public bool PausedPercentTextVisible => DownloadPaused && !IsDownloading && DownloadFraction > 0;
 
     /// <summary>True when the load ring should spin indeterminately (no progress reported yet).</summary>
     public bool IsIndeterminateLoad => IsLoading && LoadFraction <= 0;
@@ -561,16 +532,13 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
 
     /// <summary>
     /// The row's subtitle line: while a download with a known size runs, the
-    /// live progress detail (<see cref="DownloadDetailText"/>); while paused,
-    /// the frozen byte counts with a "Paused" marker; otherwise the catalog's
-    /// "params · size" pair (empty parts dropped).
+    /// live progress detail (<see cref="DownloadDetailText"/>); otherwise the
+    /// catalog's "params · size" pair (empty parts dropped).
     /// </summary>
     public string SubtitleText => IsDownloading && DownloadTotalBytes > 0
         ? DownloadDetailText
-        : DownloadPaused && DownloadTotalBytes > 0
-            ? DownloadProgressPresentation.FormatPausedDetail(DownloadedBytes, DownloadTotalBytes)
-            : string.Join(" · ", new[] { Parameters, Size }
-                .Where(s => !string.IsNullOrWhiteSpace(s)));
+        : string.Join(" · ", new[] { Parameters, Size }
+            .Where(s => !string.IsNullOrWhiteSpace(s)));
 
     // ---- Row state signals ----
     // The running state is a green badge pinned to the logo tile; every other
@@ -586,7 +554,6 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
 
     private string AccessibleStatusText =>
         IsDownloading ? (DownloadFraction > 0 ? $"downloading {DownloadProgressPercent:0}%" : "downloading")
-        : DownloadPaused ? "download paused"
         : DownloadFailed || LoadFailed ? "error"
         : IsLoaded ? "running"
         : IsLoading ? "starting"

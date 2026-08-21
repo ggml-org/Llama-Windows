@@ -341,6 +341,19 @@ namespace LlamaApp.Views
         {
             var byRepo = await GetCatalogByRepoAsync();
 
+            // Re-check the trigger's condition ("only while the list is
+            // empty") at APPLY time: a download started (or the poller added
+            // a row) while this pass was waiting for the server. Clearing
+            // here would orphan the in-flight download's row — its driver
+            // keeps running, but the visible replacement row is poller-owned
+            // and loses the cancel affordance. The poller reconciles
+            // the fetched models into the list within a second anyway.
+            if (LocalModels.Count > 0)
+            {
+                Log.Info("initial populate skipped: rows appeared while fetching (a download is likely in flight)");
+                return;
+            }
+
             LocalModels.Clear();
             _localByServerId.Clear();
             foreach (var sm in serverModels)
@@ -386,6 +399,7 @@ namespace LlamaApp.Views
                 Size = matched?.Size ?? "",
                 License = matched?.License ?? "",
                 Vision = sm.SupportsImage, // authoritative — from the server
+                CanRemove = sm.CanRemove,  // authoritative — from the server
                 Downloadable = false,
                 Brand = matched?.Brand,
                 Logo = ModelItem.ResolveLogo(matched?.Brand),
@@ -623,25 +637,53 @@ namespace LlamaApp.Views
             UpdateRowDividers();
         }
 
+        /// <summary>Wrapper cache for the browse tail — see <see cref="RebuildBrowseTail"/>.</summary>
+        private readonly Dictionary<ModelFamilyViewModel, ModelFamilyListItemViewModel> _familyWrappers = new();
+        private BrowseSeparatorListItemViewModel? _browseSeparator;
+
         /// <summary>
-        /// Rebuilds the list's browse tail (everything after the installed
+        /// Reconciles the list's browse tail (everything after the installed
         /// prefix): the "Browse more" separator (only when there is something
         /// on both sides of it) plus the catalog family rows. The
         /// loading/error status line lives below the ListView, not in it.
+        ///
+        /// <para>Wrappers are cached per family and the tail is left untouched
+        /// when its content hasn't changed: an installed-row add/remove (a
+        /// delete, a download start) only shifts the tail's POSITION, and a
+        /// tear-down/re-add would make the ListView recreate every family
+        /// row's container — a full visible repaint of the browse section.</para>
         /// </summary>
         private void RebuildBrowseTail()
         {
-            for (var i = Items.Count - 1; i >= LocalModels.Count; i--)
-                Items.RemoveAt(i);
-
+            // The desired tail, reusing cached wrappers so unchanged rows keep
+            // their realized containers.
+            var desired = new List<ModelListItemViewModel>();
             if (Families.Count > 0)
             {
                 if (LocalModels.Count > 0)
-                    Items.Add(new BrowseSeparatorListItemViewModel());
+                    desired.Add(_browseSeparator ??= new BrowseSeparatorListItemViewModel());
                 foreach (var family in Families)
-                    Items.Add(new ModelFamilyListItemViewModel(family));
+                {
+                    if (!_familyWrappers.TryGetValue(family, out var wrapper))
+                        _familyWrappers[family] = wrapper = new ModelFamilyListItemViewModel(family);
+                    desired.Add(wrapper);
+                }
             }
 
+            // No-op when the tail is already exactly right (content AND order).
+            var tailStart = LocalModels.Count;
+            if (Items.Count - tailStart != desired.Count ||
+                !desired.SequenceEqual(Items.Skip(tailStart)))
+            {
+                for (var i = Items.Count - 1; i >= tailStart; i--)
+                    Items.RemoveAt(i);
+                foreach (var item in desired)
+                    Items.Add(item);
+            }
+
+            // Divider adjacency can change even when the tail's content didn't
+            // (the last installed row's divider depends on what follows it);
+            // the setter no-ops on unchanged values, so this never repaints.
             UpdateRowDividers();
         }
 
@@ -852,14 +894,14 @@ namespace LlamaApp.Views
             var queue = DispatcherQueue; // marshal progress back to the UI thread
 
             // Per-download cancellation: the row's cancel button cancels this
-            // source. DownloadModelAsync closes the SSE stream and asks the
-            // server to abort the download when the token fires.
+            // source. DownloadModelAsync closes the SSE stream when the token
+            // fires; the catch below then tells the server to stop the
+            // download (CancelServerDownloadAsync).
             using var cts = new CancellationTokenSource();
             item.DownloadCancellation = cts;
-            // Reset any stale detail from a previous (failed or paused) attempt
+            // Reset any stale detail from a previous (failed) attempt
             // — the subtitle shows the live detail line as soon as a size is
             // known. Fresh SSE progress events repopulate the byte counts.
-            item.DownloadPaused = false;
             item.DownloadedBytes = 0;
             item.DownloadTotalBytes = 0;
             item.DownloadBytesPerSecond = 0;
@@ -868,7 +910,11 @@ namespace LlamaApp.Views
             // chunk (potentially hundreds/sec), and each one would otherwise
             // enqueue a UI-thread callback. The ring + percent caption only need
             // ~10 updates/sec. Terminal events (Done/Failed) always pass through
-            // so the final state lands immediately.
+            // so the final state lands immediately — and so does the 100%
+            // progress event: the final chunks of a download arrive in a
+            // millisecond burst (the child's on_done right after its last
+            // on_update), and throttling them away leaves the ring frozen a
+            // notch below 100% at completion.
             long lastProgressApplyMs = 0;
             long lastSampleBytes = 0, lastSampleMs = 0;
             double bytesPerSecond = 0;
@@ -876,7 +922,8 @@ namespace LlamaApp.Views
             var progress = new Progress<ModelDownloadProgress>(p =>
             {
                 var now = Environment.TickCount64;
-                if (!p.Done && !p.Failed && now - lastProgressApplyMs < 100) return;
+                var isComplete = p.TotalBytes > 0 && p.DownloadedBytes >= p.TotalBytes;
+                if (!p.Done && !p.Failed && !isComplete && now - lastProgressApplyMs < 100) return;
                 lastProgressApplyMs = now;
 
                 // The server's rejection detail (POST error body, stream
@@ -908,6 +955,14 @@ namespace LlamaApp.Views
                         item.DownloadTotalBytes = p.TotalBytes;
                         item.DownloadBytesPerSecond = bytesPerSecond;
                     }
+                    else if (p.Done && !p.Failed && item.DownloadTotalBytes > 0)
+                    {
+                        // The completion report carries no byte counts — pin
+                        // the ring at 100% so the download visibly finishes
+                        // instead of hanging at the last throttled fraction.
+                        item.DownloadFraction = 1;
+                        item.DownloadedBytes = item.DownloadTotalBytes;
+                    }
                 }
                 if (queue is null || queue.HasThreadAccess)
                     Apply();
@@ -921,9 +976,6 @@ namespace LlamaApp.Views
                 void Complete()
                 {
                     item.IsDownloading = false;
-                    // A pause click that raced the completion is discarded —
-                    // the download is over, there is nothing left to resume.
-                    item.DownloadPaused = false;
                     if (ok)
                     {
                         // Download done — load it. The row now shows the
@@ -947,12 +999,16 @@ namespace LlamaApp.Views
             }
             catch (OperationCanceledException)
             {
-                // User canceled from the row's cancel button, or paused by
-                // clicking the ring — the server has already been asked to
-                // abort (see DownloadModelAsync). A cancel returns the row to
-                // the play glyph; a pause (DownloadPaused set by the click)
-                // lands it on the resume glyph instead. Either way the partial
-                // bytes stay in the cache and resume on the next attempt.
+                // User canceled from the row's cancel button — the SSE stream
+                // is closed (see DownloadModelAsync), but the server-side
+                // download is still running: tell the server to stop it.
+                // Awaited BEFORE the row leaves the downloading state: the
+                // endpoint returns once the teardown is done, so the poller
+                // can't observe a still-downloading model afterwards and
+                // bounce the row back onto the ring.
+                await mgr.CancelServerDownloadAsync(((IModel)item).Name);
+
+                // A cancel returns the row to the play glyph.
                 if (queue is null || queue.HasThreadAccess)
                     item.IsDownloading = false;
                 else
@@ -963,7 +1019,6 @@ namespace LlamaApp.Views
                 void Fail()
                 {
                     item.IsDownloading = false;
-                    item.DownloadPaused = false;
                     item.DownloadFailed = true;
                     NotifyWhenHidden("Download failed",
                         DownloadFailureToastBody(item, serverMessage));
@@ -1061,13 +1116,13 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// Fired when the cancel glyph next to the download ring is tapped:
-        /// cancels the in-flight download. The server is asked to abort too
-        /// (see <see cref="LlamaManager.DownloadModelAsync"/>); the row returns
-        /// to the play glyph and a partial download resumes on the next attempt.
-        /// While paused the button abandons the partial instead — the server
-        /// side is already stopped, so there's nothing to cancel.
+        /// cancels the in-flight download. The server is asked to stop it too
+        /// (see <see cref="DownloadAndLaunchAsync"/>). Externally-triggered
+        /// downloads (WebUI / CLI / another app instance) have no driver to
+        /// cancel — the server-side cancel is called directly (it works for
+        /// any download, regardless of who started it).
         /// </summary>
-        private void LocalModelCancelDownload_Click(object sender, RoutedEventArgs e)
+        private async void LocalModelCancelDownload_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
             {
@@ -1075,70 +1130,28 @@ namespace LlamaApp.Views
                 return;
             }
 
-            if (item.DownloadPaused)
+            if (item.DownloadCancellation is { } cts)
             {
-                // Paused: the server-side download already stopped when the
-                // pause was requested — just abandon the partial and return
-                // the row to the play glyph.
-                Log.Info("cancel clicked: abandoning paused download of " + ((IModel)item).ServerModelId);
-                item.DownloadPaused = false;
-                item.DownloadFraction = 0;
-                item.DownloadedBytes = 0;
-                item.DownloadTotalBytes = 0;
-                item.DownloadBytesPerSecond = 0;
+                // App-driven: cancel the driver — it asks the server to stop
+                // the download as it unwinds (see DownloadAndLaunchAsync).
+                Log.Info("cancel clicked: cancelling download of " + ((IModel)item).ServerModelId);
+                try { cts.Cancel(); }
+                catch (ObjectDisposedException) { /* download finished between check and click */ }
                 return;
             }
 
-            Log.Info("cancel clicked: cancelling download of " + ((IModel)item).ServerModelId);
-            try { item.DownloadCancellation?.Cancel(); }
-            catch (ObjectDisposedException) { /* download finished between check and click */ }
-        }
-
-        /// <summary>
-        /// Fired when the download progress ring is tapped: pauses the
-        /// download. Pause reuses the cancel path — the cancellation unwinds
-        /// <see cref="DownloadAndLaunchAsync"/> and asks the server to abort —
-        /// but with <see cref="ModelItem.DownloadPaused"/> set first, so the
-        /// row lands on the resume glyph instead of the play glyph. The
-        /// partial bytes stay in the cache; resuming continues where it left
-        /// off. No-op for externally-triggered downloads (the ring's button is
-        /// disabled then — see <see cref="ModelItem.CanPauseDownload"/>).
-        /// </summary>
-        private void LocalModelPauseDownload_Click(object sender, RoutedEventArgs e)
-        {
-            if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
-            {
-                Log.Warn("could not resolve a ModelItem");
-                return;
-            }
-            if (!item.IsDownloading || item.DownloadCancellation is null)
-                return;
-
-            Log.Info("pause clicked: pausing download of " + ((IModel)item).ServerModelId);
-            item.DownloadPaused = true;
-            try { item.DownloadCancellation.Cancel(); }
-            catch (ObjectDisposedException) { /* download finished between check and click */ }
-        }
-
-        /// <summary>
-        /// Fired when the resume glyph on a paused row is tapped: restarts the
-        /// download → load lifecycle. The server resumes the transfer from the
-        /// partial bytes left in the cache by the pause's abort.
-        /// </summary>
-        private void LocalModelResumeDownload_Click(object sender, RoutedEventArgs e)
-        {
-            if (sender is not FrameworkElement fe || ResolveRowItem(fe) is not { } item)
-            {
-                Log.Warn("could not resolve a ModelItem");
-                return;
-            }
-            if (!item.DownloadPaused || item.IsDownloading)
-                return;
-
-            Log.Info("resume clicked: resuming download of " + ((IModel)item).ServerModelId);
-            item.DownloadPaused = false;
-            item.IsDownloading = true;
-            _ = DownloadAndLaunchAsync(item);
+            // External download: no driver owns it. Await the abort BEFORE the
+            // row leaves the downloading state (same ordering as the driver
+            // path) so the poller can't bounce the row back onto the ring.
+            if (!item.IsDownloading) return;
+            Log.Info("cancel clicked: cancelling external download of " + ((IModel)item).ServerModelId);
+            StopExternalDownloadWatch(item);
+            await LlamaManager.Shared.CancelServerDownloadAsync(((IModel)item).Name);
+            item.IsDownloading = false;
+            item.DownloadFraction = 0;
+            item.DownloadedBytes = 0;
+            item.DownloadTotalBytes = 0;
+            item.DownloadBytesPerSecond = 0;
         }
 
         /// <summary>
@@ -1204,7 +1217,7 @@ namespace LlamaApp.Views
                 return;
             }
 
-            await DeleteModelFromServerAsync(item);
+            await DeleteModelFromServerAsync(item, ModelsList);
         }
 
         /// <summary>
@@ -1212,12 +1225,15 @@ namespace LlamaApp.Views
         /// view: asks the server to remove the model and, on success, drops
         /// the row immediately (the poller's next tick would drop it too, but
         /// removing now avoids a stale row lingering for up to one poll
-        /// interval). Returns whether the model was deleted.
+        /// interval). A rejection is surfaced in a flyout with the server's
+        /// reason — a silent no-op is how "the delete button does nothing"
+        /// gets reported. Returns whether the model was deleted.
         /// </summary>
-        private async Task<bool> DeleteModelFromServerAsync(ModelItem item)
+        private async Task<bool> DeleteModelFromServerAsync(ModelItem item, FrameworkElement anchor)
         {
             Log.Info("delete confirmed: removing " + ((IModel)item).ServerModelId);
-            if (await LlamaManager.Shared.DeleteModelAsync(item))
+            var (ok, error) = await LlamaManager.Shared.DeleteModelAsync(item);
+            if (ok)
             {
                 _localByServerId.Remove(((IModel)item).ServerModelId);
                 LocalModels.Remove(item);
@@ -1225,8 +1241,50 @@ namespace LlamaApp.Views
                 return true;
             }
 
-            Log.Warn("server rejected delete for " + ((IModel)item).ServerModelId);
+            Log.Warn($"server rejected delete for {((IModel)item).ServerModelId}: {error}");
+            ShowDeleteFailedFlyout(anchor, item, error);
             return false;
+        }
+
+        /// <summary>
+        /// Shows a light-dismiss flyout when the server rejects a delete —
+        /// e.g. the model comes from a presets file or <c>--models-dir</c>,
+        /// which the router refuses to remove (<c>can_remove=false</c>). A
+        /// flyout, not a toast: a delete is always confirmed from the open
+        /// flyout, where <see cref="NotifyWhenHidden"/> would suppress it.
+        /// Same flyout-not-dialog rationale as <see cref="ShowInsufficientSpaceFlyout"/>.
+        /// </summary>
+        private static void ShowDeleteFailedFlyout(FrameworkElement target, ModelItem item, string? serverMessage)
+        {
+            var detail = string.IsNullOrWhiteSpace(serverMessage)
+                ? "The llama server refused to delete it."
+                : $"The llama server refused: {serverMessage}";
+
+            var flyout = new Flyout
+            {
+                Content = new StackPanel
+                {
+                    Spacing = 6,
+                    MaxWidth = 260,
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = $"Couldn't delete {item.DisplayName}",
+                            FontSize = 13,
+                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        },
+                        new TextBlock
+                        {
+                            Text = detail,
+                            FontSize = 12,
+                            Opacity = 0.7,
+                            TextWrapping = TextWrapping.Wrap,
+                        },
+                    },
+                },
+            };
+            flyout.ShowAt(target);
         }
 
         // ----- Model details view -----
@@ -1408,7 +1466,7 @@ namespace LlamaApp.Views
             flyout.ShowAt(DetailsView);
 
             if (!await confirmed.Task) return false;
-            var deleted = await DeleteModelFromServerAsync(model);
+            var deleted = await DeleteModelFromServerAsync(model, DetailsView);
             if (deleted) HideDetails();
             return deleted;
         }
@@ -1952,6 +2010,11 @@ namespace LlamaApp.Views
 
                 if (item is not null)
                 {
+                    // The server's say on removability can change across polls
+                    // (a presets/models-dir edit flips can_remove) — keep the
+                    // row's delete affordance in step.
+                    item.CanRemove = sm.CanRemove;
+
                     // Map the server's model states onto the row:
                     //   loaded     -> OpenInNewWindow glyph (IsLoaded, ring off)
                     //   sleeping   -> same as loaded (ServerModel.IsLoaded covers
@@ -1984,6 +2047,10 @@ namespace LlamaApp.Views
                         item.IsLoaded = false;
                         item.IsLoading = false;
                         item.IsDownloading = true;
+                        // Server-truth downloading clears a stale failure —
+                        // e.g. a duplicate-download POST that was rejected
+                        // while the server-side download kept going.
+                        item.DownloadFailed = false;
                         // A download the app didn't start (WebUI/CLI) has no
                         // driver wiring byte progress — watch it over SSE
                         // ourselves, or the row sits on the indeterminate ring
@@ -2092,10 +2159,14 @@ namespace LlamaApp.Views
             double bytesPerSecond = 0;
             var progress = new Progress<ModelDownloadProgress>(p =>
             {
-                // Same throttle as DownloadAndLaunchAsync: ~10 UI updates/s, and
-                // total==0 events (stream noise) never touch the fraction.
+                // Same throttle as DownloadAndLaunchAsync: ~10 UI updates/s,
+                // total==0 events (stream noise) never touch the fraction, and
+                // the 100% event always passes (the final chunks arrive in a
+                // millisecond burst — throttling them away freezes the ring a
+                // notch below 100% at completion).
                 var now = Environment.TickCount64;
-                if (!p.Done && now - lastApplyMs < 100) return;
+                var isComplete = p.TotalBytes > 0 && p.DownloadedBytes >= p.TotalBytes;
+                if (!p.Done && !isComplete && now - lastApplyMs < 100) return;
                 lastApplyMs = now;
 
                 // Same speed estimate as the app-driven path, so an external
@@ -2119,6 +2190,13 @@ namespace LlamaApp.Views
                     item.DownloadedBytes = p.DownloadedBytes;
                     item.DownloadTotalBytes = p.TotalBytes;
                     item.DownloadBytesPerSecond = bytesPerSecond;
+                }
+                else if (p.Done && !p.Failed && item.DownloadTotalBytes > 0)
+                {
+                    // Pin 100% on completion — the completion report carries
+                    // no byte counts (see DownloadAndLaunchAsync).
+                    item.DownloadFraction = 1;
+                    item.DownloadedBytes = item.DownloadTotalBytes;
                 }
             });
 

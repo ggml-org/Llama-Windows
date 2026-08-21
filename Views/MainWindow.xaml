@@ -269,12 +269,15 @@
                         </Button>
 
                         <!-- Delete button: remove the model from the server's
-                             cache (DELETE /models/{name}). Sits to the left of
-                             the play glyph; shown only while the model is
-                             unloaded (PlayGlyphVisible) so a loaded/loading
-                             row isn't accidentally deleted mid-use. Opens a
-                             confirmation flyout — deleting re-downloads GBs. -->
-                        <Button Visibility="{x:Bind Model.PlayGlyphVisible, Mode=OneWay}"
+                             cache (DELETE /models?model=<id>). Sits to the left
+                             of the play glyph; shown only while the model is
+                             unloaded and the server says it can be removed
+                             (DeleteGlyphVisible) — a loaded/loading row must
+                             not be deleted mid-use, and a non-removable row
+                             (preset/models_dir source) would just be rejected.
+                             Opens a confirmation flyout — deleting means
+                             re-downloading GBs. -->
+                        <Button Visibility="{x:Bind Model.DeleteGlyphVisible, Mode=OneWay}"
                                 Click="LocalModelDelete_Click"
                                 Tag="{x:Bind Model}"
                                 Padding="6"
@@ -323,80 +326,30 @@
                         <!-- Download progress ring (downloading from the Hub)
                              with a percent caption once the byte count is known
                              — multi-GB downloads need real progress feedback.
-                             The ring is itself a button: click to pause the
-                             download (the row swaps to the resume glyph below;
-                             clicking that resumes). Disabled for externally-
-                             triggered downloads (WebUI/CLI), which have no
-                             cancellation source — same rule as the cancel
-                             button, so pause is never a no-op. -->
-                        <Button Visibility="{x:Bind Model.ProgressRingVisible, Mode=OneWay}"
-                                IsEnabled="{x:Bind Model.CanPauseDownload, Mode=OneWay}"
-                                Click="LocalModelPauseDownload_Click"
-                                Tag="{x:Bind Model}"
-                                Padding="0"
-                                MinWidth="0" MinHeight="0"
-                                Background="Transparent"
-                                BorderThickness="0"
-                                VerticalAlignment="Center"
-                                AutomationProperties.Name="Pause download"
-                                ToolTipService.ToolTip="Pause download">
-                            <StackPanel VerticalAlignment="Center"
-                                        Spacing="2">
-                                <ProgressRing Width="20" Height="20"
-                                              Value="{x:Bind Model.DownloadProgressPercent, Mode=OneWay}"
-                                              Maximum="100"
-                                              IsIndeterminate="{x:Bind Model.IsIndeterminateDownload, Mode=OneWay}"
-                                              HorizontalAlignment="Center" />
-                                <TextBlock Text="{x:Bind Model.DownloadProgressText, Mode=OneWay}"
-                                           Visibility="{x:Bind Model.DownloadPercentTextVisible, Mode=OneWay}"
-                                           FontSize="10"
-                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                           HorizontalAlignment="Center" />
-                            </StackPanel>
-                        </Button>
-
-                        <!-- Paused: resume glyph in the ring's slot, with the
-                             frozen percent below so the paused slot keeps the
-                             ring's shape. The download glyph (not play) keeps
-                             "resume the download" distinct from "load the
-                             model" on an Available row. The cancel button
-                             stays visible so a paused download can still be
-                             abandoned. -->
-                        <Button Visibility="{x:Bind Model.ResumeDownloadVisible, Mode=OneWay}"
-                                Click="LocalModelResumeDownload_Click"
-                                Tag="{x:Bind Model}"
-                                Padding="0"
-                                MinWidth="0" MinHeight="0"
-                                Background="Transparent"
-                                BorderThickness="0"
-                                VerticalAlignment="Center"
-                                AutomationProperties.Name="Resume download"
-                                ToolTipService.ToolTip="Resume download">
-                            <StackPanel VerticalAlignment="Center"
-                                        Spacing="2">
-                                <FontIcon Glyph="&#xE896;"
-                                          FontSize="16"
-                                          Opacity="0.5"
+                             Plain presentation (not a button): stopping a
+                             download is the cancel button's job. -->
+                        <StackPanel Visibility="{x:Bind Model.ProgressRingVisible, Mode=OneWay}"
+                                    VerticalAlignment="Center"
+                                    Spacing="2">
+                            <ProgressRing Width="20" Height="20"
+                                          Value="{x:Bind Model.DownloadProgressPercent, Mode=OneWay}"
+                                          Maximum="100"
+                                          IsIndeterminate="{x:Bind Model.IsIndeterminateDownload, Mode=OneWay}"
                                           HorizontalAlignment="Center" />
-                                <TextBlock Text="{x:Bind Model.DownloadProgressText, Mode=OneWay}"
-                                           Visibility="{x:Bind Model.PausedPercentTextVisible, Mode=OneWay}"
-                                           FontSize="10"
-                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                           HorizontalAlignment="Center" />
-                            </StackPanel>
-                        </Button>
+                            <TextBlock Text="{x:Bind Model.DownloadProgressText, Mode=OneWay}"
+                                       Visibility="{x:Bind Model.DownloadPercentTextVisible, Mode=OneWay}"
+                                       FontSize="10"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       HorizontalAlignment="Center" />
+                        </StackPanel>
 
                         <!-- Cancel download: stops the in-flight download (the
-                             server is asked to abort too; a partial download
-                             resumes on the next attempt). Sits at the trailing
-                             edge like the other row actions and shares their
-                             metrics. Hidden for externally-triggered downloads
-                             (WebUI / CLI), which have no cancellation source —
-                             CancelDownloadVisible excludes them so the button
-                             is never a no-op. Also shown while the download is
-                             paused — there it abandons the partial (the server
-                             side is already stopped) and returns the row to
-                             the play glyph. The glyph MUST exist in both
+                             server is asked to stop it too). Sits at the
+                             trailing edge like the other row actions and
+                             shares their metrics. Shown for externally-
+                             triggered downloads (WebUI / CLI) too — the cancel
+                             handler stops those server-side directly. The
+                             glyph MUST exist in both
                              Segoe Fluent Icons and Segoe MDL2 Assets (see the
                              vision-marker comment above): U+E711 (Cancel) does.
                              The download -> load transition drops this button,

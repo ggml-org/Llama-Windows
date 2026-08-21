@@ -7,7 +7,7 @@ namespace LlamaApp.Tests;
 /// <summary>
 /// Unit tests for the <see cref="ModelItem"/> row state machine — the derived
 /// glyph-visibility properties that drive the Available-row action cell
-/// (play / download ring / load ring / open / pause-resume / failure
+/// (play / download ring / load ring / open / failure
 /// affordance), the download-progress captions, the change notifications,
 /// and the display-name / server-id helpers.
 ///
@@ -87,6 +87,67 @@ public class ModelItemStateMachineTests
         Assert.True(item.PlayGlyphVisible);
     }
 
+    // ----- Delete (bin) button visibility ----------------------------------
+
+    [Fact]
+    public void Delete_Button_Shown_For_An_Idle_Removable_Row()
+    {
+        var item = new ModelItem();
+        Assert.True(item.DeleteGlyphVisible);
+    }
+
+    [Fact]
+    public void Delete_Button_Hidden_When_The_Server_Says_Not_Removable()
+    {
+        // can_remove=false (preset / --models-dir source): the router refuses
+        // DELETE for those — offering the bin icon was a guaranteed silent
+        // no-op ("the delete button does nothing").
+        var item = new ModelItem { CanRemove = false };
+        Assert.False(item.DeleteGlyphVisible);
+        Assert.True(item.PlayGlyphVisible); // the row itself stays normal
+    }
+
+    [Fact]
+    public void Delete_Button_Follows_The_Play_Glyph_States()
+    {
+        // Every state that hides the play glyph hides the bin too.
+        var item = new ModelItem { IsLoaded = true };
+        Assert.False(item.DeleteGlyphVisible);
+
+        item = new ModelItem { IsLoading = true };
+        Assert.False(item.DeleteGlyphVisible);
+
+        item = new ModelItem { IsDownloading = true };
+        Assert.False(item.DeleteGlyphVisible);
+
+        item = new ModelItem { DownloadFailed = true };
+        Assert.False(item.DeleteGlyphVisible);
+    }
+
+    [Fact]
+    public void CanRemove_Raises_Delete_Visibility_Notification()
+    {
+        var item = new ModelItem();
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.CanRemove = false;
+        Assert.Contains(nameof(ModelItem.DeleteGlyphVisible), raised);
+    }
+
+    [Fact]
+    public void State_Changes_Raise_Delete_Visibility_Notification()
+    {
+        // The bin shares the play glyph's visibility inputs — each must
+        // re-notify DeleteGlyphVisible or the button lags one state behind.
+        var item = new ModelItem();
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.IsLoaded = true;
+        Assert.Contains(nameof(ModelItem.DeleteGlyphVisible), raised);
+    }
+
     // ----- Cancel-download button visibility -------------------------------
 
     [Fact]
@@ -97,12 +158,13 @@ public class ModelItemStateMachineTests
     }
 
     [Fact]
-    public void Cancel_Button_Shown_Only_For_App_Driven_Downloads()
+    public void Cancel_Button_Shown_For_Any_Download()
     {
-        // An externally-triggered download (WebUI / CLI) has no cancellation
-        // source — the button must hide rather than offer a no-op cancel.
+        // An externally-triggered download (WebUI / CLI) has no driver-owned
+        // cancellation source, but the server-side abort works for any
+        // download — the button stays available.
         var item = new ModelItem { IsDownloading = true };
-        Assert.False(item.CancelDownloadVisible);
+        Assert.True(item.CancelDownloadVisible);
 
         // The driver assigns the source when the download starts...
         item.DownloadCancellation = new CancellationTokenSource();
@@ -110,7 +172,7 @@ public class ModelItemStateMachineTests
 
         // ...and clears it when the download ends (before IsDownloading flips).
         item.DownloadCancellation = null;
-        Assert.False(item.CancelDownloadVisible);
+        Assert.True(item.CancelDownloadVisible);
     }
 
     [Fact]
@@ -128,18 +190,20 @@ public class ModelItemStateMachineTests
     }
 
     [Fact]
-    public void DownloadCancellation_Raises_Cancel_Visibility_Notification()
+    public void DownloadCancellation_Raises_No_Notifications()
     {
+        // No row state derives from the cancellation source anymore (external
+        // downloads are canceled server-side directly) — assigning it
+        // must not repaint anything.
         var item = new ModelItem { IsDownloading = true };
         var raised = new List<string?>();
         item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
 
         item.DownloadCancellation = new CancellationTokenSource();
-        Assert.Contains(nameof(ModelItem.CancelDownloadVisible), raised);
+        Assert.Empty(raised);
 
-        raised.Clear();
         item.DownloadCancellation = null;
-        Assert.Contains(nameof(ModelItem.CancelDownloadVisible), raised);
+        Assert.Empty(raised);
     }
 
     [Fact]
@@ -151,278 +215,6 @@ public class ModelItemStateMachineTests
 
         item.IsDownloading = true;
         Assert.Contains(nameof(ModelItem.CancelDownloadVisible), raised);
-    }
-
-    // ----- Pause / resume state machine ------------------------------------
-
-    [Fact]
-    public void Pausing_A_Download_Swaps_The_Ring_For_The_Resume_Glyph()
-    {
-        // The pause click sets DownloadPaused and cancels; the driver's
-        // cancellation unwind then clears IsDownloading (see
-        // MainWindow.LocalModelPauseDownload_Click / DownloadAndLaunchAsync).
-        var item = new ModelItem
-        {
-            IsDownloading = true,
-            DownloadCancellation = new CancellationTokenSource(),
-        };
-
-        item.DownloadPaused = true;       // pause click
-        item.IsDownloading = false;       // cancellation unwound
-        item.DownloadCancellation = null; // driver's finally
-
-        Assert.True(item.ResumeDownloadVisible);
-        Assert.False(item.ProgressRingVisible);
-        Assert.False(item.PlayGlyphVisible);
-        Assert.True(item.CancelDownloadVisible); // abandon affordance stays
-    }
-
-    [Fact]
-    public void Resume_Glyph_Hidden_When_Idle()
-    {
-        var item = new ModelItem();
-        Assert.False(item.ResumeDownloadVisible);
-    }
-
-    [Fact]
-    public void Resume_Glyph_Hides_While_The_Pause_Is_Racing_The_Download()
-    {
-        // Transitional state: the pause click set DownloadPaused but the
-        // cancellation hasn't unwound yet — the ring is still up, so the
-        // resume glyph must not double up in the same slot.
-        var item = new ModelItem
-        {
-            IsDownloading = true,
-            DownloadCancellation = new CancellationTokenSource(),
-            DownloadPaused = true,
-        };
-
-        Assert.False(item.ResumeDownloadVisible);
-        Assert.True(item.ProgressRingVisible);
-    }
-
-    [Theory]
-    [InlineData(true, false, false)]  // load ring up
-    [InlineData(false, true, false)]  // model loaded
-    [InlineData(false, false, true)]  // failure affordance up
-    public void Resume_Glyph_Hides_During_Transitional_States(bool isLoading, bool isLoaded, bool downloadFailed)
-    {
-        // A completion racing the pause could otherwise leave the resume
-        // glyph up next to the load ring or the failure pair.
-        var item = new ModelItem
-        {
-            DownloadPaused = true,
-            IsLoading = isLoading,
-            IsLoaded = isLoaded,
-            DownloadFailed = downloadFailed,
-        };
-
-        Assert.False(item.ResumeDownloadVisible);
-    }
-
-    [Fact]
-    public void Pause_Requires_An_App_Driven_Download_In_Flight()
-    {
-        var item = new ModelItem();
-        Assert.False(item.CanPauseDownload); // idle
-
-        // An externally-triggered download (WebUI / CLI) has no cancellation
-        // source — the ring's pause button disables rather than offering a
-        // no-op pause (same rule as the cancel button).
-        item.IsDownloading = true;
-        Assert.False(item.CanPauseDownload);
-
-        item.DownloadCancellation = new CancellationTokenSource();
-        Assert.True(item.CanPauseDownload);
-
-        item.IsDownloading = false;
-        Assert.False(item.CanPauseDownload);
-    }
-
-    [Fact]
-    public void CanPauseDownload_Raises_Notifications_On_Both_Inputs()
-    {
-        var item = new ModelItem();
-        var raised = new List<string?>();
-        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
-
-        item.IsDownloading = true;
-        Assert.Contains(nameof(ModelItem.CanPauseDownload), raised);
-
-        raised.Clear();
-        item.DownloadCancellation = new CancellationTokenSource();
-        Assert.Contains(nameof(ModelItem.CanPauseDownload), raised);
-    }
-
-    [Fact]
-    public void Cancel_Button_Stays_Visible_While_Paused()
-    {
-        // Paused: the cancel button abandons the partial download (the server
-        // side is already stopped), so it must not hide with the ring.
-        var item = new ModelItem
-        {
-            IsDownloading = true,
-            DownloadCancellation = new CancellationTokenSource(),
-        };
-
-        item.DownloadPaused = true;
-        item.IsDownloading = false;
-        item.DownloadCancellation = null;
-
-        Assert.True(item.CancelDownloadVisible);
-
-        // Abandoning the partial returns the row to idle — the button hides.
-        item.DownloadPaused = false;
-        Assert.False(item.CancelDownloadVisible);
-    }
-
-    [Fact]
-    public void Paused_Percent_Caption_Shows_The_Frozen_Completion()
-    {
-        var item = new ModelItem
-        {
-            IsDownloading = true,
-            DownloadFraction = 0.42,
-        };
-
-        item.DownloadPaused = true;
-        item.IsDownloading = false;
-
-        Assert.True(item.PausedPercentTextVisible);
-        Assert.Equal("42%", item.DownloadProgressText);
-        // The ring's live caption hides with the ring.
-        Assert.False(item.DownloadPercentTextVisible);
-    }
-
-    [Fact]
-    public void Paused_Percent_Caption_Hides_Without_Known_Progress()
-    {
-        // Paused before the first byte count arrived — no "0%" caption.
-        var item = new ModelItem { DownloadPaused = true };
-        Assert.False(item.PausedPercentTextVisible);
-    }
-
-    [Fact]
-    public void Paused_Subtitle_Shows_The_Frozen_Byte_Counts()
-    {
-        var item = new ModelItem
-        {
-            Parameters = "20B",
-            Size = "12.1 GB",
-            IsDownloading = true,
-            DownloadedBytes = 3_200_000_000,
-            DownloadTotalBytes = 12_100_000_000,
-        };
-
-        item.DownloadPaused = true;
-        item.IsDownloading = false;
-
-        Assert.Equal("Paused · 3.2 GB of 12.1 GB", item.SubtitleText);
-    }
-
-    [Fact]
-    public void Paused_Subtitle_Falls_Back_To_Params_Size_When_Size_Unknown()
-    {
-        // Paused before the server reported a size — no "Paused · 0 B of 0 B".
-        var item = new ModelItem
-        {
-            Parameters = "20B",
-            Size = "12.1 GB",
-            DownloadPaused = true,
-        };
-
-        Assert.Equal("20B · 12.1 GB", item.SubtitleText);
-    }
-
-    [Fact]
-    public void DownloadPaused_Raises_Derived_Property_Notifications()
-    {
-        var item = new ModelItem();
-        var raised = new List<string?>();
-        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
-
-        item.DownloadPaused = true;
-
-        Assert.Contains(nameof(ModelItem.DownloadPaused), raised);
-        Assert.Contains(nameof(ModelItem.PlayGlyphVisible), raised);
-        Assert.Contains(nameof(ModelItem.ResumeDownloadVisible), raised);
-        Assert.Contains(nameof(ModelItem.CancelDownloadVisible), raised);
-        Assert.Contains(nameof(ModelItem.PausedPercentTextVisible), raised);
-        Assert.Contains(nameof(ModelItem.SubtitleText), raised);
-    }
-
-    [Fact]
-    public void Resuming_Restarts_The_Download_Ring()
-    {
-        // The resume click clears DownloadPaused and re-enters the download
-        // driver, which reassigns the cancellation source (see
-        // MainWindow.LocalModelResumeDownload_Click / DownloadAndLaunchAsync).
-        var item = new ModelItem
-        {
-            DownloadPaused = true,
-            DownloadFraction = 0.42,
-            DownloadedBytes = 3_200_000_000,
-            DownloadTotalBytes = 12_100_000_000,
-        };
-
-        item.DownloadPaused = false;
-        item.IsDownloading = true;
-        item.DownloadCancellation = new CancellationTokenSource();
-
-        Assert.True(item.ProgressRingVisible);
-        Assert.False(item.ResumeDownloadVisible);
-        Assert.True(item.CanPauseDownload);
-        Assert.False(item.PlayGlyphVisible);
-    }
-
-    [Fact]
-    public void Abandoning_A_Paused_Download_Returns_The_Row_To_Play()
-    {
-        // Cancel while paused (see MainWindow.LocalModelCancelDownload_Click):
-        // the partial is abandoned and every download counter resets.
-        var item = new ModelItem
-        {
-            Parameters = "20B",
-            Size = "12.1 GB",
-            DownloadPaused = true,
-            DownloadFraction = 0.42,
-            DownloadedBytes = 3_200_000_000,
-            DownloadTotalBytes = 12_100_000_000,
-            DownloadBytesPerSecond = 45_000_000,
-        };
-
-        item.DownloadPaused = false;
-        item.DownloadFraction = 0;
-        item.DownloadedBytes = 0;
-        item.DownloadTotalBytes = 0;
-        item.DownloadBytesPerSecond = 0;
-
-        Assert.True(item.PlayGlyphVisible);
-        Assert.False(item.ResumeDownloadVisible);
-        Assert.False(item.CancelDownloadVisible);
-        Assert.False(item.PausedPercentTextVisible);
-        Assert.Equal("20B · 12.1 GB", item.SubtitleText);
-    }
-
-    [Fact]
-    public void Completion_Discards_A_Racing_Pause()
-    {
-        // The pause click landed just as the download finished — the driver's
-        // completion path clears DownloadPaused (nothing left to resume) and
-        // moves on to loading.
-        var item = new ModelItem
-        {
-            IsDownloading = true,
-            DownloadCancellation = new CancellationTokenSource(),
-            DownloadPaused = true,
-        };
-
-        item.IsDownloading = false;
-        item.DownloadPaused = false;
-        item.IsLoading = true;
-
-        Assert.False(item.ResumeDownloadVisible);
-        Assert.True(item.LoadingRingVisible);
     }
 
     // ----- Load failure affordance -----------------------------------------

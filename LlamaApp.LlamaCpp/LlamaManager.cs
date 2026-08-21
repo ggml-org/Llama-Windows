@@ -1129,8 +1129,9 @@ public sealed class LlamaManager
     /// the Hugging Face repo id (e.g. <c>ggml-org/gpt-oss-20b-GGUF</c>).</param>
     /// <param name="progress">Receives <see cref="ModelDownloadProgress"/> updates
     /// as the server streams them. May be <c>null</c>.</param>
-    /// <param name="cancel">Cancels the download (closes the SSE stream and
-    /// asks the server to stop via <c>DELETE /models/{name}</c>).</param>
+    /// <param name="cancel">Cancels the download (closes the SSE stream). The
+    /// caller then asks the server to stop the in-flight download
+    /// (<see cref="CancelServerDownloadAsync"/>).</param>
     /// <returns><c>true</c> if the download finished successfully;
     /// <c>false</c> on failure or cancellation.</returns>
     public async Task<bool> DownloadModelAsync(IModel model, IProgress<ModelDownloadProgress>? progress = null, CancellationToken cancel = default)
@@ -1176,11 +1177,33 @@ public sealed class LlamaManager
             if (!postResp.IsSuccessStatusCode)
             {
                 var body = await postResp.Content.ReadAsStringAsync(cancel);
-                await sseCts.CancelAsync();
-                progress?.Report(new ModelDownloadProgress(
-                    modelName, 0, 0, Done: false, Failed: true,
-                    Message: $"Server rejected the request ({(int)postResp.StatusCode}): {body}"));
-                return false;
+
+                // The router rejects a duplicate POST ("model '…' already
+                // exists") — the same model is mid-download from the WebUI /
+                // the CLI / a previous app instance, or already fully on disk.
+                // Join the in-flight download instead of failing: the row
+                // keeps its progress AND its pause/cancel affordances, and the
+                // download → load flow completes normally. An already-complete
+                // model reports success right away so the caller loads it.
+                var duplicate = ClassifyDuplicateDownload(body, await GetModelStatusAsync(modelName, cancel));
+                if (duplicate == DuplicateDownloadAction.AlreadyComplete)
+                {
+                    Log.Info($"download already complete server-side: {modelName}");
+                    progress?.Report(new ModelDownloadProgress(
+                        modelName, 0, 0, Done: true, Failed: false, Message: "Already downloaded"));
+                    return true;
+                }
+                if (duplicate == DuplicateDownloadAction.Fail)
+                {
+                    await sseCts.CancelAsync();
+                    progress?.Report(new ModelDownloadProgress(
+                        modelName, 0, 0, Done: false, Failed: true,
+                        Message: $"Server rejected the request ({(int)postResp.StatusCode}): {body}"));
+                    return false;
+                }
+                Log.Info($"download already in flight server-side; joining it: {modelName}");
+                // Fall through to the SSE loop below — the stream was opened
+                // before the POST, so no progress events were missed.
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1243,8 +1266,10 @@ public sealed class LlamaManager
         }
         catch (OperationCanceledException) when (cancel.IsCancellationRequested)
         {
-            // User canceled — ask the server to stop the download.
-            await CancelServerDownloadAsync(modelName);
+            // User canceled — unwind the stream. The server-side download is
+            // still running at this point; stopping it is the caller's call
+            // (CancelServerDownloadAsync), so the exception is rethrown rather
+            // than swallowed here.
             progress?.Report(new ModelDownloadProgress(
                 modelName, 0, 0, Done: false, Failed: false, Message: "Cancelled"));
             throw;
@@ -1528,17 +1553,20 @@ public sealed class LlamaManager
     /// The server deletes the on-disk GGUF and drops it from the model list;
     /// the <see cref="ModelsChanged"/> poller will surface the removal on its
     /// next tick (the server also emits a <c>model_remove</c> SSE event).
-    /// Returns <c>false</c> (without throwing) when the server isn't running or
-    /// rejects the request.
+    /// Returns <c>Ok=false</c> (without throwing) when the server isn't running
+    /// or rejects the request — with the server's reason in <c>Error</c> when
+    /// one was reported (e.g. <c>not removable (not from cache)</c> for models
+    /// sourced from a presets file or <c>--models-dir</c>, which the router
+    /// refuses to delete — see <c>can_remove</c> in <c>GET /models</c>).
     /// </summary>
     /// <param name="model">The model to delete; <see cref="Common.IModel.ServerModelId"/>
     /// is the canonical id the server knows.</param>
     /// <param name="cancel">Cancellation token.</param>
-    /// <returns><c>true</c> if the server accepted the delete request.</returns>
-    public async Task<bool> DeleteModelAsync(IModel model, CancellationToken cancel = default)
+    /// <returns><c>Ok=true</c> if the server accepted the delete request.</returns>
+    public async Task<(bool Ok, string? Error)> DeleteModelAsync(IModel model, CancellationToken cancel = default)
     {
         if (ServerStatus != ServerState.Running)
-            return false;
+            return (false, "The llama server is not running.");
 
         try
         {
@@ -1548,15 +1576,87 @@ public sealed class LlamaManager
             using var resp = await _http.DeleteAsync(url, budget.Token);
             if (!resp.IsSuccessStatusCode)
             {
-                Log.Warn($"server rejected model delete ({(int)resp.StatusCode})");
+                var body = await resp.Content.ReadAsStringAsync(cancel);
+                Log.Warn($"server rejected model delete ({(int)resp.StatusCode}): {body}");
+                return (false, ExtractServerErrorMessage(body));
             }
-            return resp.IsSuccessStatusCode;
+            return (true, null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Error(ex, "model delete request threw");
-            return false;
+            return (false, ex.Message);
         }
+    }
+
+    /// <summary>What to do when a download POST is rejected as a duplicate.</summary>
+    internal enum DuplicateDownloadAction
+    {
+        /// <summary>The rejection is a real error — fail the download.</summary>
+        Fail,
+        /// <summary>The model is mid-download server-side — watch the SSE stream to its end.</summary>
+        Join,
+        /// <summary>The model is already fully on disk — report success so the caller loads it.</summary>
+        AlreadyComplete,
+    }
+
+    /// <summary>
+    /// Classifies a rejected download POST: the router's
+    /// <c>"model '…' already exists"</c> error means a download for the model
+    /// is already in flight (join it) or the model is already cached (nothing
+    /// to do). Any other rejection is a genuine failure. A null
+    /// <paramref name="modelStatus"/> (the status lookup failed) joins: the
+    /// duplicate POST proves the server knows the model, and the realistic
+    /// case is an in-flight download.
+    /// </summary>
+    internal static DuplicateDownloadAction ClassifyDuplicateDownload(string errorBody, string? modelStatus)
+    {
+        if (!ExtractServerErrorMessage(errorBody).Contains("already exists", StringComparison.OrdinalIgnoreCase))
+            return DuplicateDownloadAction.Fail;
+        return modelStatus is null ||
+               modelStatus.Equals("downloading", StringComparison.OrdinalIgnoreCase)
+            ? DuplicateDownloadAction.Join
+            : DuplicateDownloadAction.AlreadyComplete;
+    }
+
+    /// <summary>
+    /// The server-reported status of a single model (<c>downloading</c>,
+    /// <c>unloaded</c>, …), matched by bare repo id (mid-download models are
+    /// keyed without their quant). Null when the model isn't listed or the
+    /// fetch failed.
+    /// </summary>
+    private async Task<string?> GetModelStatusAsync(string repoName, CancellationToken cancel)
+    {
+        var models = await GetModelsAsync(cancel);
+        var match = models.FirstOrDefault(m =>
+            string.Equals(m.Id, repoName, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(m.Id.Split(':')[0], repoName, StringComparison.OrdinalIgnoreCase));
+        return match?.Status;
+    }
+
+    /// <summary>
+    /// Pulls the human-readable <c>error.message</c> out of a llama-server
+    /// error body (<c>{"error":{"message":"…"}}</c>). Falls back to the
+    /// raw body (truncated) when it isn't the expected JSON shape, so the UI
+    /// never shows an empty reason.
+    /// </summary>
+    internal static string ExtractServerErrorMessage(string body)
+    {
+        const int maxLen = 140;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("error", out var err) &&
+                err.TryGetProperty("message", out var msg) &&
+                msg.GetString() is { Length: > 0 } text)
+            {
+                return text.Length > maxLen ? text[..maxLen] + "…" : text;
+            }
+        }
+        catch (JsonException) { /* not JSON — fall through to the raw body */ }
+
+        var trimmed = body.Trim();
+        return trimmed.Length > maxLen ? trimmed[..maxLen] + "…" : trimmed;
     }
 
     /// <summary>
@@ -1958,18 +2058,32 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Asks the server to cancel an in-flight download via
-    /// <c>DELETE /models/{name}</c>. Best-effort — the server may have already
-    /// finished or the request may fail; either way the SSE stream is closed
-    /// by the caller's cancellation.
+    /// <c>POST /models/unload</c>: the router cancels a downloading model's
+    /// child process on unload, stopping the download regardless of who
+    /// started it (the app, the WebUI, or the CLI).
     /// </summary>
-    private async Task CancelServerDownloadAsync(string modelName)
+    /// <param name="modelName">The bare repo id the download was POSTed with —
+    /// mid-download that is how the server keys the model (the quant resolves
+    /// only on completion).</param>
+    /// <remarks>Best-effort — the server may have already finished or the
+    /// request may fail; either way the caller's SSE stream is already
+    /// closed.</remarks>
+    public async Task CancelServerDownloadAsync(string modelName)
     {
         try
         {
+            var payload = $$"""{"model":"{{modelName}}"}""";
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var budget = WithTimeout(TimeSpan.FromSeconds(10), CancellationToken.None);
-            using var resp = await _http.DeleteAsync($"/models/{Uri.EscapeDataString(modelName)}", budget.Token);
+            using var resp = await _http.PostAsync("/models/unload", content, budget.Token);
+            if (!resp.IsSuccessStatusCode)
+                Log.Warn($"server rejected download cancel for {modelName} ({(int)resp.StatusCode})");
         }
-        catch { /* Best-effort — don't surface cancel cleanup failures. */ }
+        catch (Exception ex)
+        {
+            // Best-effort — don't surface cancel cleanup failures.
+            Log.Warn(ex, $"download cancel request for {modelName} threw");
+        }
     }
 
     // ---- Resolution ----

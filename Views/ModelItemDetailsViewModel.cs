@@ -188,8 +188,8 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
             ? "Loading model…"
             : "Chat with model";
 
-    /// <summary>Delete is offered for installed models, and only while unloaded and idle.</summary>
-    public bool CanDelete => IsInstalled && !IsBusy && Model.PlayGlyphVisible;
+    /// <summary>Delete is offered for installed models the server can remove, and only while unloaded and idle.</summary>
+    public bool CanDelete => IsInstalled && !IsBusy && Model.PlayGlyphVisible && Model.CanRemove;
 
     /// <summary>Download is offered for Hub models not yet installed.</summary>
     public bool CanDownload => !IsInstalled && !IsBusy;
