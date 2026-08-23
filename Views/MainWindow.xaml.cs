@@ -951,8 +951,9 @@ namespace LlamaApp.Views
                 // clicking the ring — the server has already been asked to
                 // abort (see DownloadModelAsync). A cancel returns the row to
                 // the play glyph; a pause (DownloadPaused set by the click)
-                // lands it on the resume glyph instead. Either way the partial
-                // bytes stay in the cache and resume on the next attempt.
+                // lands it on the resume glyph instead. Either way the server
+                // drops the partial bytes on abort — the next attempt starts
+                // the download over.
                 if (queue is null || queue.HasThreadAccess)
                     item.IsDownloading = false;
                 else
@@ -1063,7 +1064,8 @@ namespace LlamaApp.Views
         /// Fired when the cancel glyph next to the download ring is tapped:
         /// cancels the in-flight download. The server is asked to abort too
         /// (see <see cref="LlamaManager.DownloadModelAsync"/>); the row returns
-        /// to the play glyph and a partial download resumes on the next attempt.
+        /// to the play glyph. The server drops the partial bytes when a
+        /// download is aborted, so the next attempt re-downloads from scratch.
         /// While paused the button abandons the partial instead — the server
         /// side is already stopped, so there's nothing to cancel.
         /// </summary>
@@ -1100,8 +1102,9 @@ namespace LlamaApp.Views
         /// <see cref="DownloadAndLaunchAsync"/> and asks the server to abort —
         /// but with <see cref="ModelItem.DownloadPaused"/> set first, so the
         /// row lands on the resume glyph instead of the play glyph. The
-        /// partial bytes stay in the cache; resuming continues where it left
-        /// off. No-op for externally-triggered downloads (the ring's button is
+        /// server drops the partial bytes when the download is aborted, so
+        /// resuming re-downloads from scratch. No-op for externally-triggered
+        /// downloads (the ring's button is
         /// disabled then — see <see cref="ModelItem.CanPauseDownload"/>).
         /// </summary>
         private void LocalModelPauseDownload_Click(object sender, RoutedEventArgs e)
@@ -1122,8 +1125,8 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// Fired when the resume glyph on a paused row is tapped: restarts the
-        /// download → load lifecycle. The server resumes the transfer from the
-        /// partial bytes left in the cache by the pause's abort.
+        /// download → load lifecycle. The pause's abort dropped the partial
+        /// bytes server-side, so this starts the download over.
         /// </summary>
         private void LocalModelResumeDownload_Click(object sender, RoutedEventArgs e)
         {
@@ -1185,7 +1188,7 @@ namespace LlamaApp.Views
         /// <summary>
         /// The Delete button inside the trash glyph's confirmation flyout:
         /// deletes the model from the running llama server's cache — sends
-        /// <c>DELETE /models/{name}</c>; on success the row is removed from
+        /// <c>DELETE /models?model={name}</c>; on success the row is removed from
         /// <see cref="LocalModels"/> immediately (the poller's next tick would
         /// drop it too, but removing now avoids a stale row lingering for up to
         /// one poll interval). No-op if the row is loaded or loading — a
@@ -1737,22 +1740,23 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Refreshes the footer's GPU indicator from the accelerator device
-        /// probe (<see cref="LlamaManager.ListDevicesAsync"/> — cached for a
-        /// minute there, so the StateChanged bursts don't spawn a process
-        /// each). Shows the chip glyph when the llama binary sees a GPU
-        /// (CUDA/Vulkan) and names the devices in its tooltip; stays hidden
-        /// on CPU-only machines and before the binary is resolved (the
-        /// probe then returns no devices and the state-change re-render
-        /// picks them up once one appears). A failed probe never surfaces —
-        /// the indicator simply stays as-is (fail-open, hint only).
+        /// Refreshes the footer's device indicator from the accelerator
+        /// device probe (<see cref="LlamaManager.ProbeDevicesAsync"/> —
+        /// cached for a minute there, so the StateChanged bursts don't spawn
+        /// a process each). Shows the GPU card glyph (accent color) when the
+        /// llama binary sees a GPU (CUDA/Vulkan) and names the devices in
+        /// its tooltip; shows the dimmed CPU chip glyph when the probe
+        /// succeeded but found no accelerator. A failed probe or an
+        /// unresolved binary never surfaces — the indicator simply stays
+        /// hidden (fail-open, hint only); the state-change re-render picks
+        /// the devices up once a probe succeeds.
         /// </summary>
         private async Task UpdateGpuIndicatorAsync()
         {
-            IReadOnlyList<LlamaDevice> devices;
+            DeviceProbe probe;
             try
             {
-                devices = await LlamaManager.Shared.ListDevicesAsync();
+                probe = await LlamaManager.Shared.ProbeDevicesAsync();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -1760,17 +1764,21 @@ namespace LlamaApp.Views
                 return;
             }
 
-            var d = DeviceStatusPresentation.Describe(devices);
+            var d = DeviceStatusPresentation.Describe(probe.Succeeded, probe.Devices);
 
             // The probe awaits a child process; the continuation can land on
             // a thread-pool thread, and dependency-object writes must happen
             // on the UI thread.
             void Apply()
             {
-                GpuIndicator.Visibility = d.Visible
+                GpuIndicator.Visibility = d.Kind == DeviceStatusPresentation.IndicatorKind.Gpu
+                    ? Microsoft.UI.Xaml.Visibility.Visible
+                    : Microsoft.UI.Xaml.Visibility.Collapsed;
+                CpuIndicator.Visibility = d.Kind == DeviceStatusPresentation.IndicatorKind.Cpu
                     ? Microsoft.UI.Xaml.Visibility.Visible
                     : Microsoft.UI.Xaml.Visibility.Collapsed;
                 Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(GpuIndicator, d.ToolTip);
+                Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(CpuIndicator, d.ToolTip);
             }
             var dq = DispatcherQueue;
             if (dq is null || dq.HasThreadAccess) Apply();

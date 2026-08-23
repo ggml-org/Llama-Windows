@@ -966,8 +966,8 @@ public sealed class LlamaManager
 
     // ---- Device probing / model fit ----
 
-    /// <summary>Cached device probe result + timestamp (see <see cref="ListDevicesAsync"/>).</summary>
-    private (DateTime At, IReadOnlyList<LlamaDevice> Devices) _devicesCache;
+    /// <summary>Cached device probe result + timestamp (see <see cref="ProbeDevicesAsync"/>).</summary>
+    private (DateTime At, DeviceProbe? Probe) _devicesCache;
 
     /// <summary>
     /// Probes the compute devices available to llama.cpp by running
@@ -980,13 +980,23 @@ public sealed class LlamaManager
     /// must never throw or block (fail-open convention).
     /// </summary>
     public async Task<IReadOnlyList<LlamaDevice>> ListDevicesAsync(CancellationToken cancel = default)
+        => (await ProbeDevicesAsync(cancel)).Devices;
+
+    /// <summary>
+    /// The full probe result, including whether the probe succeeded — see
+    /// <see cref="DeviceProbe"/>. Callers that only budget memory can use
+    /// <see cref="ListDevicesAsync"/> (fail-open list); the footer's device
+    /// indicator needs the success flag to tell "CPU-only machine" apart
+    /// from "probe failed / binary not resolved yet".
+    /// </summary>
+    public async Task<DeviceProbe> ProbeDevicesAsync(CancellationToken cancel = default)
     {
         const double CacheTtlSeconds = 60;
 
         var cache = _devicesCache;
-        if (cache.Devices is not null &&
+        if (cache.Probe is not null &&
             (DateTime.UtcNow - cache.At).TotalSeconds < CacheTtlSeconds)
-            return cache.Devices;
+            return cache.Probe;
 
         var binary = BinaryPath;
         if (binary is null || !File.Exists(binary))
@@ -994,15 +1004,17 @@ public sealed class LlamaManager
         if (binary is null)
         {
             Log.Debug("list-devices skipped: no llama binary resolved yet");
-            return [];
+            return new DeviceProbe(false, []);
         }
 
-        var devices = await DeviceQuery.ListDevicesAsync(binary, cancel);
-        _devicesCache = (DateTime.UtcNow, devices);
-        Log.Info(devices.Count == 0
-            ? "list-devices: no accelerator devices (CPU/RAM fallback)"
-            : $"list-devices: {string.Join(", ", devices.Select(d => $"{d.Id} '{d.Name}' {d.FreeBytes / (1 << 20)} MiB free"))}");
-        return devices;
+        var probe = await DeviceQuery.ListDevicesAsync(binary, cancel);
+        _devicesCache = (DateTime.UtcNow, probe);
+        Log.Info(probe.Devices.Count == 0
+            ? probe.Succeeded
+                ? "list-devices: no accelerator devices (CPU/RAM fallback)"
+                : "list-devices: probe failed (unreadable output)"
+            : $"list-devices: {string.Join(", ", probe.Devices.Select(d => $"{d.Id} '{d.Name}' {d.FreeBytes / (1 << 20)} MiB free"))}");
+        return probe;
     }
 
     /// <summary>
@@ -1130,7 +1142,8 @@ public sealed class LlamaManager
     /// <param name="progress">Receives <see cref="ModelDownloadProgress"/> updates
     /// as the server streams them. May be <c>null</c>.</param>
     /// <param name="cancel">Cancels the download (closes the SSE stream and
-    /// asks the server to stop via <c>DELETE /models/{name}</c>).</param>
+    /// asks the server to stop via <c>POST /models/unload</c> — see
+    /// <c>CancelServerDownloadAsync</c> for why not DELETE).</param>
     /// <returns><c>true</c> if the download finished successfully;
     /// <c>false</c> on failure or cancellation.</returns>
     public async Task<bool> DownloadModelAsync(IModel model, IProgress<ModelDownloadProgress>? progress = null, CancellationToken cancel = default)
@@ -1958,16 +1971,29 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Asks the server to cancel an in-flight download via
-    /// <c>DELETE /models/{name}</c>. Best-effort — the server may have already
+    /// <c>POST /models/unload</c>. Best-effort — the server may have already
     /// finished or the request may fail; either way the SSE stream is closed
     /// by the caller's cancellation.
+    ///
+    /// <para>Why unload, not DELETE: the router routes DELETE at
+    /// <c>/models?model=…</c> (a path-form <c>DELETE /models/{name}</c> 404s
+    /// and the download runs on), and its DELETE handler also removes the
+    /// model entry and blocks until the download child exits — on current
+    /// builds that wait can wedge the whole router (all <c>/models</c>
+    /// requests stall). <c>/models/unload</c> aborts the download promptly
+    /// without the remove-from-cache step, and answers as soon as the state
+    /// flips — the transient entry then disappears from <c>/models</c> on the
+    /// server's next reload sweep. Note the server drops the partial bytes on
+    /// abort, so the next attempt re-downloads from scratch.</para>
     /// </summary>
     private async Task CancelServerDownloadAsync(string modelName)
     {
         try
         {
+            var payload = $$"""{"model":"{{modelName}}"}""";
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var budget = WithTimeout(TimeSpan.FromSeconds(10), CancellationToken.None);
-            using var resp = await _http.DeleteAsync($"/models/{Uri.EscapeDataString(modelName)}", budget.Token);
+            using var resp = await _http.PostAsync("/models/unload", content, budget.Token);
         }
         catch { /* Best-effort — don't surface cancel cleanup failures. */ }
     }
