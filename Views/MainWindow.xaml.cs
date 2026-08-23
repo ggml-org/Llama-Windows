@@ -2193,6 +2193,16 @@ namespace LlamaApp.Views
                 new System.Uri($"http://localhost:{LlamaManager.Shared.ServerPort}"));
         }
 
+        /// Opens llama.app in the default browser when the brand logo is
+        /// clicked. Hide the flyout first so the browser doesn't come up
+        /// behind it.
+        private async void Logo_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            HideFlyout();
+            try { await Windows.System.Launcher.LaunchUriAsync(new Uri("https://llama.app")); }
+            catch { /* Ignore launch failures (e.g. no default browser set) */ }
+        }
+
         private void Settings_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             // Hide the flyout first so the settings dialog isn't drawn behind it

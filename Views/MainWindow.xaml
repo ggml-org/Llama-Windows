@@ -640,13 +640,24 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <!-- Left: brand logo -->
-            <Image Grid.Column="0"
-                   Source="{ThemeResource BrandLogoSource}"
-                   Width="20" Height="20"
-                   Stretch="Uniform"
-                   HorizontalAlignment="Left"
-                   VerticalAlignment="Center" />
+            <!-- Left: brand logo. Clicking it opens llama.app in the
+                 default browser (see Logo_Click). Transparent chrome to
+                 match the action icon buttons on the right. -->
+            <Button Grid.Column="0"
+                    Click="Logo_Click"
+                    Padding="3"
+                    Margin="-3,0,0,0"
+                    MinWidth="0" MinHeight="0"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    AutomationProperties.Name="Open llama.app"
+                    ToolTipService.ToolTip="Open llama.app">
+                <Image Source="{ThemeResource BrandLogoSource}"
+                       Width="20" Height="20"
+                       Stretch="Uniform" />
+            </Button>
 
             <!-- Right: action icons (replace the old footer buttons). Transparent
                  chrome to match the row icon buttons; the default button visual
