@@ -6,10 +6,10 @@ namespace LlamaApp.Tests;
 
 /// <summary>
 /// Unit tests for <see cref="DeviceStatusPresentation"/> — the pure mapping
-/// from probed accelerator devices to the footer's GPU indicator. The
-/// visibility rule matters most: the glyph shows only when a device probe
-/// actually found an accelerator, so a CPU-only machine (or a probe that ran
-/// before the llama binary existed) sees no indicator at all.
+/// from the device probe to the footer's device indicator: the GPU card
+/// glyph when accelerators were found, the CPU chip glyph when a probe
+/// succeeded without any, and nothing at all when the probe failed (the
+/// footer must never guess).
 /// </summary>
 public class DeviceStatusPresentationTests
 {
@@ -23,19 +23,57 @@ public class DeviceStatusPresentationTests
     };
 
     [Fact]
-    public void No_Devices_Hides_The_Indicator()
+    public void Failed_Probe_Hides_The_Indicator()
     {
-        var d = DeviceStatusPresentation.Describe([]);
+        // No devices AND the probe never succeeded (binary missing, timeout,
+        // unreadable output) — the footer stays silent rather than claiming
+        // "CPU only" on a machine that may well have a GPU.
+        var d = DeviceStatusPresentation.Describe(probeSucceeded: false, []);
 
+        Assert.Equal(DeviceStatusPresentation.IndicatorKind.None, d.Kind);
         Assert.False(d.Visible);
         Assert.Equal("", d.ToolTip);
     }
 
     [Fact]
+    public void Successful_Empty_Probe_Shows_The_Cpu_Indicator()
+    {
+        // "(none)" from the CLI = genuinely no accelerator → the dimmed CPU
+        // chip, honestly labeled.
+        var d = DeviceStatusPresentation.Describe(probeSucceeded: true, []);
+
+        Assert.Equal(DeviceStatusPresentation.IndicatorKind.Cpu, d.Kind);
+        Assert.True(d.Visible);
+        Assert.Contains("No accelerator detected", d.ToolTip);
+    }
+
+    [Fact]
+    public void Cpu_Only_Devices_Count_As_No_Accelerator()
+    {
+        // Some builds list the CPU itself as a device — that's still a
+        // CPU-only machine as far as acceleration goes.
+        var cpu = new LlamaDevice
+        {
+            Id = "CPU0",
+            Name = "AMD Ryzen 9 7950X",
+            TotalBytes = 64UL << 30,
+            FreeBytes = 48UL << 30,
+            Kind = DeviceKind.Cpu,
+        };
+
+        var d = DeviceStatusPresentation.Describe(probeSucceeded: true, [cpu]);
+
+        Assert.Equal(DeviceStatusPresentation.IndicatorKind.Cpu, d.Kind);
+        Assert.Contains("No accelerator detected", d.ToolTip);
+    }
+
+    [Fact]
     public void Single_Device_Shows_With_Name_And_Free_Memory()
     {
-        var d = DeviceStatusPresentation.Describe(
+        var d = DeviceStatusPresentation.Describe(probeSucceeded: true,
             [Gpu("NVIDIA GeForce RTX 4060 Ti", 14_143UL << 20)]);
+
+        Assert.Equal(DeviceStatusPresentation.IndicatorKind.Gpu, d.Kind);
 
         Assert.True(d.Visible);
         Assert.Contains("GPU acceleration available", d.ToolTip);
@@ -48,7 +86,7 @@ public class DeviceStatusPresentationTests
     [Fact]
     public void Multiple_Devices_List_Each_And_Count_Them()
     {
-        var d = DeviceStatusPresentation.Describe(
+        var d = DeviceStatusPresentation.Describe(probeSucceeded: true,
         [
             Gpu("NVIDIA GeForce RTX 4060 Ti", 14UL << 30, "CUDA0"),
             Gpu("AMD Radeon RX 7900 XTX", 20UL << 30, "Vulkan0"),

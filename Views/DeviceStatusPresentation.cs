@@ -3,33 +3,61 @@ using LlamaApp.Llama;
 namespace LlamaApp.Views
 {
     /// <summary>
-    /// Pure mapping from the probed accelerator devices
-    /// (<see cref="LlamaManager.ListDevicesAsync"/>) to the footer's GPU
-    /// indicator — whether it shows and what its tooltip says. Kept separate
-    /// from <see cref="MainWindow"/> so the rules are unit-testable,
-    /// mirroring <see cref="ServerStatusPresentation"/>.
+    /// Pure mapping from the device probe
+    /// (<see cref="LlamaManager.ProbeDevicesAsync"/>) to the footer's device
+    /// indicator — which glyph shows (GPU card / CPU chip / none) and what
+    /// its tooltip says. Kept separate from <see cref="MainWindow"/> so the
+    /// rules are unit-testable, mirroring <see cref="ServerStatusPresentation"/>.
     /// </summary>
     public static class DeviceStatusPresentation
     {
-        /// <summary>The rendered footer indicator: visible when at least one
-        /// accelerator device was probed, plus the tooltip describing them.</summary>
-        public readonly record struct Description(bool Visible, string ToolTip);
+        /// <summary>Which glyph the footer shows for the device probe.</summary>
+        public enum IndicatorKind
+        {
+            /// <summary>No indicator — the probe failed or never ran (the
+            /// footer stays silent rather than guessing).</summary>
+            None,
+            /// <summary>The GPU card glyph — at least one accelerator device
+            /// (CUDA / Vulkan) was probed.</summary>
+            Gpu,
+            /// <summary>The CPU chip glyph — the probe succeeded but found no
+            /// accelerator (CPU-only machine or CPU-only llama build).</summary>
+            Cpu,
+        }
+
+        /// <summary>The rendered footer indicator: which glyph is visible
+        /// plus the tooltip describing the devices.</summary>
+        public readonly record struct Description(IndicatorKind Kind, string ToolTip)
+        {
+            public bool Visible => Kind != IndicatorKind.None;
+        }
 
         /// <summary>
-        /// Maps the probed <paramref name="devices"/> to the footer
-        /// rendering. No devices (CPU-only machine, CPU-only llama build, or
-        /// a failed/early probe) hides the indicator entirely — silence, not
-        /// a grayed-out hint. With devices, the tooltip names them with
-        /// their free memory: <c>NVIDIA GeForce RTX 4060 Ti (14.1 GB free)</c>.
+        /// Maps the probe result to the footer rendering:
+        /// <list type="bullet">
+        /// <item>accelerator devices found → the GPU card glyph; the tooltip
+        /// names them with their free memory: <c>NVIDIA GeForce RTX 4060 Ti
+        /// (14.1 GB free)</c>;</item>
+        /// <item>probe succeeded with no accelerators (or only CPU devices)
+        /// → the CPU chip glyph with a "no accelerator" note;</item>
+        /// <item>probe failed / binary not resolved → nothing at all —
+        /// silence, not a grayed-out hint.</item>
+        /// </list>
         /// </summary>
-        public static Description Describe(IReadOnlyList<LlamaDevice> devices)
+        public static Description Describe(bool probeSucceeded, IReadOnlyList<LlamaDevice> devices)
         {
-            if (devices.Count == 0)
-                return new(false, "");
+            var accelerators = devices.Where(d => d.Kind != DeviceKind.Cpu).ToList();
 
-            return new(true, devices.Count == 1
-                ? $"GPU acceleration available: {DescribeDeviceList(devices)}"
-                : $"GPU acceleration available on {devices.Count} devices: {DescribeDeviceList(devices)}");
+            if (accelerators.Count > 0)
+                return new Description(IndicatorKind.Gpu, accelerators.Count == 1
+                    ? $"GPU acceleration available: {DescribeDeviceList(accelerators)}"
+                    : $"GPU acceleration available on {accelerators.Count} devices: {DescribeDeviceList(accelerators)}");
+
+            if (probeSucceeded)
+                return new Description(IndicatorKind.Cpu,
+                    "No accelerator detected — models run on the CPU");
+
+            return new Description(IndicatorKind.None, "");
         }
 
         /// <summary>

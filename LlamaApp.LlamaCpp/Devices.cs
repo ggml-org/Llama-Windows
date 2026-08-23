@@ -47,6 +47,16 @@ public sealed record LlamaDevice
 }
 
 /// <summary>
+/// A <c>--list-devices</c> probe result: the parsed devices plus whether the
+/// probe actually ran and produced a readable device section. The two must be
+/// told apart — an empty <see cref="Devices"/> with <c>Succeeded</c> means a
+/// genuinely CPU-only machine/build, while <c>Succeeded</c> false means the
+/// binary failed, timed out, or printed unrecognizable output (the caller
+/// should stay silent rather than claim "CPU only").
+/// </summary>
+public sealed record DeviceProbe(bool Succeeded, IReadOnlyList<LlamaDevice> Devices);
+
+/// <summary>
 /// Probes the compute devices available to llama.cpp by running the CLI's
 /// <c>--list-devices</c> command and parsing its output:
 ///
@@ -62,8 +72,9 @@ public sealed record LlamaDevice
 ///   (none)
 /// </code>
 ///
-/// An empty result means "no accelerator devices" — the caller then falls
-/// back to system CPU/RAM (<see cref="SystemMemory"/>) for fit decisions.
+/// A successful probe with an empty device list means "no accelerator
+/// devices" — the caller then falls back to system CPU/RAM
+/// (<see cref="SystemMemory"/>) for fit decisions.
 /// </summary>
 public static partial class DeviceQuery
 {
@@ -73,10 +84,10 @@ public static partial class DeviceQuery
     internal const string Header = "Available devices:";
 
     /// <summary>
-    /// Runs <c>llama --list-devices</c> and returns the parsed devices (empty
-    /// when the output says <c>(none)</c>, the binary fails, or the output is
-    /// unrecognizable — a failed probe must never block the caller, matching
-    /// the fail-open convention of <see cref="DiskSpace"/>).
+    /// Runs <c>llama --list-devices</c> and returns the probe result — see
+    /// <see cref="DeviceProbe"/> for why success and an empty device list are
+    /// separate signals. A failed probe must never block the caller, matching
+    /// the fail-open convention of <see cref="DiskSpace"/>.
     ///
     /// <para>Two argument forms are tried in order: <c>cli --list-devices</c>
     /// (the app-managed launcher wraps the real CLI under a <c>cli</c>
@@ -87,7 +98,7 @@ public static partial class DeviceQuery
     /// exits 0 even for unknown commands, so the exit code alone is not a
     /// signal.</para>
     /// </summary>
-    public static async Task<IReadOnlyList<LlamaDevice>> ListDevicesAsync(
+    public static async Task<DeviceProbe> ListDevicesAsync(
         string binaryPath, CancellationToken cancel = default)
     {
         foreach (var args in ArgumentCandidates)
@@ -104,10 +115,10 @@ public static partial class DeviceQuery
             }
 
             if (output is not null && output.Contains(Header, StringComparison.Ordinal))
-                return Parse(output);
+                return new DeviceProbe(true, Parse(output));
         }
 
-        return [];
+        return new DeviceProbe(false, []);
     }
 
     /// <summary>
