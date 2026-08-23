@@ -303,7 +303,7 @@ public class ModelItemStateMachineTests
     }
 
     [Fact]
-    public void Paused_Subtitle_Shows_The_Frozen_Byte_Counts()
+    public void Paused_Subtitle_Shows_The_Paused_Marker()
     {
         var item = new ModelItem
         {
@@ -317,13 +317,13 @@ public class ModelItemStateMachineTests
         item.DownloadPaused = true;
         item.IsDownloading = false;
 
-        Assert.Equal("Paused · 3.2 GB of 12.1 GB", item.SubtitleText);
+        Assert.Equal("Paused", item.SubtitleText);
     }
 
     [Fact]
     public void Paused_Subtitle_Falls_Back_To_Params_Size_When_Size_Unknown()
     {
-        // Paused before the server reported a size — no "Paused · 0 B of 0 B".
+        // Paused before the server reported a size — no bare "Paused" marker.
         var item = new ModelItem
         {
             Parameters = "20B",
@@ -530,9 +530,23 @@ public class ModelItemStateMachineTests
             IsDownloading = true,
             DownloadedBytes = 3_200_000_000,
             DownloadTotalBytes = 12_100_000_000,
+            DownloadBytesPerSecond = 45_000_000,
         };
 
-        Assert.Equal("3.2 GB of 12.1 GB", item.SubtitleText);
+        // Speed + ETA only — the byte counts live in the progress ring.
+        Assert.StartsWith("45 MB/s · ", item.SubtitleText);
+        Assert.EndsWith("left", item.SubtitleText);
+
+        // No speed estimate yet → an empty detail line (the ring alone
+        // carries the progress).
+        var noSpeed = new ModelItem
+        {
+            Parameters = "20B",
+            Size = "12.1 GB",
+            IsDownloading = true,
+            DownloadTotalBytes = 12_100_000_000,
+        };
+        Assert.Equal(string.Empty, noSpeed.SubtitleText);
 
         // Size unknown yet → the rest subtitle stays (no "0 B of 0 B").
         var early = new ModelItem { Parameters = "20B", Size = "12.1 GB", IsDownloading = true };

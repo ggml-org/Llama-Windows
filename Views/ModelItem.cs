@@ -553,8 +553,9 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public bool LoadPercentTextVisible => LoadingRingVisible && LoadFraction > 0;
 
     /// <summary>
-    /// The download detail line, e.g. "3.2 GB of 12.1 GB · 45 MB/s · ~4 min
-    /// left" (formatting rules live in <see cref="DownloadProgressPresentation"/>).
+    /// The download detail line, e.g. "45 MB/s · ~4 min left" — speed and
+    /// ETA only; the byte counts are conveyed by the progress ring
+    /// (formatting rules live in <see cref="DownloadProgressPresentation"/>).
     /// </summary>
     public string DownloadDetailText => DownloadProgressPresentation.FormatDetail(
         DownloadedBytes, DownloadTotalBytes, DownloadBytesPerSecond);
@@ -562,13 +563,13 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>
     /// The row's subtitle line: while a download with a known size runs, the
     /// live progress detail (<see cref="DownloadDetailText"/>); while paused,
-    /// the frozen byte counts with a "Paused" marker; otherwise the catalog's
-    /// "params · size" pair (empty parts dropped).
+    /// a "Paused" marker; otherwise the catalog's "params · size" pair
+    /// (empty parts dropped).
     /// </summary>
     public string SubtitleText => IsDownloading && DownloadTotalBytes > 0
         ? DownloadDetailText
         : DownloadPaused && DownloadTotalBytes > 0
-            ? DownloadProgressPresentation.FormatPausedDetail(DownloadedBytes, DownloadTotalBytes)
+            ? DownloadProgressPresentation.FormatPausedDetail()
             : string.Join(" · ", new[] { Parameters, Size }
                 .Where(s => !string.IsNullOrWhiteSpace(s)));
 

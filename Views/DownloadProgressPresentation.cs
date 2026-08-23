@@ -25,18 +25,18 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// Builds the download detail line shown in place of the row's
-        /// "params · size" subtitle while a download runs:
-        /// "3.2 GB of 12.1 GB", plus " · 45 MB/s" once a speed estimate
-        /// exists, plus " · ~4 min left" once the ETA is meaningful. Segments
-        /// appear only when their inputs are known — a stalled stream (speed
-        /// 0) never shows a bogus "0 MB/s · ∞ left".
+        /// "params · size" subtitle while a download runs: "45 MB/s" once a
+        /// speed estimate exists, plus " · ~4 min left" once the ETA is
+        /// meaningful. The byte counts themselves are left out — the row's
+        /// progress ring already conveys how far along the download is. A
+        /// stalled stream (speed 0) yields an empty line rather than a bogus
+        /// "0 MB/s · ∞ left".
         /// </summary>
         public static string FormatDetail(long downloadedBytes, long totalBytes, double bytesPerSecond)
         {
-            var text = $"{FormatBytes(downloadedBytes)} of {FormatBytes(totalBytes)}";
-            if (bytesPerSecond <= 0) return text;
+            if (bytesPerSecond <= 0) return string.Empty;
 
-            text += $" · {FormatBytes(bytesPerSecond)}/s";
+            var text = $"{FormatBytes(bytesPerSecond)}/s";
 
             var remainingBytes = totalBytes - downloadedBytes;
             if (remainingBytes > 0)
@@ -45,12 +45,11 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Builds the detail line for a paused download: "Paused · 3.2 GB of
-        /// 12.1 GB" — the frozen byte counts with no speed/ETA (both are
-        /// meaningless once the stream is stopped).
+        /// The detail line for a paused download: just "Paused" — the byte
+        /// counts and speed/ETA are all meaningless once the stream is
+        /// stopped (the progress ring shows the frozen position).
         /// </summary>
-        public static string FormatPausedDetail(long downloadedBytes, long totalBytes)
-            => $"Paused · {FormatBytes(downloadedBytes)} of {FormatBytes(totalBytes)}";
+        public static string FormatPausedDetail() => "Paused";
 
         /// <summary>
         /// Coarse ETA label: "~30 s left" under a minute, "~N min left" up to
