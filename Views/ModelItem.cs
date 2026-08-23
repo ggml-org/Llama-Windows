@@ -21,6 +21,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private double _downloadBytesPerSecond;
     private bool _downloadFailed;
     private bool _downloadPaused;
+    private bool _pendingFirstDownload;
     private CancellationTokenSource? _downloadCancellation;
     private bool _isLoading;
     private double _loadFraction;
@@ -278,11 +279,11 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>
     /// True when the user paused the download by clicking the progress ring.
     /// The server-side download is already aborted (pause reuses the cancel
-    /// path — the partial bytes stay in the cache and the server resumes them
-    /// on the next attempt), so the row swaps the ring for a resume glyph in
-    /// the same slot; clicking it restarts the download. Set by the row's
-    /// pause button before the cancellation unwinds; cleared by the download
-    /// driver on (re)start, completion, or failure.
+    /// path — the server drops the partial bytes on abort, so resuming
+    /// re-downloads from scratch), so the row swaps the ring for a resume
+    /// glyph in the same slot; clicking it restarts the download. Set by the
+    /// row's pause button before the cancellation unwinds; cleared by the
+    /// download driver on (re)start, completion, or failure.
     /// </summary>
     public bool DownloadPaused
     {
@@ -298,6 +299,27 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(PausedPercentTextVisible));
             OnPropertyChanged(nameof(SubtitleText));
             NotifyAccessibleNameChanged();
+        }
+    }
+
+    /// <summary>
+    /// True while the row's first download has never completed — set when a
+    /// catalog row moves into the installed list to be downloaded (or when
+    /// the poller first sees an externally-triggered download), cleared once
+    /// a download finishes or the server lists the model as an actual cached
+    /// model. Such a row has no file on disk, so when its download is
+    /// canceled/abandoned the installed-list row is removed entirely —
+    /// leaving it would show a "playable" model whose load attempt can only
+    /// fail. Not bindable — bookkeeping for the row lifecycle.
+    /// </summary>
+    public bool PendingFirstDownload
+    {
+        get => _pendingFirstDownload;
+        set
+        {
+            if (_pendingFirstDownload == value) return;
+            _pendingFirstDownload = value;
+            OnPropertyChanged();
         }
     }
 

@@ -734,9 +734,15 @@ namespace LlamaApp.Views
                 Log.Warn(ex, "memory preflight failed; allowing the download");
             }
 
-            // Move the model into the installed section (downloading).
+            // Move the model into the installed section (downloading). A row
+            // that wasn't installed before (no file on disk) is flagged so a
+            // later cancel/abandon removes it again instead of leaving a
+            // zombie "available" entry; an already-installed row re-downloading
+            // keeps its file either way.
             item.Downloadable = false;
             item.IsDownloading = true;
+            if (!LocalModels.Contains(item))
+                item.PendingFirstDownload = true;
             _localByServerId[((IModel)item).ServerModelId] = item;
             LocalModels.Add(item);
             UpdateEmptyState();
@@ -926,9 +932,12 @@ namespace LlamaApp.Views
                     item.DownloadPaused = false;
                     if (ok)
                     {
-                        // Download done — load it. The row now shows the
-                        // load ring until the poller reports the model as
-                        // loaded.
+                        // Download done — the file exists now, so the row is
+                        // a real installed model; a later cancel of some
+                        // re-download must not remove it.
+                        item.PendingFirstDownload = false;
+                        // Load it. The row now shows the load ring until the
+                        // poller reports the model as loaded.
                         item.LoadFailed = false;
                         item.IsLoading = true;
                         _ = LoadAndWatchAsync(item);
@@ -949,15 +958,25 @@ namespace LlamaApp.Views
             {
                 // User canceled from the row's cancel button, or paused by
                 // clicking the ring — the server has already been asked to
-                // abort (see DownloadModelAsync). A cancel returns the row to
-                // the play glyph; a pause (DownloadPaused set by the click)
-                // lands it on the resume glyph instead. Either way the server
-                // drops the partial bytes on abort — the next attempt starts
-                // the download over.
+                // abort (see DownloadModelAsync). A cancel of a first-time
+                // download removes the row from the installed list (no file
+                // ever landed — leaving it would show a "playable" model
+                // whose load can only fail); a pause (DownloadPaused set by
+                // the click) lands the row on the resume glyph instead, and a
+                // canceled re-download of an installed model keeps its row.
+                // Either way the server drops the partial bytes on abort —
+                // the next attempt starts the download over.
+                void Abort()
+                {
+                    if (item is { PendingFirstDownload: true, DownloadPaused: false })
+                        RemovePendingDownloadRow(item);
+                    else
+                        item.IsDownloading = false;
+                }
                 if (queue is null || queue.HasThreadAccess)
-                    item.IsDownloading = false;
+                    Abort();
                 else
-                    queue.TryEnqueue(() => item.IsDownloading = false);
+                    queue.TryEnqueue(Abort);
             }
             catch
             {
@@ -1080,9 +1099,16 @@ namespace LlamaApp.Views
             if (item.DownloadPaused)
             {
                 // Paused: the server-side download already stopped when the
-                // pause was requested — just abandon the partial and return
-                // the row to the play glyph.
+                // pause was requested — just abandon the partial. A first-
+                // time download's row disappears from the installed list
+                // (nothing on disk to play); an installed model's
+                // re-download returns the row to the play glyph.
                 Log.Info("cancel clicked: abandoning paused download of " + ((IModel)item).ServerModelId);
+                if (item.PendingFirstDownload)
+                {
+                    RemovePendingDownloadRow(item);
+                    return;
+                }
                 item.DownloadPaused = false;
                 item.DownloadFraction = 0;
                 item.DownloadedBytes = 0;
@@ -1094,6 +1120,36 @@ namespace LlamaApp.Views
             Log.Info("cancel clicked: cancelling download of " + ((IModel)item).ServerModelId);
             try { item.DownloadCancellation?.Cancel(); }
             catch (ObjectDisposedException) { /* download finished between check and click */ }
+        }
+
+        /// <summary>
+        /// Drops a row whose first download never completed: it was added to
+        /// the installed list only to host the download, no file ever landed
+        /// on disk, and leaving it would show a "playable" model whose load
+        /// attempt can only fail (the error-glyph zombie the cancel button
+        /// used to leave behind). The item is reset to a clean catalog state
+        /// so the family view offers it for download again.
+        /// </summary>
+        private void RemovePendingDownloadRow(ModelItem item)
+        {
+            StopExternalDownloadWatch(item);
+            foreach (var key in _localByServerId
+                         .Where(kv => ReferenceEquals(kv.Value, item))
+                         .Select(kv => kv.Key).ToList())
+                _localByServerId.Remove(key);
+            LocalModels.Remove(item);
+
+            item.IsDownloading = false;
+            item.DownloadPaused = false;
+            item.DownloadFailed = false;
+            item.LoadFailed = false;
+            item.DownloadFraction = 0;
+            item.DownloadedBytes = 0;
+            item.DownloadTotalBytes = 0;
+            item.DownloadBytesPerSecond = 0;
+            item.Downloadable = true;
+
+            UpdateEmptyState();
         }
 
         /// <summary>
@@ -1960,6 +2016,11 @@ namespace LlamaApp.Views
 
                 if (item is not null)
                 {
+                    // Server truth: any state but "downloading" means the model
+                    // exists in the cache — no longer a pending first download.
+                    if (!sm.IsDownloading)
+                        item.PendingFirstDownload = false;
+
                     // Map the server's model states onto the row:
                     //   loaded     -> OpenInNewWindow glyph (IsLoaded, ring off)
                     //   sleeping   -> same as loaded (ServerModel.IsLoaded covers
@@ -2032,6 +2093,11 @@ namespace LlamaApp.Views
                 {
                     // New server model not yet listed — add an enriched row.
                     var newItem = BuildLocalItem(sm, byRepo);
+                    // An externally-triggered download has no file yet either —
+                    // the same vanish rules apply if it gets canceled out from
+                    // under us (the sweep below drops the zombie row).
+                    if (sm.IsDownloading)
+                        newItem.PendingFirstDownload = true;
                     _localByServerId[sm.Id] = newItem;
                     LocalModels.Add(newItem);
                     Log.Info("added new local row from poller: " + sm.Id);
@@ -2045,15 +2111,25 @@ namespace LlamaApp.Views
             // owned by their driver (DownloadAndLaunchAsync) and never touched.
             var serverIds = new HashSet<string>(
                 serverModels.Select(m => m.Id), StringComparer.OrdinalIgnoreCase);
-            foreach (var (key, row) in _localByServerId)
+            foreach (var (key, row) in _localByServerId.ToList())
             {
                 if (row.IsDownloading && row.DownloadCancellation is null &&
                     !serverIds.Contains(key))
                 {
                     Log.Info("download vanished from /models: " + key);
-                    StopExternalDownloadWatch(row);
-                    row.IsDownloading = false;
-                    row.DownloadFraction = 0;
+                    if (row.PendingFirstDownload)
+                    {
+                        // No file ever landed — without removal the row would
+                        // sit in the installed list as a "playable" model
+                        // whose load attempt can only fail.
+                        RemovePendingDownloadRow(row);
+                    }
+                    else
+                    {
+                        StopExternalDownloadWatch(row);
+                        row.IsDownloading = false;
+                        row.DownloadFraction = 0;
+                    }
                 }
             }
 
