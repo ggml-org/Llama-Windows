@@ -198,6 +198,7 @@ namespace LlamaApp.Views
             _ = UpdateGpuIndicatorAsync();
             UpdateEmptyState();
             _ = LoadAvatarAsync();
+            _ = CheckForAppUpdateAsync();
 
             // Refresh the footer's llama.cpp version as the binary is
             // detected/installed. LlamaManager.EnsureLlamaOrDownloadAsync runs
@@ -1774,6 +1775,57 @@ namespace LlamaApp.Views
             VersionText.Text = LlamaRunner.Version is { } v
                 ? $"{appVer} - {v}"
                 : appVer;
+        }
+
+        /// <summary>
+        /// Asks GitHub whether a release newer than the running version
+        /// exists (see <see cref="UpdateChecker"/>) and, when one does,
+        /// lights up the header's soft-yellow update banner with a link to
+        /// the release page. Failures are logged (not raised) — the banner
+        /// stays hidden.
+        ///
+        /// NOTE: the awaited HTTP fetch completes on a threadpool thread,
+        /// but WinUI requires all DependencyObject writes on the UI thread —
+        /// so the post-await XAML work is marshalled via the
+        /// <see cref="DispatcherQueue"/> captured before the await (the same
+        /// pattern every other async helper in this class uses). Skipping
+        /// that marshal throws a COMException that the catch below swallows,
+        /// leaving the banner silently invisible — the exact failure we
+        /// spent a step debugging.
+        /// </summary>
+        private async Task CheckForAppUpdateAsync()
+        {
+            var queue = DispatcherQueue; // captured on the UI thread, before the first await
+            try
+            {
+                var current = Assembly.GetExecutingAssembly().GetName().Version;
+                if (current is null)
+                {
+                    Log.Warn("cannot determine the running app version; skipping the update check");
+                    return;
+                }
+
+                var update = await UpdateChecker.GetLatestUpdateAsync(current);
+
+                // Applying does nothing when there's no update, so enqueueing
+                // unconditionally on completion keeps the two code paths (UI
+                // thread vs dispatched) identical.
+                void Apply()
+                {
+                    if (update is null) return; // up to date, or the check failed (logged)
+                    UpdateLink.Content = update.Tag;
+                    UpdateLink.NavigateUri = update.ReleasePageUrl;
+                    UpdateBanner.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+                }
+
+                if (queue is null || queue.HasThreadAccess) Apply();
+                else queue.TryEnqueue(Apply);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort: a failed check simply leaves the banner hidden.
+                Log.Warn(ex, "app update banner setup failed; staying hidden");
+            }
         }
 
         /// <summary>

@@ -636,6 +636,7 @@
               Margin="16,10,16,8"
               ColumnSpacing="8">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
@@ -659,10 +660,39 @@
                        Stretch="Uniform" />
             </Button>
 
+            <!-- Middle: update banner — shown (see CheckForAppUpdateAsync) only
+                 when GitHub reports a release newer than the running version.
+                 Soft-yellow caution chrome; the link opens the release page in
+                 the default browser. Collapsed by default. -->
+            <Border x:Name="UpdateBanner"
+                    Grid.Column="1"
+                    Visibility="Collapsed"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Padding="10,3,6,3"
+                    CornerRadius="6"
+                    Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+                    AutomationProperties.Name="Update available">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBlock Text="New version available"
+                               MaxWidth="160"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                               TextTrimming="CharacterEllipsis" />
+                    <HyperlinkButton x:Name="UpdateLink"
+                                     Padding="4,0"
+                                     FontSize="12"
+                                     VerticalAlignment="Center"
+                                     AutomationProperties.Name="Open the release page"
+                                     ToolTipService.ToolTip="Open the release page in your browser" />
+                </StackPanel>
+            </Border>
+
             <!-- Right: action icons (replace the old footer buttons). Transparent
                  chrome to match the row icon buttons; the default button visual
                  states still paint a hover/pressed fill. -->
-            <StackPanel Grid.Column="1"
+            <StackPanel Grid.Column="2"
                         Orientation="Horizontal"
                         Spacing="2"
                         Margin="0,0,-2,0"
