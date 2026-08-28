@@ -2207,13 +2207,13 @@ namespace LlamaApp.Views
             if (_externalDownloadWatches.ContainsKey(item))
                 return;
 
-            // Mid-download the server ids the model by its bare repo, which is
-            // also what the SSE "model" field carries.
-            var repo = SplitServerId(serverId).repo;
+            // Pass the full server id (repo or repo:quant, however the server
+            // keys the download) — the watcher matches SSE events on the repo
+            // part, so both key forms resolve to the same download.
             var cts = new CancellationTokenSource();
             _externalDownloadWatches[item] = cts;
-            Log.Info("watching external download: " + repo);
-            _ = WatchExternalDownloadAsync(item, repo, cts);
+            Log.Info("watching external download: " + serverId);
+            _ = WatchExternalDownloadAsync(item, serverId, cts);
         }
 
         /// <summary>
@@ -2227,7 +2227,7 @@ namespace LlamaApp.Views
                 cts.Cancel();
         }
 
-        private async Task WatchExternalDownloadAsync(ModelItem item, string repo, CancellationTokenSource cts)
+        private async Task WatchExternalDownloadAsync(ModelItem item, string serverId, CancellationTokenSource cts)
         {
             long lastApplyMs = 0;
             long lastSampleBytes = 0, lastSampleMs = 0;
@@ -2266,12 +2266,12 @@ namespace LlamaApp.Views
 
             try
             {
-                await LlamaManager.Shared.WatchDownloadAsync(repo, progress, cts.Token);
+                await LlamaManager.Shared.WatchDownloadAsync(serverId, progress, cts.Token);
             }
             catch (Exception ex)
             {
                 // Fire-and-forget: nothing upstream would observe a fault.
-                Log.Warn(ex, "external download watch faulted: " + repo);
+                Log.Warn(ex, "external download watch faulted: " + serverId);
             }
 
             // The entry may already be gone — or replaced by a newer watch — if
@@ -2284,10 +2284,10 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// Finds an Available row by bare repo id (the part of a server model id
-        /// before <c>:</c>). The server ids a mid-download model by its bare repo
-        /// — the quant is resolved only once the download completes — so an exact
-        /// <see cref="_localByServerId"/> lookup misses rows that were keyed
-        /// <c>repo:quant</c> (e.g. moved from Recommended on tap).
+        /// before <c>:</c>). Older servers id a mid-download model by its bare
+        /// repo (the quant resolves only once the download completes), so an
+        /// exact <see cref="_localByServerId"/> lookup can miss rows that were
+        /// keyed <c>repo:quant</c> (e.g. moved from Recommended on tap).
         ///
         /// <para>When several rows share the repo (multiple quants installed),
         /// an exact quant match wins; a bare-repo id (mid-download) prefers a

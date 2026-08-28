@@ -1233,10 +1233,10 @@ public sealed class LlamaManager
             await foreach (var (evt, modelId, data) in ParseSseStreamAsync(reader, sseCts.Token))
             {
                 cancel.ThrowIfCancellationRequested();
-                // Mid-download the server ids the model by its bare repo (the
-                // quant resolves only once the download completes), so match
-                // on the repo part — the exact repo:quant form must not miss
-                // bare-repo events for the same download.
+                // The SSE "model" field may carry the bare repo or the
+                // repo:quant form depending on the server build and how the
+                // download was started — match on the repo part so neither
+                // form is missed for this download.
                 if (!SameDownloadModel(modelId, modelName))
                     continue; // another model's event
 
@@ -1295,9 +1295,11 @@ public sealed class LlamaManager
     /// leaves the <c>downloading</c> state, so a quiet stream (a stalled but
     /// living download) is waited out rather than second-guessed.</para>
     /// </summary>
-    /// <param name="repoName">The bare Hugging Face repo id the server puts in
-    /// the SSE <c>model</c> field while downloading (e.g.
-    /// <c>ggml-org/gemma-3-4b-it-GGUF</c>).</param>
+    /// <param name="repoName">The server model id of the download to watch —
+    /// the Hugging Face repo id as the server keys it, bare
+    /// (<c>ggml-org/gemma-3-4b-it-GGUF</c>) or with its quant suffix
+    /// (<c>…GGUF:Q4_0</c>). Either form works: SSE events are matched on the
+    /// repo part (see <see cref="SameDownloadModel"/>).</param>
     /// <param name="progress">Receives <see cref="ModelDownloadProgress"/> updates
     /// as the server streams them. May be <c>null</c>.</param>
     /// <param name="cancel">Stops the watch (does not affect the download).</param>
@@ -1324,7 +1326,12 @@ public sealed class LlamaManager
             using var reader = new StreamReader(await sseResponse.Content.ReadAsStreamAsync(cancel));
             await foreach (var (evt, modelId, data) in ParseSseStreamAsync(reader, cancel))
             {
-                if (!string.Equals(modelId, repoName, StringComparison.OrdinalIgnoreCase))
+                // Match on the repo part: the SSE "model" field may or may not
+                // carry the quant suffix depending on how (and by whom) the
+                // download was started — an exact compare of the bare repo id
+                // misses repo:quant events and leaves the row on an
+                // indeterminate ring for the whole download.
+                if (!SameDownloadModel(modelId, repoName))
                     continue; // another model's event ("*" broadcasts carry no progress)
 
                 switch (evt)
