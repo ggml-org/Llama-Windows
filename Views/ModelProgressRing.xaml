@@ -1,0 +1,41 @@
+<UserControl
+    x:Class="LlamaApp.Views.ModelProgressRing"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- A progress ring with NO background of its own. WinUI's ProgressRing
+         paints a lighter disk behind its arc (a template element that ignores
+         Background="Transparent"), which read as a stray blob behind the 20px
+         model-row rings. This control draws only the arc — determinate shows
+         the value sweep, indeterminate spins a fixed arc — on a fully
+         transparent surface. See ProgressArcPresentation for the geometry. -->
+    <Viewbox>
+        <Grid Width="20" Height="20">
+        <!-- Determinate: static arc from 12 o'clock, clockwise. -->
+        <Path x:Name="ArcPath"
+              Width="20" Height="20"
+              Stroke="{ThemeResource AccentFillColorDefaultBrush}"
+              StrokeThickness="2"
+              StrokeStartLineCap="Round"
+              StrokeEndLineCap="Round"
+              Visibility="Collapsed" />
+
+        <!-- Indeterminate: a fixed ~270° arc rotated continuously. -->
+        <Path x:Name="SpinPath"
+              Width="20" Height="20"
+              Stroke="{ThemeResource AccentFillColorDefaultBrush}"
+              StrokeThickness="2"
+              StrokeStartLineCap="Round"
+              StrokeEndLineCap="Round"
+              RenderTransformOrigin="0.5,0.5"
+              Visibility="Collapsed">
+            <Path.RenderTransform>
+                <RotateTransform x:Name="SpinTransform" />
+            </Path.RenderTransform>
+        </Path>
+        </Grid>
+    </Viewbox>
+</UserControl>
