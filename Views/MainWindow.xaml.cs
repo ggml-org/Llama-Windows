@@ -342,13 +342,51 @@ namespace LlamaApp.Views
         {
             var byRepo = await GetCatalogByRepoAsync();
 
+            // Preserve rows with an in-flight app-driven download. A populate can
+            // race a just-started download (ReconcileAsync triggers a full reload
+            // when the list was momentarily empty, e.g. right after a delete, and
+            // it completes after the download's row was added). Clearing such a
+            // row would orphan its driver (progress + cancel/pause) and the fresh
+            // row would render the ring's pause button disabled — which is also
+            // what painted a lighter disk behind the ring. Matched by repo (the
+            // server may id a mid-download model by its bare repo, quant-less).
+            var inFlight = _localByServerId.Values
+                .Where(m => m.DownloadCancellation is not null)
+                .Distinct()
+                .ToList();
+            var reused = new HashSet<ModelItem>();
+
             LocalModels.Clear();
             _localByServerId.Clear();
             foreach (var sm in serverModels)
             {
-                var item = BuildLocalItem(sm, byRepo);
+                var repo = SplitServerId(sm.Id).repo;
+                var existing = inFlight.FirstOrDefault(m =>
+                    !reused.Contains(m) &&
+                    string.Equals(SplitServerId(((IModel)m).ServerModelId).repo, repo,
+                        StringComparison.OrdinalIgnoreCase));
+                ModelItem item;
+                if (existing is not null)
+                {
+                    reused.Add(existing);
+                    existing.IsLoaded = sm.IsLoaded;
+                    existing.IsDownloading = sm.IsDownloading;
+                    item = existing;
+                }
+                else
+                {
+                    item = BuildLocalItem(sm, byRepo);
+                }
                 _localByServerId[sm.Id] = item;
                 LocalModels.Add(item);
+            }
+
+            // In-flight downloads the server hasn't listed yet (just POSTed) —
+            // keep their rows too so the driver isn't orphaned.
+            foreach (var m in inFlight.Where(m => !reused.Contains(m)))
+            {
+                _localByServerId[((IModel)m).ServerModelId] = m;
+                LocalModels.Add(m);
             }
 
             UpdateEmptyState();

@@ -151,10 +151,10 @@
                                 Spacing="6"
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center">
-                        <ProgressRing Width="14" Height="14"
-                                      IsIndeterminate="True"
-                                      IsActive="{x:Bind ViewModel.IsLoadingDetails, Mode=OneWay}"
-                                      Visibility="{x:Bind ViewModel.IsLoadingDetails, Mode=OneWay}" />
+                        <local:ModelProgressRing Width="14" Height="14"
+                                                 IsIndeterminate="True"
+                                                 IsActive="{x:Bind ViewModel.IsLoadingDetails, Mode=OneWay}"
+                                                 Visibility="{x:Bind ViewModel.IsLoadingDetails, Mode=OneWay}" />
                         <TextBlock Text="{x:Bind ViewModel.EstimatedMemoryDisplay, Mode=OneWay}"
                                    FontSize="11"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"

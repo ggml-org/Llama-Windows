@@ -340,13 +340,32 @@
                                 VerticalAlignment="Center"
                                 AutomationProperties.Name="Pause download"
                                 ToolTipService.ToolTip="Pause download">
+                            <Button.Resources>
+                                <!-- Chromeless like the row body: the ring +
+                                     caption sit on the bare row, no pill behind
+                                     the progress circle. The Disabled override
+                                     matters most: for externally-triggered (or
+                                     repopulate-orphaned) downloads the button is
+                                     disabled, and WinUI's Disabled visual state
+                                     would otherwise paint ButtonBackgroundDisabled
+                                     — a lighter rounded disk right behind the
+                                     ring — over the local transparent Background. -->
+                                <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBorderBrushDisabled" Color="Transparent" />
+                            </Button.Resources>
                             <StackPanel VerticalAlignment="Center"
                                         Spacing="2">
-                                <ProgressRing Width="20" Height="20"
-                                              Value="{x:Bind Model.DownloadProgressPercent, Mode=OneWay}"
-                                              Maximum="100"
-                                              IsIndeterminate="{x:Bind Model.IsIndeterminateDownload, Mode=OneWay}"
-                                              HorizontalAlignment="Center" />
+                                <!-- Custom ring: WinUI's ProgressRing paints a
+                                     lighter disk behind its arc (exactly the
+                                     ring's size, ignoring Background) — this
+                                     one draws only the arc, spinning while the
+                                     byte count is unknown (ModelProgressRing). -->
+                                <local:ModelProgressRing
+                                    Fraction="{x:Bind Model.DownloadFraction, Mode=OneWay}"
+                                    IsIndeterminate="{x:Bind Model.IsIndeterminateDownload, Mode=OneWay}"
+                                    HorizontalAlignment="Center" />
                                 <TextBlock Text="{x:Bind Model.DownloadProgressText, Mode=OneWay}"
                                            Visibility="{x:Bind Model.DownloadPercentTextVisible, Mode=OneWay}"
                                            FontSize="10"
@@ -372,6 +391,10 @@
                                 VerticalAlignment="Center"
                                 AutomationProperties.Name="Resume download"
                                 ToolTipService.ToolTip="Resume download">
+                            <Button.Resources>
+                                <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                                <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                            </Button.Resources>
                             <StackPanel VerticalAlignment="Center"
                                         Spacing="2">
                                 <FontIcon Glyph="&#xE896;"
@@ -427,11 +450,13 @@
                         <StackPanel Visibility="{x:Bind Model.LoadingRingVisible, Mode=OneWay}"
                                     VerticalAlignment="Center"
                                     Spacing="2">
-                            <ProgressRing Width="20" Height="20"
-                                          Value="{x:Bind Model.LoadProgressPercent, Mode=OneWay}"
-                                          Maximum="100"
-                                          IsIndeterminate="{x:Bind Model.IsIndeterminateLoad, Mode=OneWay}"
-                                          HorizontalAlignment="Center" />
+                            <!-- Custom ring, same rationale as the download
+                                 ring: draws only the arc, never the lighter
+                                 disk WinUI's ProgressRing paints behind it. -->
+                            <local:ModelProgressRing
+                                Fraction="{x:Bind Model.LoadFraction, Mode=OneWay}"
+                                IsIndeterminate="{x:Bind Model.IsIndeterminateLoad, Mode=OneWay}"
+                                HorizontalAlignment="Center" />
                             <TextBlock Text="{x:Bind Model.LoadProgressText, Mode=OneWay}"
                                        Visibility="{x:Bind Model.LoadPercentTextVisible, Mode=OneWay}"
                                        FontSize="10"
@@ -856,10 +881,10 @@
                                 Spacing="8"
                                 Margin="0,8,0,0"
                                 VerticalAlignment="Center">
-                        <ProgressRing x:Name="BrowseStatusRing"
-                                      Width="16" Height="16"
-                                      IsIndeterminate="True"
-                                      HorizontalAlignment="Center" />
+                        <local:ModelProgressRing x:Name="BrowseStatusRing"
+                                                 Width="16" Height="16"
+                                                 IsIndeterminate="True"
+                                                 HorizontalAlignment="Center" />
                         <TextBlock x:Name="BrowseStatusText"
                                    Text="Loading models…"
                                    FontSize="12"
