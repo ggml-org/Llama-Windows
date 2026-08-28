@@ -163,20 +163,17 @@
                                            FontSize="10"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </Border>
-                            <!-- Subtitle: "params · size" at rest; while a
-                                 download runs, the live detail line instead
-                                 ("3.2 GB of 12.1 GB · 45 MB/s · ~4 min left"). -->
-                            <TextBlock FontSize="12"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       VerticalAlignment="Center"
-                                       TextTrimming="CharacterEllipsis"
-                                       Text="{x:Bind Model.SubtitleText, Mode=OneWay}" />
                             <!-- Vision marker: shown when the server reports
                                  image input (architecture.input_modalities).
                                  A small “view” (eye) glyph, dimmed so it reads
                                  as a capability hint rather than part of the name.
                                  Tiled in the same gray rounded background as
                                  the logo so it reads as a small chip.
+                                 Pinned right after the quant chip — ahead of the
+                                 subtitle — because the subtitle swaps to the live
+                                 download line ("…· 45 MB/s · ~4 min left") whose
+                                 width changes every tick; trailing the subtitle
+                                 made the chip drift left/right constantly.
                                  The glyph MUST come from the intersection of
                                  Segoe Fluent Icons and Segoe MDL2 Assets:
                                  FontIcon falls back to MDL2 where the Fluent
@@ -196,6 +193,14 @@
                                           HorizontalAlignment="Center"
                                           VerticalAlignment="Center" />
                             </Border>
+                            <!-- Subtitle: "params · size" at rest; while a
+                                 download runs, the live detail line instead
+                                 ("3.2 GB of 12.1 GB · 45 MB/s · ~4 min left"). -->
+                            <TextBlock FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       Text="{x:Bind Model.SubtitleText, Mode=OneWay}" />
                         </StackPanel>
                     </StackPanel>
                         </Grid>
