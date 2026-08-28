@@ -1495,12 +1495,18 @@ namespace LlamaApp.Views
         /// True when this exact build (repo + quant) is already installed —
         /// the variant row then reads "Installed" instead of offering a
         /// duplicate download. Same id forms the installed rows are keyed by
-        /// (repo:quant; the server reports a bare repo mid-download).
+        /// (repo:quant; the server reports a bare repo mid-download). The
+        /// repo-level fallback only counts a row whose quant matches the
+        /// variant's — otherwise downloading one quant (say Q4_0) would mark
+        /// every sibling quant of the family (Q8_0, …) as installed too.
         /// </summary>
         bool IModelFamilyDetailsHost.IsVariantInstalled(ModelFamily family, ModelFamilySize size, ModelFamilyBuild build)
         {
             var serverId = build.Repo + ":" + build.Quant;
-            return _localByServerId.ContainsKey(serverId) || FindLocalByRepo(serverId) is not null;
+            if (_localByServerId.ContainsKey(serverId)) return true;
+            var row = FindLocalByRepo(serverId);
+            return row is not null &&
+                   string.Equals(row.Quant, build.Quant, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -2282,16 +2288,32 @@ namespace LlamaApp.Views
         /// — the quant is resolved only once the download completes — so an exact
         /// <see cref="_localByServerId"/> lookup misses rows that were keyed
         /// <c>repo:quant</c> (e.g. moved from Recommended on tap).
+        ///
+        /// <para>When several rows share the repo (multiple quants installed),
+        /// an exact quant match wins; a bare-repo id (mid-download) prefers a
+        /// row that is itself mid-download, so the transient id never steals
+        /// another quant's key and duplicates the model in the list.</para>
         /// </summary>
         private ModelItem? FindLocalByRepo(string serverId)
         {
-            var (repo, _) = SplitServerId(serverId);
+            var (repo, quant) = SplitServerId(serverId);
+            ModelItem? fallback = null;
             foreach (var (key, row) in _localByServerId)
             {
-                if (string.Equals(SplitServerId(key).repo, repo, StringComparison.OrdinalIgnoreCase))
+                var (rowRepo, rowQuant) = SplitServerId(key);
+                if (!string.Equals(rowRepo, repo, StringComparison.OrdinalIgnoreCase)) continue;
+
+                // Both ids carry a quant and they agree — exact hit.
+                if (quant.Length > 0 && rowQuant.Length > 0 &&
+                    string.Equals(rowQuant, quant, StringComparison.OrdinalIgnoreCase))
                     return row;
+
+                // Bare-repo ids belong to the download in flight.
+                if (quant.Length == 0 && row.IsDownloading) return row;
+
+                fallback ??= row;
             }
-            return null;
+            return fallback;
         }
 
         /// <summary>
