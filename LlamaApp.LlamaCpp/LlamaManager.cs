@@ -176,6 +176,22 @@ public sealed class LlamaManager
     /// </summary>
     public int IdleUnloadSeconds { get; set; } = -1;
 
+    /// <summary>
+    /// Per-model context-length preferences (keyed by server model id,
+    /// <c>repo:quant</c>), rendered into a llama.cpp <c>--models-preset</c> INI
+    /// at server launch so the router spawns each child with its chosen
+    /// <c>--ctx-size</c>. This INI is the only channel the router honors: its
+    /// <c>/models/load</c> endpoint reads only the model name and silently
+    /// ignores a ctx field in the request body (verified against the llama.cpp
+    /// source and empirically). Set by the caller (App.OnLaunched shares
+    /// <c>Settings.Current.ModelContextLengths</c> by reference, so later edits
+    /// are visible here) — kept here rather than reading <c>Settings</c>
+    /// directly to avoid a circular project dependency. Only affects servers
+    /// the app launches; an adopted already-running server keeps whatever it
+    /// was started with.
+    /// </summary>
+    public IReadOnlyDictionary<string, int>? ModelContextLengths { get; set; }
+
     private Process? _serverProcess;
 
     // Single-flight guard for EnsureLlamaOrDownloadAsync / StartServerAsync. Called
@@ -579,6 +595,18 @@ public sealed class LlamaManager
                 psi.ArgumentList.Add(IdleUnloadSeconds.ToString());
             }
 
+            // Per-model context lengths. The router's /models/load ignores a
+            // ctx field in the request body (it reads only the model name), so
+            // the chosen sizes are rendered into a --models-preset INI that the
+            // router merges into each model's child args (--ctx-size N).
+            // Written fresh every launch from the current preferences.
+            var contextPresetPath = WriteContextPresetsIni();
+            if (contextPresetPath is not null)
+            {
+                psi.ArgumentList.Add("--models-preset");
+                psi.ArgumentList.Add(contextPresetPath);
+            }
+
             // Point the HF cache at the user-configured directory so the server
             // resolves downloaded models from the same place the app scans.
             if (!string.IsNullOrEmpty(CacheDirectory) && Directory.Exists(CacheDirectory))
@@ -619,6 +647,11 @@ public sealed class LlamaManager
             // Track ownership across app restarts: if the app crashes, the next
             // instance recognizes this server as managed via the PID file.
             WritePidFile(proc.Id);
+
+            // The server's stdout/stderr are redirected; drain them or a chatty
+            // server blocks once the pipe buffer fills. Draining also captures
+            // server errors (e.g. a bad launch flag) into the app log.
+            DrainServerOutput(proc);
 
             // Wait for the port to respond — the server takes a moment to bind.
             // We pass `proc` so the wait fast-fails if the process exits before
@@ -732,6 +765,84 @@ public sealed class LlamaManager
     private static string PidFilePath =>
         Path.Combine(AppData.Root, ".llama.pid");
 
+    /// <summary>
+    /// Path of the llama.cpp <c>--models-preset</c> INI the app generates from
+    /// <see cref="ModelContextLengths"/> — one <c>[repo:quant]</c> section with
+    /// <c>ctx-size = N</c> per model that has a custom context length. Rewritten
+    /// on every server start and preference change.
+    ///
+    /// <para>Deliberately NOT under <see cref="AppData.Root"/>: the app is
+    /// MSIX-packaged, so writes to <c>%LOCALAPPDATA%</c> are virtualized (the
+    /// file physically lands under <c>Packages\…\LocalCache</c>) while the path
+    /// string stays the real <c>%LOCALAPPDATA%</c> one — and the non-packaged
+    /// server then reads a path where no file exists (launch fails with
+    /// "preset file does not exist"). The user profile is not virtualized, so
+    /// app and server see the same file there.</para>
+    /// </summary>
+    private static string ContextPresetPath =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".llama", "model-context-presets.ini");
+
+    /// <summary>
+    /// Writes <see cref="ModelContextLengths"/> as a llama.cpp preset INI and
+    /// returns its path, or <c>null</c> when no model has a custom context
+    /// length (the server then launches without <c>--models-preset</c>).
+    /// Best-effort — a write failure just skips the flag.
+    /// </summary>
+    private string? WriteContextPresetsIni()
+    {
+        var presets = ModelContextLengths;
+        if (presets is null || presets.Count == 0) return null;
+
+        var sb = new StringBuilder();
+        foreach (var (id, ctx) in presets)
+        {
+            if (ctx <= 0 || string.IsNullOrWhiteSpace(id)) continue;
+            sb.Append('[').Append(id).Append(']').Append('\n');
+            sb.Append("ctx-size = ").Append(ctx).Append("\n\n");
+        }
+        if (sb.Length == 0) return null;
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(ContextPresetPath)!);
+            File.WriteAllText(ContextPresetPath, sb.ToString());
+            return ContextPresetPath;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "failed to write model context preset file");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Re-renders the context-preset INI from <see cref="ModelContextLengths"/>
+    /// and asks the running server to re-read its presets
+    /// (<c>GET /models?reload=1</c> re-runs the router's preset load, which
+    /// re-reads the <c>--models-preset</c> file). Called when the user changes a
+    /// model's context length so the next <c>/models/load</c> picks it up.
+    /// Reloading does not disturb already-loaded models. Best-effort: a server
+    /// the app didn't launch (no <c>--models-preset</c> flag) won't read the
+    /// file — the preference then takes effect on the next app-launched start.
+    /// </summary>
+    public async Task ReloadModelPresetsAsync(CancellationToken cancel = default)
+    {
+        WriteContextPresetsIni();
+        if (ServerStatus != ServerState.Running) return;
+        try
+        {
+            using var budget = WithTimeout(TimeSpan.FromSeconds(10), cancel);
+            using var resp = await _http.GetAsync("/models?reload=1", budget.Token);
+            Log.Info($"model context presets reloaded (HTTP {(int)resp.StatusCode})");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Debug("model context preset reload failed: " + ex.Message);
+        }
+    }
+
     /// <summary>Writes <paramref name="pid"/> to the PID file. Best-effort.</summary>
     private static void WritePidFile(int pid)
     {
@@ -741,6 +852,30 @@ public sealed class LlamaManager
             File.WriteAllText(PidFilePath, pid.ToString());
         }
         catch (Exception ex) { Log.Warn(ex, "best-effort PID file write failed"); }
+    }
+
+    /// <summary>
+    /// Drains a spawned server's redirected stdout/stderr on background threads.
+    /// Redirecting without draining lets a chatty server block once the pipe
+    /// buffer fills (a silent stall); draining also keeps server output available
+    /// for diagnosing a failed launch. llama.cpp writes everything (INFO
+    /// included) to stderr, so both streams log at Debug — anything higher would
+    /// spam the app log with per-request noise.
+    /// </summary>
+    private static void DrainServerOutput(Process proc)
+    {
+        void Drain(StreamReader reader, string tag)
+        {
+            try
+            {
+                string? line;
+                while ((line = reader.ReadLine()) is not null)
+                    Log.Debug($"[llama{tag}] {line}");
+            }
+            catch { /* stream closed when the server exits */ }
+        }
+        _ = Task.Run(() => Drain(proc.StandardOutput, ""));
+        _ = Task.Run(() => Drain(proc.StandardError, " stderr"));
     }
 
     private static void DeletePidFile() => DeletePidFile(PidFilePath);

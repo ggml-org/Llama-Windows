@@ -116,6 +116,10 @@ namespace LlamaApp
             Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
             Llama.LlamaManager.Shared.HuggingFaceToken = Settings.Current.HuggingFaceToken;
             Llama.LlamaManager.Shared.IdleUnloadSeconds = Settings.Current.IdleUnloadSeconds;
+            // Shared by reference: the details view mutates this dictionary when
+            // the user picks a context length, and the manager renders it into
+            // the server's --models-preset INI (see ReloadModelPresetsAsync).
+            Llama.LlamaManager.Shared.ModelContextLengths = Settings.Current.ModelContextLengths;
             Common.Log.Info($"cache directory: {Settings.Current.CacheDirectory}");
             // Presence only — never log the token itself.
             Common.Log.Info($"HF token: {(string.IsNullOrWhiteSpace(Settings.Current.HuggingFaceToken) ? "not set" : "configured")}");

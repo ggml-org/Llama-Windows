@@ -1366,6 +1366,10 @@ namespace LlamaApp.Views
                 {
                     Settings.Current.ModelContextLengths[id] = t;
                     Settings.Current.Save();
+                    // The router caches each model's preset at load; re-render
+                    // the --models-preset INI and ask it to re-read so the next
+                    // load spawns the child with the new --ctx-size.
+                    _ = LlamaManager.Shared.ReloadModelPresetsAsync();
                 },
                 // The fit-params refinement awaits CLI processes; its verdicts
                 // can land on a thread-pool thread — flip bound properties on
