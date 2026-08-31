@@ -1175,8 +1175,35 @@ namespace LlamaApp.Views
             }
 
             Log.Info("cancel clicked: cancelling download of " + ((IModel)item).ServerModelId);
+
+            // Ask the server to abort the transfer first — the cancellation
+            // below only closes this app's SSE watcher, and the poller would
+            // otherwise keep the row alive (resurrected from the server
+            // snapshot, ring and all) until the server finished downloading.
+            _ = LlamaManager.Shared.CancelServerDownloadAsync(((IModel)item).ServerModelId);
+
             try { item.DownloadCancellation?.Cancel(); }
             catch (ObjectDisposedException) { /* download finished between check and click */ }
+
+            // Tear the row down immediately rather than waiting for the
+            // driver's cancellation unwind (its SSE read can sit on a canceled
+            // token until the stream next yields, leaving the ring up and the
+            // row in the installed list). Same cleanup the driver's Abort()
+            // path performs — idempotent with it.
+            if (item.PendingFirstDownload)
+            {
+                RemovePendingDownloadRow(item);
+            }
+            else
+            {
+                // An installed model's re-download keeps its row (the file is
+                // on disk) — reset it to the play glyph.
+                item.IsDownloading = false;
+                item.DownloadFraction = 0;
+                item.DownloadedBytes = 0;
+                item.DownloadTotalBytes = 0;
+                item.DownloadBytesPerSecond = 0;
+            }
         }
 
         /// <summary>
@@ -1205,6 +1232,7 @@ namespace LlamaApp.Views
             item.DownloadTotalBytes = 0;
             item.DownloadBytesPerSecond = 0;
             item.Downloadable = true;
+            item.PendingFirstDownload = false;
 
             UpdateEmptyState();
         }

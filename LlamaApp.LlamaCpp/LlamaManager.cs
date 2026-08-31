@@ -2157,7 +2157,7 @@ public sealed class LlamaManager
     /// server's next reload sweep. Note the server drops the partial bytes on
     /// abort, so the next attempt re-downloads from scratch.</para>
     /// </summary>
-    private async Task CancelServerDownloadAsync(string modelName)
+    public async Task CancelServerDownloadAsync(string modelName)
     {
         try
         {
