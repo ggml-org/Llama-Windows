@@ -22,7 +22,11 @@
              subtle "Browse more" separator, then catalog model families
              (name · sizes · description → details → download) — *
              (stretches), Fluent card
-          3. Version footer (app version - llama.cpp version) — Auto, compact
+          3. Hub search — a fixed, always-visible Hugging Face search box
+             with the results below it (rows like the models list, plus a
+             download button; the results ListView owns its scrollbar)
+             — Auto, grows to its content (results capped)
+          4. Version footer (app version - llama.cpp version) — Auto, compact
         The list section is a Fluent card (4px rounded corners, 1px stroke,
         card fill, z-depth 8 elevation via ThemeShadow), so no divider line
         is needed around it.
@@ -644,6 +648,96 @@
                 </Grid>
             </DataTemplate>
 
+            <!-- Hub search-result row: name │ author · downloads · likes,
+                 download action. The whole row is a chromeless button-free
+                 Grid like the installed row; the action cell is a small
+                 transparent-chrome button that swaps to a static checkmark
+                 once the download was started — the installed list above
+                 then owns the live progress ring. -->
+            <DataTemplate x:Key="HubModelRowTemplate"
+                          x:DataType="local:HubModelItemViewModel">
+                <Grid Padding="8,6"
+                      ColumnSpacing="10"
+                      CornerRadius="{ThemeResource ControlCornerRadius}"
+                      Background="Transparent"
+                      ToolTipService.ToolTip="{x:Bind RepoId}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0"
+                                VerticalAlignment="Center"
+                                Spacing="1">
+                        <TextBlock Text="{x:Bind DisplayName}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{x:Bind MetaText}"
+                                   FontSize="11"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+
+                    <!-- Action cell: download glyph while idle, a static
+                         checkmark once the download was started (the live
+                         progress lives on the installed list's row). The
+                         glyphs MUST exist in both Segoe Fluent Icons and
+                         Segoe MDL2 Assets: U+E896 (Download) and U+E73E
+                         (CheckMark) both do. -->
+                    <Button Grid.Column="1"
+                            Click="HubModelDownload_Click"
+                            Tag="{x:Bind}"
+                            Padding="6"
+                            MinWidth="0" MinHeight="0"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="Download model"
+                            ToolTipService.ToolTip="Download model">
+                        <Button.Resources>
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                        </Button.Resources>
+                        <Grid>
+                            <FontIcon Glyph="&#xE896;"
+                                      FontSize="16"
+                                      Opacity="0.5"
+                                      Visibility="{x:Bind DownloadGlyphVisible, Mode=OneWay}" />
+                            <FontIcon Glyph="&#xE73E;"
+                                      FontSize="16"
+                                      Opacity="0.5"
+                                      Visibility="{x:Bind AddedGlyphVisible, Mode=OneWay}" />
+                        </Grid>
+                    </Button>
+                </Grid>
+            </DataTemplate>
+
+            <!-- Hub suggestion row (AutoSuggestBox dropdown): name with
+                 the download count to its right. Shares the same view-model
+                 as the results list — choosing a suggestion runs the full
+                 search for its repo id. -->
+            <DataTemplate x:Key="HubSuggestionTemplate"
+                          x:DataType="local:HubModelItemViewModel">
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0"
+                               Text="{x:Bind DisplayName}"
+                               FontSize="12"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1"
+                               Text="{x:Bind MetaText}"
+                               FontSize="11"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                </Grid>
+            </DataTemplate>
+
             <!-- The list's template selector (installed row / separator /
                  family row) and the chromeless ListViewItem style: zero
                  padding/height so the rows own their own metrics, and no
@@ -670,8 +764,9 @@
             <RowDefinition Height="Auto" /> <!-- Section 1: brand header -->
             <RowDefinition Height="Auto" /> <!-- Divider -->
             <RowDefinition Height="*" />    <!-- Section 2: models list (card, stretches) -->
+            <RowDefinition Height="Auto" /> <!-- Section 3: Hub search (fixed, always visible) -->
             <RowDefinition Height="Auto" /> <!-- Divider -->
-            <RowDefinition Height="Auto" /> <!-- Section 3: version footer -->
+            <RowDefinition Height="Auto" /> <!-- Section 4: version footer -->
         </Grid.RowDefinitions>
 
         <!-- ============ Section 1: Brand header (compact) ============
@@ -935,19 +1030,113 @@
             </Grid>
         </Border>
 
-        <Rectangle Grid.Row="3"
+        <!-- ============ Section 3: Hub search (fixed bottom) ============
+             A fixed, always-visible search box querying the Hugging Face
+             Hub for GGUF models, with the results listed directly beneath
+             it (same row shape as the models list, plus a download button
+             that reuses the catalog download pipeline). The results
+             ListView owns its scrollbar — the section grows to its
+             content up to the results cap, then scrolls. -->
+        <StackPanel Grid.Row="3"
+                    Margin="16,0,16,12"
+                    Spacing="6">
+
+            <!-- Hugging Face brand mark left of the search box. The box is
+                 an AutoSuggestBox: typing suggests matching GGUF repos
+                 (debounced Hub queries, ranked by downloads); Enter, choosing
+                 a suggestion or the magnifier runs the full search beneath.
+                 TextMemberPath makes a chosen suggestion fill the box with
+                 its repo id. -->
+            <Grid ColumnSpacing="4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <!-- Brand tile: the same chrome as the model rows' logo
+                     tiles (secondary fill, control corner radius) so the
+                     mark sits in the list's visual language instead of
+                     floating as a bare icon. Exactly the search box's
+                     height (32px — its default MinHeight) and corner
+                     radius, 4px from the box, so the pair reads as one
+                     attached control: [logo][search]. -->
+                <Border Grid.Column="0"
+                        Width="32" Height="32"
+                        CornerRadius="{ThemeResource ControlCornerRadius}"
+                        Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="Hugging Face">
+                    <Image Source="ms-appx:///Assets/huggingface.svg"
+                           Width="18" Height="18"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+                </Border>
+                <AutoSuggestBox x:Name="HubSearchBox"
+                                Grid.Column="1"
+                                PlaceholderText="Search models ..."
+                                QueryIcon="Find"
+                                TextMemberPath="RepoId"
+                                FontSize="13"
+                                ItemTemplate="{StaticResource HubSuggestionTemplate}"
+                                TextChanged="HubSearchBox_TextChanged"
+                                QuerySubmitted="HubSearchBox_QuerySubmitted"
+                                AutomationProperties.Name="Search for models" />
+            </Grid>
+
+            <!-- Search results: hidden until the first query. The status
+                 line mirrors the browse section's (ring while in flight,
+                 a count / no-results / error caption), the ListView reuses
+                 the chromeless row style and owns its scrollbar past the
+                 results cap. -->
+            <StackPanel x:Name="HubResultsPanel"
+                        Visibility="Collapsed"
+                        Spacing="4">
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Center"
+                            Spacing="6">
+                    <local:ModelProgressRing x:Name="HubStatusRing"
+                                             Width="14" Height="14"
+                                             IsIndeterminate="True"
+                                             Visibility="Collapsed"
+                                             VerticalAlignment="Center" />
+                    <TextBlock x:Name="HubStatusText"
+                               FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+                <ListView x:Name="HubResultsList"
+                          MaxHeight="190"
+                          ItemsSource="{x:Bind HubResults}"
+                          ItemTemplate="{StaticResource HubModelRowTemplate}"
+                          ItemContainerStyle="{StaticResource ChromelessListViewItemStyle}"
+                          SelectionMode="None"
+                          IsItemClickEnabled="False"
+                          Padding="0"
+                          Background="Transparent">
+                    <ListView.Resources>
+                        <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="Transparent" />
+                        <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="Transparent" />
+                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="Transparent" />
+                    </ListView.Resources>
+                </ListView>
+            </StackPanel>
+        </StackPanel>
+
+        <Rectangle Grid.Row="4"
                    Height="1"
                    Margin="16,0"
                    Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
 
-        <!-- ============ Section 3: Version footer (compact) ============
+        <!-- ============ Section 4: Version footer (compact) ============
              A single centered line: a server-status dot (green = running,
              red = crashed, amber = starting, gray = stopped), the app's
              version (no name) and the resolved llama.cpp version separated
              by " - ", and a small relaunch button that appears only when
              the server is down. Bold theme foreground so it reads as a clear
              caption under the models list in either OS theme. -->
-        <StackPanel Grid.Row="4"
+        <StackPanel Grid.Row="5"
                     Margin="16,8,16,10"
                     HorizontalAlignment="Center"
                     Orientation="Horizontal"

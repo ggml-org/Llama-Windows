@@ -103,4 +103,157 @@ public class HubClient(string? token)
     }
 
     public HubUserInfoClient UserInfo { get; } = new (HUGGINGFACE_HUB_BASE_URL, token);
+
+    /// <summary>
+    /// One Hugging Face Hub repository matching a search — distilled from
+    /// the <c>GET /api/models</c> response to just the fields the models
+    /// panel needs. Only repos with GGUF files are returned (the request
+    /// filters on the <c>gguf</c> tag), so every result is downloadable by
+    /// the llama server.
+    /// </summary>
+    public sealed record HubSearchResult
+    {
+        /// <summary>Hugging Face repo id, e.g. "ggml-org/gemma-3-4b-it-GGUF".</summary>
+        public required string Id { get; init; }
+
+        /// <summary>Download count over all time (0 when the Hub omits it).</summary>
+        public long Downloads { get; init; }
+
+        /// <summary>Like count (0 when the Hub omits it).</summary>
+        public long Likes { get; init; }
+    }
+
+    /// <summary>
+    /// Searches the Hub for GGUF models matching <paramref name="query"/>,
+    /// most-downloaded first. An empty query returns without a request; a
+    /// network failure or a non-success status throws — the caller decides
+    /// how to surface it (the search box shows an inline error).
+    /// </summary>
+    public async Task<List<HubSearchResult>> SearchModels(string query, CancellationToken cancel = default)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return [];
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        return await SearchModels(client, query, cancel);
+    }
+
+    // Split from the public overload so tests can drive the HTTP path with
+    // a mock handler (the public overload owns its short-lived client).
+    internal async Task<List<HubSearchResult>> SearchModels(
+        HttpClient client, string query, CancellationToken cancel = default)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return [];
+
+        // filter=gguf restricts to repos tagged as shipping GGUF files —
+        // the only form the llama server can fetch. sort=downloads ranks
+        // the (otherwise relevance-ordered) results by popularity.
+        var url = $"{HUGGINGFACE_HUB_BASE_URL}/models" +
+                  $"?search={Uri.EscapeDataString(query)}" +
+                  "&filter=gguf&sort=downloads&direction=-1&limit=30";
+
+        using var resp = await client.GetAsync(url, cancel);
+        resp.EnsureSuccessStatusCode();
+        var json = await resp.Content.ReadAsStringAsync(cancel);
+        return ParseModels(json);
+    }
+
+    /// <summary>
+    /// Fetches a Hub user's/org's avatar image bytes: GET
+    /// <c>/api/users/{name}/avatarUrl</c> resolves the CDN URL, a second
+    /// request fetches the bytes. Returns null when the user has no avatar
+    /// or on any network/parse failure — avatars are a best-effort
+    /// decoration and must never fault the caller.
+    /// </summary>
+    public async Task<byte[]?> GetUserAvatarBytesAsync(string userName, CancellationToken cancel = default)
+    {
+        if (string.IsNullOrWhiteSpace(userName)) return null;
+
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        return await GetUserAvatarBytesAsync(client, userName, cancel);
+    }
+
+    // Split from the public overload so tests can drive the HTTP path with
+    // a mock handler (the public overload owns its short-lived client).
+    internal async Task<byte[]?> GetUserAvatarBytesAsync(
+        HttpClient client, string userName, CancellationToken cancel = default)
+    {
+        if (string.IsNullOrWhiteSpace(userName)) return null;
+
+        try
+        {
+            var avatarUrl = await ResolveUserAvatarUrlAsync(client, userName, cancel);
+            if (string.IsNullOrWhiteSpace(avatarUrl)) return null;
+            return await client.GetByteArrayAsync(avatarUrl, cancel);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    // GET /api/users/{name}/avatarUrl → {"avatarUrl": "…", "type": "user"|"org"}.
+    // The avatarUrl points at the cdn-avatars CDN — fetch the bytes separately.
+    private async Task<string?> ResolveUserAvatarUrlAsync(
+        HttpClient client, string userName, CancellationToken cancel)
+    {
+        using var resp = await client.GetAsync(
+            $"{HUGGINGFACE_HUB_BASE_URL}/users/{Uri.EscapeDataString(userName)}/avatarUrl", cancel);
+
+        // A user/org without an avatar (404) is an expected answer, not an error.
+        if (!resp.IsSuccessStatusCode) return null;
+
+        var json = await resp.Content.ReadAsStringAsync(cancel);
+        try
+        {
+            return JsonSerializer.Deserialize<UserAvatarDto>(json)?.AvatarUrl;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>/api/users/{name}/avatarUrl response DTO.</summary>
+    internal sealed class UserAvatarDto
+    {
+        [JsonPropertyName("avatarUrl")] public string? AvatarUrl { get; set; }
+        [JsonPropertyName("type")] public string? Type { get; set; }
+    }
+
+    /// <summary>
+    /// Parses a <c>GET /api/models</c> JSON array into <see cref="HubSearchResult"/>
+    /// records. Malformed JSON or null yields an empty list; missing fields map
+    /// to their zero values. Internal for unit tests.
+    /// </summary>
+    internal static List<HubSearchResult> ParseModels(string json)
+    {
+        try
+        {
+            var dtos = JsonSerializer.Deserialize<HubModelDto[]>(json);
+            return dtos is null ? [] : [.. dtos.Select(ParseModel)];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static HubSearchResult ParseModel(HubModelDto dto) => new()
+    {
+        Id = dto.Id ?? "",
+        Downloads = dto.Downloads ?? 0,
+        Likes = dto.Likes ?? 0,
+    };
+
+    /// <summary>
+    /// /api/models response DTO — only the fields the search list renders;
+    /// the rest of the payload (siblings, tags, config, …) is ignored.
+    /// Nullable so short entries (an id alone) still deserialize.
+    /// </summary>
+    internal sealed class HubModelDto
+    {
+        [JsonPropertyName("id")] public string? Id { get; set; }
+        [JsonPropertyName("downloads")] public long? Downloads { get; set; }
+        [JsonPropertyName("likes")] public long? Likes { get; set; }
+    }
 }

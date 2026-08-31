@@ -85,6 +85,14 @@ namespace LlamaApp.Views
         /// <summary>The catalog's featured model families (browse section).</summary>
         public ObservableCollection<ModelFamilyViewModel> Families { get; } = [];
 
+        /// <summary>
+        /// The rows of the bottom Hub-search section: the results of the most
+        /// recent Hugging Face query (empty until the first search). Cleared
+        /// and repopulated per search; row state ("added" checkmark) flows
+        /// through bindings.
+        /// </summary>
+        public ObservableCollection<HubModelItemViewModel> HubResults { get; } = [];
+
         // Wrapper cache: an installed row keeps the same list-item view-model
         // across unrelated rebuilds, so the ListView's realized containers
         // (and scroll position) survive membership churn.
@@ -130,6 +138,15 @@ namespace LlamaApp.Views
         // watch's lifetime: started when a row enters the downloading state,
         // canceled when it leaves it. All access happens on the UI thread.
         private readonly Dictionary<ModelItem, CancellationTokenSource> _externalDownloadWatches = new();
+
+        // Hub-search bookkeeping. _hubSearchId makes stale search responses
+        // (an earlier query landing after a newer one) discardable; _hubSuggestId
+        // does the same for the AutoSuggestBox's per-keystroke suggestions;
+        // _hubDownloads links each Hub row to the ModelItem its download click
+        // created, so a canceled first-download can re-enable the row's button.
+        private int _hubSearchId;
+        private int _hubSuggestId;
+        private readonly Dictionary<HubModelItemViewModel, ModelItem> _hubDownloads = new();
 
         // Last observed server state, for the once-per-transition crash toast
         // in LlamaManager_StateChanged (StateChanged fires for every manager
@@ -190,6 +207,7 @@ namespace LlamaApp.Views
             {
                 RebuildItems();
                 RebuildBrowseTail();
+                UpdateHubRowStates();
             };
 
             LoadModels();
@@ -2467,6 +2485,228 @@ namespace LlamaApp.Views
         {
             if (_avatarProfileUrl is null) return;
             await Windows.System.Launcher.LaunchUriAsync(new Uri(_avatarProfileUrl));
+        }
+
+        // ---- Hub search (bottom section) ----
+
+        /// <summary>
+        /// Drives the Hub search box's suggestions while the user types:
+        /// debounced (one Hub request per settled keystroke burst, stale
+        /// responses discarded by id) top-GGUF-repo matches, ranked by
+        /// downloads. Enter, a picked suggestion, or the magnifier runs the
+        /// full search via <see cref="HubSearchBox_QuerySubmitted"/>.
+        /// </summary>
+        private async void HubSearchBox_TextChanged(AutoSuggestBox sender, AutoSuggestBoxTextChangedEventArgs args)
+        {
+            if (args.Reason != AutoSuggestionBoxTextChangeReason.UserInput) return;
+            var query = sender.Text?.Trim() ?? "";
+            if (query.Length == 0)
+            {
+                sender.ItemsSource = null;
+                return;
+            }
+
+            var suggestId = ++_hubSuggestId;
+            try { await Task.Delay(300); }
+            catch (OperationCanceledException) { return; }
+            if (suggestId != _hubSuggestId) return; // a newer keystroke superseded us
+
+            try
+            {
+                var token = Settings.Current.HuggingFaceToken;
+                var results = await new HubClient(string.IsNullOrWhiteSpace(token) ? null : token)
+                    .SearchModels(query);
+                if (suggestId != _hubSuggestId) return;
+                // Suggestions are ranked by likes (most-liked first) — the
+                // dropdown's pick list, unlike the full search beneath (which
+                // keeps the Hub's download ranking). Ties fall back to the
+                // Hub's download order (OrderByDescending is stable).
+                //
+                // The list is then REVERSED: the search box sits at the
+                // window's bottom edge, so the suggestion popup opens upward
+                // and anchors the FIRST ItemsSource item nearest the query
+                // box — without the reversal the most-liked suggestion would
+                // sit at the bottom of the dropdown (observed: the exact
+                // reverse of the sorted list rendered, twice, across
+                // restarts). Reversing keeps most-liked at the visual top.
+                sender.ItemsSource = ToHubRows(results)
+                    .OrderByDescending(r => r.Likes)
+                    .Take(6)
+                    .Reverse()
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                // Offline / rejected — suggestions are a best-effort affordance;
+                // the full search's status line carries the error if one runs.
+                Log.Debug("hub suggestions failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Runs the full Hub search: Enter in the box, the magnifier, or a
+        /// picked suggestion (whose repo id fills the box via
+        /// TextMemberPath). The chosen suggestion is the authoritative query —
+        /// its repo id replaces whatever partial text is in the box.
+        /// </summary>
+        private void HubSearchBox_QuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
+        {
+            var query = args.ChosenSuggestion is HubModelItemViewModel vm
+                ? vm.RepoId
+                : args.QueryText?.Trim();
+            if (string.IsNullOrWhiteSpace(query)) return;
+
+            if (!string.Equals(HubSearchBox.Text, query, StringComparison.Ordinal))
+                HubSearchBox.Text = query; // programmatic — TextChanged ignores it
+            _ = RunHubSearchAsync();
+        }
+
+        /// <summary>
+        /// Queries the Hugging Face Hub for GGUF models matching the search
+        /// box's text and fills <see cref="HubResults"/>. The status line
+        /// above the results mirrors the browse section's (ring while in
+        /// flight, a count / no-results / error caption). Stale responses —
+        /// an earlier query landing after a newer one was started — are
+        /// discarded by id, so rapid Enter presses never interleave results.
+        /// </summary>
+        private async Task RunHubSearchAsync()
+        {
+            var query = HubSearchBox.Text?.Trim() ?? "";
+            if (query.Length == 0) return;
+
+            var searchId = ++_hubSearchId;
+            HubResultsPanel.Visibility = Visibility.Visible;
+            HubResultsList.Visibility = Visibility.Collapsed;
+            HubStatusRing.Visibility = Visibility.Visible;
+            HubStatusText.Text = $"Searching Hugging Face for \u201C{query}\u201D\u2026";
+
+            try
+            {
+                // The token is optional for search (it only lifts rate limits
+                // and unlocks gated repos) — pass it when one is configured.
+                var token = Settings.Current.HuggingFaceToken;
+                var results = await new HubClient(string.IsNullOrWhiteSpace(token) ? null : token)
+                    .SearchModels(query);
+
+                if (searchId != _hubSearchId) return; // a newer search superseded us
+
+                HubResults.Clear();
+                foreach (var row in ToHubRows(results))
+                    HubResults.Add(row);
+                UpdateHubRowStates();
+
+                HubStatusRing.Visibility = Visibility.Collapsed;
+                HubResultsList.Visibility = results.Count > 0
+                    ? Visibility.Visible : Visibility.Collapsed;
+                HubStatusText.Text = results.Count == 0
+                    ? $"No GGUF models found for \u201C{query}\u201D."
+                    : $"{results.Count} GGUF repos for \u201C{query}\u201D";
+            }
+            catch (Exception ex) when (ex is HttpRequestException
+                or TaskCanceledException or TimeoutException)
+            {
+                // Network failure / timeout — say so instead of "no results".
+                if (searchId != _hubSearchId) return;
+                HubStatusRing.Visibility = Visibility.Collapsed;
+                HubResultsList.Visibility = Visibility.Collapsed;
+                HubStatusText.Text =
+                    "Couldn't reach Hugging Face. Check your connection and try again.";
+            }
+            catch (Exception ex)
+            {
+                if (searchId != _hubSearchId) return;
+                Log.Warn(ex, "hub search failed");
+                HubStatusRing.Visibility = Visibility.Collapsed;
+                HubResultsList.Visibility = Visibility.Collapsed;
+                HubStatusText.Text = "Search failed. Try again.";
+            }
+        }
+
+        /// <summary>
+        /// Maps Hub search results onto the row view-models the results list
+        /// and the AutoSuggestBox dropdown both render: the repo id split
+        /// into its display name (last path segment) and author (first).
+        /// </summary>
+        private static List<HubModelItemViewModel> ToHubRows(List<HubClient.HubSearchResult> results)
+        {
+            var rows = new List<HubModelItemViewModel>(results.Count);
+            foreach (var r in results)
+            {
+                var sep = r.Id.LastIndexOf('/');
+                rows.Add(new HubModelItemViewModel
+                {
+                    RepoId = r.Id,
+                    DisplayName = sep >= 0 ? r.Id[(sep + 1)..] : r.Id,
+                    Author = sep > 0 ? r.Id[..sep] : "",
+                    Downloads = r.Downloads,
+                    Likes = r.Likes,
+                });
+            }
+            return rows;
+        }
+
+        /// <summary>
+        /// Fired by a Hub search-result row's download button: builds a
+        /// <see cref="ModelItem"/> for the repo and hands it to the shared
+        /// download pipeline (<see cref="StartRecommendedDownloadAsync"/>) —
+        /// the same disk-space/memory preflights, progress ring, cancel/pause
+        /// affordances and post-download auto-load as a catalog download.
+        /// The row carries the bare repo id (no quant suffix): the running
+        /// server resolves its own default GGUF variant, the same rule
+        /// <see cref="LlamaManager.DownloadModelAsync"/> documents for
+        /// quant-less ids. The live progress shows on the model's row in the
+        /// installed list; this row flips to a static checkmark.
+        /// </summary>
+        private void HubModelDownload_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement fe || fe.Tag is not HubModelItemViewModel vm)
+                return;
+            if (vm.DownloadStarted) return; // already downloading / installed
+
+            var item = new ModelItem
+            {
+                Name = vm.DisplayName,
+                RepoName = vm.RepoId,
+                Description = "",
+                Parameters = "",
+                Size = "",
+                License = "",
+                Vision = false,
+                Downloadable = true,
+                Brand = vm.Author,
+            };
+            vm.DownloadStarted = true;
+            _hubDownloads[vm] = item;
+            _ = StartRecommendedDownloadAsync(item, fe);
+        }
+
+        /// <summary>
+        /// Re-syncs the Hub rows' "added" state with the installed list: a row
+        /// whose repo is already installed keeps its checkmark; one whose
+        /// first-download was canceled before anything landed (its row was
+        /// removed from the installed list) offers the download again. Runs on
+        /// the UI thread (the LocalModels.CollectionChanged hook and the
+        /// search completion both call it).
+        /// </summary>
+        private void UpdateHubRowStates()
+        {
+            var installed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var m in LocalModels)
+                installed.Add(m.RepoName ?? m.Name);
+
+            foreach (var vm in HubResults)
+            {
+                var started = installed.Contains(vm.RepoId);
+                if (!started &&
+                    _hubDownloads.TryGetValue(vm, out var item) &&
+                    !item.IsDownloading)
+                {
+                    // The download click's row is gone from the installed list
+                    // and nothing is in flight — a canceled first-download.
+                    _hubDownloads.Remove(vm);
+                }
+                vm.DownloadStarted = started || _hubDownloads.ContainsKey(vm);
+            }
         }
 
         private void Quit_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
