@@ -146,6 +146,16 @@ namespace LlamaApp.Views
         // created, so a canceled first-download can re-enable the row's button.
         private int _hubSearchId;
         private int _hubSuggestId;
+
+        // Per-attempt cancellation for the two hub-request paths. Each new
+        // keystroke/search cancels the previous in-flight request's token so
+        // superseded requests (up to 10 s) stop consuming sockets. The id
+        // counters above remain the correctness mechanism for staleness;
+        // cancellation is an additive optimization. Cancel-and-replace without
+        // disposing (matching StopExternalDownloadWatch's convention) — the
+        // token is already captured by the in-flight request. UI-thread-only.
+        private CancellationTokenSource? _hubSuggestCts;
+        private CancellationTokenSource? _hubSearchCts;
         private readonly Dictionary<HubModelItemViewModel, ModelItem> _hubDownloads = new();
 
         // Last observed server state, for the once-per-transition crash toast
@@ -2689,7 +2699,10 @@ namespace LlamaApp.Views
             }
 
             var suggestId = ++_hubSuggestId;
-            try { await Task.Delay(300); }
+            _hubSuggestCts?.Cancel();
+            _hubSuggestCts = new CancellationTokenSource();
+            var cancel = _hubSuggestCts.Token;
+            try { await Task.Delay(300, cancel); }
             catch (OperationCanceledException) { return; }
             if (suggestId != _hubSuggestId) return; // a newer keystroke superseded us
 
@@ -2697,7 +2710,7 @@ namespace LlamaApp.Views
             {
                 var token = Settings.Current.HuggingFaceToken;
                 var results = await new HubClient(string.IsNullOrWhiteSpace(token) ? null : token)
-                    .SearchModels(query);
+                    .SearchModels(query, cancel, limit: 6);
                 if (suggestId != _hubSuggestId) return;
                 // Suggestions are ranked by likes (most-liked first) — the
                 // dropdown's pick list, unlike the full search beneath (which
@@ -2757,6 +2770,9 @@ namespace LlamaApp.Views
             if (query.Length == 0) return;
 
             var searchId = ++_hubSearchId;
+            _hubSearchCts?.Cancel();
+            _hubSearchCts = new CancellationTokenSource();
+            var cancel = _hubSearchCts.Token;
             HubResultsPanel.Visibility = Visibility.Visible;
             HubResultsList.Visibility = Visibility.Collapsed;
             HubStatusRing.Visibility = Visibility.Visible;
@@ -2768,7 +2784,7 @@ namespace LlamaApp.Views
                 // and unlocks gated repos) — pass it when one is configured.
                 var token = Settings.Current.HuggingFaceToken;
                 var results = await new HubClient(string.IsNullOrWhiteSpace(token) ? null : token)
-                    .SearchModels(query);
+                    .SearchModels(query, cancel);
 
                 if (searchId != _hubSearchId) return; // a newer search superseded us
 

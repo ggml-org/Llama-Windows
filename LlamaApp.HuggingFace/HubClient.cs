@@ -8,6 +8,18 @@ public class HubClient(string? token)
 {
     private static string HUGGINGFACE_HUB_BASE_URL = "https://huggingface.co/api";
 
+    // Shared client for search: the API base is constant and search is
+    // unauthenticated, so one thread-safe instance is safely reused across
+    // concurrent callers (suggestions + full search) instead of constructing
+    // a new client/socket per keystroke burst. Deliberately credential-free —
+    // never add DefaultRequestHeaders/auth here; any future auth must go
+    // per-request (like WhoAmI's Bearer header). 10 s timeout matches the
+    // per-call clients used elsewhere in this class.
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+
+    /// <summary>Test-only accessor for the shared search client (identity / timeout assertions).</summary>
+    internal static HttpClient SharedClient => Http;
+
     public sealed class HubUserInfoClient(string baseUrl, string? token)
     {
         /// <summary>
@@ -129,27 +141,28 @@ public class HubClient(string? token)
     /// network failure or a non-success status throws — the caller decides
     /// how to surface it (the search box shows an inline error).
     /// </summary>
-    public async Task<List<HubSearchResult>> SearchModels(string query, CancellationToken cancel = default)
+    public async Task<List<HubSearchResult>> SearchModels(
+        string query, CancellationToken cancel = default, int limit = 30)
     {
         if (string.IsNullOrWhiteSpace(query)) return [];
 
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        return await SearchModels(client, query, cancel);
+        return await SearchModels(Http, query, cancel, limit);
     }
 
-    // Split from the public overload so tests can drive the HTTP path with
-    // a mock handler (the public overload owns its short-lived client).
+    // Split from the public overload so tests can drive the HTTP path with a
+    // mock handler; the public overload routes through the shared static client.
     internal async Task<List<HubSearchResult>> SearchModels(
-        HttpClient client, string query, CancellationToken cancel = default)
+        HttpClient client, string query, CancellationToken cancel = default, int limit = 30)
     {
         if (string.IsNullOrWhiteSpace(query)) return [];
 
         // filter=gguf restricts to repos tagged as shipping GGUF files —
         // the only form the llama server can fetch. sort=downloads ranks
-        // the (otherwise relevance-ordered) results by popularity.
+        // the (otherwise relevance-ordered) results by popularity. limit caps
+        // the payload (full search uses the 30 default; suggestions pass 6).
         var url = $"{HUGGINGFACE_HUB_BASE_URL}/models" +
                   $"?search={Uri.EscapeDataString(query)}" +
-                  "&filter=gguf&sort=downloads&direction=-1&limit=30";
+                  $"&filter=gguf&sort=downloads&direction=-1&limit={limit}";
 
         using var resp = await client.GetAsync(url, cancel);
         resp.EnsureSuccessStatusCode();
