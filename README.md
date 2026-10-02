@@ -33,12 +33,50 @@ Llama manages a `llama serve` process and talks to it over its REST API. Your mo
 
 ## Building from source
 
-You'll need the **.NET 10 SDK** with the Windows App SDK workload:
+You'll need the **.NET 10 SDK** on Windows (ARM64 or x64 host; the SDK cross-builds both).
+
+The WinUI app is built per-platform — pass the matching `-p:Platform` alongside the `-r` runtime identifier:
 
 ```bash
-dotnet build -c Release -r win-x64   # or win-arm64
-dotnet test                          # run the unit tests
+dotnet build LlamaApp.csproj -c Release -r win-arm64 -p:Platform=ARM64
+dotnet build LlamaApp.csproj -c Release -r win-x64   -p:Platform=x64
+dotnet build LlamaApp.csproj -c Release -r win-x86   -p:Platform=x86
+
+# run the unit tests (two test projects; see the ARM64 note below)
+dotnet test LlamaApp.Tests/LlamaApp.Tests.csproj -c Release
+dotnet test LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj -c Release
+
+To get a runnable (unpackaged, loose-files) build, publish it. This is what
+[`.github/workflows/publish.yml`](.github/workflows/publish.yml) produces:
+
+```bash
+dotnet publish LlamaApp.csproj -c Release -r win-arm64 -p:Platform=ARM64 \
+    --self-contained true -p:PublishReadyToRun=false -p:PublishSingleFile=false \
+    -o publish/win-arm64
 ```
+
+The app runs unpackaged from that folder. Trim/R2R are off in the official
+builds because the app relies on reflection-based JSON serialization and COM
+`dynamic` interop, which the trimmer would strip (see the IL2026/IL2072
+warnings if you enable `PublishTrimmed`).
+
+**Testing on an ARM64 host:** `LlamaApp.Tests` references the WinUI app, which
+the test project pins to x64 (`SetPlatform=Platform=x64`), so the app assembly
+it loads is x64. On ARM64 Windows, run that suite under the x64 .NET runtime
+(installed at `C:\Program Files\dotnet\x64`) with `--arch x64`:
+
+```bash
+dotnet test LlamaApp.Tests/LlamaApp.Tests.csproj -c Release --arch x64
+```
+
+`LlamaApp.LlamaCpp.Tests` is platform-agnostic and runs natively.
+
+### Building the MSIX
+
+The installed release is a signed `.msix`, produced by the CI
+([`.github/workflows/_build.yml`](.github/workflows/_build.yml)) with Visual
+Studio MSBuild and the `GenerateAppxPackage` target — `dotnet build` alone
+does not pack the Appx. `dotnet publish` above is sufficient for local use.
 
 ---
 
