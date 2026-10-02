@@ -32,6 +32,24 @@ public sealed class HubModelItemViewModel : INotifyPropertyChanged
     /// <summary>Like count from the Hub (0 when unknown).</summary>
     public long Likes { get; set; }
 
+    private Microsoft.UI.Xaml.Media.ImageSource? _logo;
+
+    /// <summary>
+    /// The author's Hub avatar, attached by the shell once it lands (memory →
+    /// disk cache; fetched from the Hub when the model is downloaded). Null
+    /// renders the empty tile — same as catalog rows with an unknown brand.
+    /// </summary>
+    public Microsoft.UI.Xaml.Media.ImageSource? Logo
+    {
+        get => _logo;
+        set
+        {
+            if (ReferenceEquals(_logo, value)) return;
+            _logo = value;
+            OnPropertyChanged();
+        }
+    }
+
     private bool _downloadStarted;
 
     /// <summary>

@@ -662,11 +662,31 @@
                       Background="Transparent"
                       ToolTipService.ToolTip="{x:Bind RepoId}">
                     <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <StackPanel Grid.Column="0"
+                    <!-- Author avatar tile — the same chrome as the model
+                         rows' logo tiles (secondary fill, control corner
+                         radius). Filled by the shell from the disk cache
+                         once the author's Hub avatar lands; the avatar is
+                         fetched at download time and stored locally for
+                         reuse, so authors seen before show their avatar
+                         immediately. -->
+                    <Border Grid.Column="0"
+                            Width="24" Height="24"
+                            CornerRadius="{ThemeResource ControlCornerRadius}"
+                            Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                            VerticalAlignment="Center">
+                        <Image Source="{x:Bind Logo, Mode=OneWay}"
+                               Width="18" Height="18"
+                               Stretch="Uniform"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center" />
+                    </Border>
+
+                    <StackPanel Grid.Column="1"
                                 VerticalAlignment="Center"
                                 Spacing="1">
                         <TextBlock Text="{x:Bind DisplayName}"
@@ -685,7 +705,7 @@
                          glyphs MUST exist in both Segoe Fluent Icons and
                          Segoe MDL2 Assets: U+E896 (Download) and U+E73E
                          (CheckMark) both do. -->
-                    <Button Grid.Column="1"
+                    <Button Grid.Column="2"
                             Click="HubModelDownload_Click"
                             Tag="{x:Bind}"
                             Padding="6"

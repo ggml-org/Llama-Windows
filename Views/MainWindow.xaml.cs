@@ -397,6 +397,12 @@ namespace LlamaApp.Views
                 }
                 _localByServerId[sm.Id] = item;
                 LocalModels.Add(item);
+
+                // Rows the brand-logo mapping can't fill (Hub-downloaded
+                // models have no catalog brand) fall back to the author's
+                // cached Hub avatar — disk only, no network here.
+                if (item.Logo is null)
+                    _ = AttachCachedItemAvatarAsync(item);
             }
 
             // In-flight downloads the server hasn't listed yet (just POSTed) —
@@ -2246,6 +2252,8 @@ namespace LlamaApp.Views
                         newItem.PendingFirstDownload = true;
                     _localByServerId[sm.Id] = newItem;
                     LocalModels.Add(newItem);
+                    if (newItem.Logo is null)
+                        _ = AttachCachedItemAvatarAsync(newItem);
                     Log.Info("added new local row from poller: " + sm.Id);
                 }
             }
@@ -2620,7 +2628,14 @@ namespace LlamaApp.Views
 
                 HubResults.Clear();
                 foreach (var row in ToHubRows(results))
+                {
                     HubResults.Add(row);
+                    // Disk cache only — a full page of results must never
+                    // fire a request storm; the fetch happens at download
+                    // time (AttachItemAvatarAsync) and every later search
+                    // shows the author immediately.
+                    _ = AttachHubAvatarAsync(row);
+                }
                 UpdateHubRowStates();
 
                 HubStatusRing.Visibility = Visibility.Collapsed;
@@ -2674,6 +2689,49 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
+        /// Attaches the author's Hub avatar to a search-result row once it
+        /// lands — disk cache only, so populating a full page of results
+        /// never fires a request storm. Authors seen before (their model was
+        /// downloaded) show their avatar immediately; the fetch happens at
+        /// download time (<see cref="AttachItemAvatarAsync"/>).
+        /// </summary>
+        private async Task AttachHubAvatarAsync(HubModelItemViewModel row)
+        {
+            var avatar = await AvatarCache.GetAsync(row.Author);
+            if (avatar is not null && HubResults.Contains(row))
+                row.Logo = avatar;
+        }
+
+        /// <summary>
+        /// Attaches the author's Hub avatar to an installed-list row once it
+        /// lands — fetching it from the Hub on first use and storing it under
+        /// the app's local cache for reuse (<see cref="AvatarCache"/>).
+        /// Avatars are decorative: a failure just leaves the empty tile.
+        /// </summary>
+        private async Task AttachItemAvatarAsync(ModelItem item)
+        {
+            var avatar = await AvatarCache.GetOrFetchAsync(AuthorOf(item.RepoName ?? item.Name));
+            if (avatar is not null) item.Logo = avatar;
+        }
+
+        /// <summary>
+        /// Re-attaches a cached Hub avatar to a row the brand-logo mapping
+        /// can't fill. Disk cache only — the fetch happens at download time.
+        /// </summary>
+        private async Task AttachCachedItemAvatarAsync(ModelItem item)
+        {
+            var avatar = await AvatarCache.GetAsync(AuthorOf(item.RepoName ?? item.Name));
+            if (avatar is not null) item.Logo = avatar;
+        }
+
+        /// <summary>The author/org part of a repo id ("" when there is none).</summary>
+        private static string AuthorOf(string repoId)
+        {
+            var sep = repoId.LastIndexOf('/');
+            return sep > 0 ? repoId[..sep] : "";
+        }
+
+        /// <summary>
         /// Fired by a Hub search-result row's download button: builds a
         /// <see cref="ModelItem"/> for the repo and hands it to the shared
         /// download pipeline (<see cref="StartRecommendedDownloadAsync"/>) —
@@ -2706,6 +2764,11 @@ namespace LlamaApp.Views
             vm.DownloadStarted = true;
             _hubDownloads[vm] = item;
             _ = StartRecommendedDownloadAsync(item, fe);
+
+            // Fetch + store the author's Hub avatar (disk-cached for reuse)
+            // and attach it to the row when it lands — ModelItem.Logo
+            // notifies, so the installed list's tile updates live.
+            _ = AttachItemAvatarAsync(item);
         }
 
         /// <summary>
