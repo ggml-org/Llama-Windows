@@ -9,6 +9,7 @@ namespace LlamaApp
         private TrayIconManager? _trayIcon;
         private OverlayWindow? _overlay;
         private GlobalHotkey? _hotkey;
+        private Llama.RuntimeUpdateScheduler? _runtimeUpdates;
 
         /// <summary>
         /// Initializes the singleton application object.  This is the first line of authored code
@@ -123,7 +124,16 @@ namespace LlamaApp
             Common.Log.Info($"cache directory: {Settings.Current.CacheDirectory}");
             // Presence only — never log the token itself.
             Common.Log.Info($"HF token: {(string.IsNullOrWhiteSpace(Settings.Current.HuggingFaceToken) ? "not set" : "configured")}");
-            _ = Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
+            // Weekly runtime self-update: when the last check (persisted under
+            // %LOCALAPPDATA%\Llama) is a week old or older, check llama.cpp's
+            // latest release and install it via install.ps1 BEFORE the server
+            // launches — the one point where llama.exe is not in use. The
+            // scheduler then runs the ensure and keeps an hourly watch; it
+            // defers installs while the server is up. Fire-and-forget like
+            // the ensure it wraps.
+            _runtimeUpdates = new Llama.RuntimeUpdateScheduler(Llama.LlamaManager.Shared);
+            _ = _runtimeUpdates.StartAsync(
+                () => Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync());
 
             // Spotlight-style prompt overlay, summoned by a global Alt+Space
             // hotkey. Created lazily on first press and reused thereafter; the
