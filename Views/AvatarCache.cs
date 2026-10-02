@@ -17,7 +17,11 @@ namespace LlamaApp.Views;
 /// </summary>
 public static class AvatarCache
 {
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    // Coalesces concurrent Hub fetches per author and bounds total in-flight
+    // fetches, so populating a whole installed list (or racing a poller tick)
+    // never storms the Hub. Width 2 is deliberately modest: each avatar is two
+    // serial HTTP hops with 10s timeouts, and avatars are a decoration.
+    private static readonly AvatarFetchGate FetchGate = new(2, FetchAndStoreAsync);
 
     // Resolved images, keyed by author. Callers attach avatars from UI-thread
     // async continuations, so all access is on the UI thread.
@@ -36,14 +40,19 @@ public static class AvatarCache
         if (path is null || !File.Exists(path)) return null;
 
         var image = await LoadAsync(path);
-        Images[author] = image;
+        // Never poison the memory cache with a null (e.g. a corrupt cache file
+        // that fails to decode) — a later call should be free to retry.
+        if (image is not null) Images[author] = image;
         return image;
     }
 
     /// <summary>
     /// Returns the author's cached avatar, fetching it from the Hub on first
     /// use (memory → disk → network) and storing it under the local cache for
-    /// reuse. Null when the author has no avatar or the fetch fails.
+    /// reuse. Fetch-on-miss is coalesced per author and globally bounded (see
+    /// <see cref="AvatarFetchGate"/>), so a burst of rows for the same org
+    /// costs a single request. Null when the author has no avatar or the fetch
+    /// fails.
     /// </summary>
     public static async Task<ImageSource?> GetOrFetchAsync(string author)
     {
@@ -57,9 +66,8 @@ public static class AvatarCache
         {
             try
             {
-                var bytes = await new HubClient(null).GetUserAvatarBytesAsync(author);
+                var bytes = await FetchGate.FetchAsync(author);
                 if (bytes is null || bytes.Length == 0) return null;
-                await File.WriteAllBytesAsync(path, bytes);
             }
             catch (Exception ex)
             {
@@ -69,8 +77,23 @@ public static class AvatarCache
         }
 
         var image = await LoadAsync(path);
-        Images[author] = image;
+        // See GetAsync: a failed decode must not be stored as a resolved image.
+        if (image is not null) Images[author] = image;
         return image;
+    }
+
+    // Runs inside the coalesced gate task: N rows racing for the same author
+    // share one Hub fetch and one file write, then each reads via LoadAsync.
+    private static async Task<byte[]?> FetchAndStoreAsync(string author)
+    {
+        var bytes = await new HubClient(null).GetUserAvatarBytesAsync(author);
+        if (bytes is null || bytes.Length == 0) return null;
+
+        var path = PathFor(author);
+        if (path is null) return null;
+
+        await File.WriteAllBytesAsync(path, bytes);
+        return bytes;
     }
 
     /// <summary>Cache-file path for an author, or null when storage is unavailable.</summary>
@@ -80,7 +103,7 @@ public static class AvatarCache
         {
             var dir = Path.Combine(ApplicationData.Current.LocalCacheFolder.Path, "avatars");
             Directory.CreateDirectory(dir);
-            return Path.Combine(dir, author.ToLowerInvariant() + ".img");
+            return Path.Combine(dir, SanitizeFileName(author) + ".img");
         }
         catch
         {
@@ -88,6 +111,23 @@ public static class AvatarCache
             // are optional.
             return null;
         }
+    }
+
+    /// <summary>
+    /// Reduces an author/org name to a safe single cache-file stem: ASCII
+    /// letters, digits, dash and underscore are kept (lowercased); everything
+    /// else — separators, dots (".."!), Unicode, control characters — becomes
+    /// an underscore. The name comes from Hub data, so it must never be
+    /// trusted to shape a path segment. Distinct authors can only collide by
+    /// sharing a stem when they differ solely in such characters; worst case
+    /// two avatars share a file, which is harmless for a decoration.
+    /// </summary>
+    internal static string SanitizeFileName(string author)
+    {
+        var sb = new System.Text.StringBuilder(author.Length);
+        foreach (var c in author.ToLowerInvariant())
+            sb.Append(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' ? c : '_');
+        return sb.Length == 0 ? "_" : sb.ToString();
     }
 
     private static async Task<ImageSource?> LoadAsync(string path)

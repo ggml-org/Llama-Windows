@@ -416,7 +416,8 @@ namespace LlamaApp.Views
 
                 // Rows the brand-logo mapping can't fill (Hub-downloaded
                 // models have no catalog brand) fall back to the author's
-                // cached Hub avatar — disk only, no network here.
+                // Hub avatar — disk first, then a fetch on miss (per-author
+                // coalesced and globally bounded; see AttachCachedItemAvatarAsync).
                 if (item.Logo is null)
                     _ = AttachCachedItemAvatarAsync(item);
             }
@@ -2408,6 +2409,8 @@ namespace LlamaApp.Views
                         newItem.PendingFirstDownload = true;
                     _localByServerId[sm.Id] = newItem;
                     LocalModels.Add(newItem);
+                    // Disk first, Hub fetch on miss (per-author coalesced and
+                    // globally bounded; see AttachCachedItemAvatarAsync).
                     if (newItem.Logo is null)
                         _ = AttachCachedItemAvatarAsync(newItem);
                     Log.Info("added new local row from poller: " + sm.Id);
@@ -3003,12 +3006,15 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Re-attaches a cached Hub avatar to a row the brand-logo mapping
-        /// can't fill. Disk cache only — the fetch happens at download time.
+        /// Attaches a Hub avatar to a row the brand-logo mapping can't fill —
+        /// disk cache first, fetching from the Hub on miss and storing it for
+        /// reuse. Fetches are coalesced per author and globally bounded by
+        /// <see cref="AvatarCache"/>, so filling the installed list doesn't
+        /// storm the Hub. Decorative: a failure just leaves the empty tile.
         /// </summary>
         private async Task AttachCachedItemAvatarAsync(ModelItem item)
         {
-            var avatar = await AvatarCache.GetAsync(AuthorOf(item.RepoName ?? item.Name));
+            var avatar = await AvatarCache.GetOrFetchAsync(AuthorOf(item.RepoName ?? item.Name));
             if (avatar is not null) item.Logo = avatar;
         }
 
