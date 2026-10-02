@@ -1,8 +1,29 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace LlamaApp.HuggingFace;
+
+/// <summary>
+/// A non-success response from a Hugging Face Hub search
+/// (<c>GET /api/models</c>), carrying the numeric HTTP
+/// <see cref="Status"/> so callers can tell an actionable rejection
+/// (429 rate limit, 401/403 auth) apart from an unparseable transport
+/// failure. Derives from <see cref="HttpRequestException"/> so existing
+/// catch filters keep catching it, while the typed status lets the search
+/// status line classify it first.
+/// </summary>
+public sealed class HubSearchException : HttpRequestException
+{
+    /// <summary>The HTTP status code the Hub returned.</summary>
+    public int Status { get; }
+
+    public HubSearchException(int statusCode)
+        : base($"Response status code does not indicate success: {statusCode} ({(HttpStatusCode)statusCode}).",
+               inner: null, statusCode: (HttpStatusCode)statusCode)
+        => Status = statusCode;
+}
 
 public class HubClient(string? token)
 {
@@ -172,8 +193,21 @@ public class HubClient(string? token)
                   $"&filter=gguf&sort=downloads&direction=-1&limit={limit}" +
                   (skip > 0 ? $"&skip={skip}" : "");
 
-        using var resp = await client.GetAsync(url, cancel);
-        resp.EnsureSuccessStatusCode();
+        // Auth goes per-request, not on the shared client: the client is
+        // reused across callers (and token changes between them), and a
+        // token lifts the Hub's anonymous rate limits — which is exactly
+        // what the 429 guidance in the status line promises. Search is
+        // unauthenticated-only otherwise; a rejected token surfaces as a
+        // 401/403 and the status line handles it.
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        if (!string.IsNullOrWhiteSpace(token))
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var resp = await client.SendAsync(req, cancel);
+        // Surface the numeric status in a typed way so the caller can
+        // distinguish 429/401/403 from a generic transport error; still
+        // throws on every non-success (the throw-on-failure contract the
+        // suggestions and full-search callers rely on).
+        if (!resp.IsSuccessStatusCode) throw new HubSearchException((int)resp.StatusCode);
         var json = await resp.Content.ReadAsStringAsync(cancel);
         return ParseModels(json);
     }

@@ -2784,11 +2784,14 @@ namespace LlamaApp.Views
             HubStatusRing.Visibility = Visibility.Visible;
             HubStatusText.Text = $"Searching Hugging Face for \u201C{query}\u201D\u2026";
 
+            // The token is optional for search (it only lifts rate limits and
+            // unlocks gated repos) — read it before the try so the catch
+            // clauses can gate token-specific guidance on it.
+            var token = Settings.Current.HuggingFaceToken;
+            var tokenConfigured = !string.IsNullOrWhiteSpace(token);
+
             try
             {
-                // The token is optional for search (it only lifts rate limits
-                // and unlocks gated repos) — pass it when one is configured.
-                var token = Settings.Current.HuggingFaceToken;
                 var results = await new HubClient(string.IsNullOrWhiteSpace(token) ? null : token)
                     .SearchModels(query, cancel);
 
@@ -2818,8 +2821,26 @@ namespace LlamaApp.Views
                 HubResultsList.Visibility = results.Count > 0
                     ? Visibility.Visible : Visibility.Collapsed;
                 HubStatusText.Text = results.Count == 0
-                    ? $"No GGUF models found for \u201C{query}\u201D."
+                    ? HubSearchFailurePresentation.NoResultsCaption(query)
                     : $"{results.Count} GGUF repos for \u201C{query}\u201D";
+            }
+            catch (HubSearchException ex)
+            {
+                // The Hub answered with a non-success status (429 rate limit,
+                // 401/403 auth, …) — classify it into actionable guidance.
+                if (searchId != _hubSearchId) return;
+                var failure = HubSearchFailurePresentation.Classify(ex, tokenConfigured);
+                // Rate-limit/auth failures carry actionable guidance and are
+                // logged at debug; a typed status that still lands in Unknown
+                // (e.g. 5xx, anonymous 401/403) must leave a Warn-level trace
+                // like the generic catch below.
+                if (failure.Kind == HubSearchFailureKind.Unknown)
+                    Log.Warn(ex, "hub search failed");
+                else
+                    Log.Debug($"hub search rejected: HTTP {ex.Status}");
+                HubStatusRing.Visibility = Visibility.Collapsed;
+                HubResultsList.Visibility = Visibility.Collapsed;
+                HubStatusText.Text = HubSearchFailurePresentation.StatusText(failure);
             }
             catch (Exception ex) when (ex is HttpRequestException
                 or TaskCanceledException or TimeoutException)

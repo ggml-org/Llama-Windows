@@ -86,6 +86,9 @@ public class HubSearchTests
 
         public Uri? LastRequestUri { get; private set; }
 
+        /// <summary>The outgoing request's Authorization header, as sent (null when anonymous).</summary>
+        public string? LastAuthHeader { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -93,6 +96,8 @@ public class HubSearchTests
                 return Task.FromCanceled<HttpResponseMessage>(cancellationToken);
 
             LastRequestUri = request.RequestUri;
+            var auth = request.Headers.Authorization;
+            LastAuthHeader = auth is null ? null : auth.Scheme + " " + auth.Parameter;
             return Task.FromResult(_respond(request));
         }
     }
@@ -107,6 +112,30 @@ public class HubSearchTests
             result[Uri.UnescapeDataString(kv[0])] = kv.Length > 1 ? Uri.UnescapeDataString(kv[1]) : "";
         }
         return result;
+    }
+
+    [Fact]
+    public async Task Search_sends_the_token_as_bearer_auth_when_configured()
+    {
+        // A configured token lifts the Hub's anonymous rate limits — the
+        // 429 status-line guidance depends on this actually happening.
+        var handler = new StubHandler(_ => Ok("[]"));
+        using var client = new HttpClient(handler);
+
+        await new HubClient("hf_test_token").SearchModels(client, "gemma");
+
+        Assert.Equal("Bearer hf_test_token", handler.LastAuthHeader);
+    }
+
+    [Fact]
+    public async Task Search_stays_anonymous_without_a_token()
+    {
+        var handler = new StubHandler(_ => Ok("[]"));
+        using var client = new HttpClient(handler);
+
+        await new HubClient(null).SearchModels(client, "gemma");
+
+        Assert.Null(handler.LastAuthHeader);
     }
 
     [Fact]
@@ -225,5 +254,30 @@ public class HubSearchTests
         // must not shift the offset (it would skip a result forever).
         Assert.Equal(30, MainWindow.CountHubResultRows(rows));
         Assert.Equal(30, HubSearchPagination.NextSkip(MainWindow.CountHubResultRows(rows)));
+    }
+
+    // ----- Typed non-success status (429/401/403/500) -----------------------
+
+    [Theory]
+    [InlineData(429)]
+    [InlineData(401)]
+    [InlineData(403)]
+    [InlineData(500)]
+    public async Task Non_success_status_throws_typed_hub_search_exception(int status)
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage((HttpStatusCode)status));
+        using var client = new HttpClient(handler);
+
+        var ex = await Assert.ThrowsAsync<HubSearchException>(
+            () => new HubClient(null).SearchModels(client, "q"));
+
+        // The numeric status is surfaced in a parseable, typed way.
+        Assert.Equal(status, ex.Status);
+        // And it is still an HttpRequestException, so the existing catch
+        // filters (suggestions catch-all, load-more network filter) keep
+        // catching it — the throw-on-failure contract is preserved.
+        Assert.IsAssignableFrom<HttpRequestException>(ex);
+        // The request was actually issued (URL shape unchanged).
+        Assert.NotNull(handler.LastRequestUri);
     }
 }
