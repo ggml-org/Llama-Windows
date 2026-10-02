@@ -958,6 +958,9 @@ namespace LlamaApp.Views
             // — the subtitle shows the live detail line as soon as a size is
             // known. Fresh SSE progress events repopulate the byte counts.
             item.DownloadPaused = false;
+            // Clear any stale failure (and its classified detail) from a
+            // previous failed attempt — a new download starts clean.
+            item.DownloadFailed = false;
             item.DownloadedBytes = 0;
             item.DownloadTotalBytes = 0;
             item.DownloadBytesPerSecond = 0;
@@ -974,6 +977,8 @@ namespace LlamaApp.Views
             long lastSampleBytes = 0, lastSampleMs = 0;
             double bytesPerSecond = 0;
             string? serverMessage = null;
+            int? serverHttpStatus = null;
+            string? serverExceptionType = null;
             var progress = new Progress<ModelDownloadProgress>(p =>
             {
                 var now = Environment.TickCount64;
@@ -992,9 +997,16 @@ namespace LlamaApp.Views
                 }
 
                 // The server's rejection detail (POST error body, stream
-                // failure) — surfaced in the failure toast.
-                if (p.Failed && !string.IsNullOrWhiteSpace(p.Message))
-                    serverMessage = p.Message;
+                // failure) plus the optional classification inputs (HTTP status
+                // / exception type) — surfaced in the failure toast and
+                // classified for the row + toast.
+                if (p.Failed)
+                {
+                    if (!string.IsNullOrWhiteSpace(p.Message))
+                        serverMessage = p.Message;
+                    serverHttpStatus = p.HttpStatus;
+                    serverExceptionType = p.ExceptionType;
+                }
 
                 // Speed estimate between applied samples (EMA-smoothed — the
                 // per-chunk instantaneous rate jitters too much to show raw).
@@ -1051,13 +1063,19 @@ namespace LlamaApp.Views
                     }
                     else
                     {
-                        item.DownloadFailed = true;
-                        // The toast carries a Retry button that routes straight
+                        // Classify the failure (HTTP status / SSE error text /
+                        // exception type) into actionable guidance while
+                        // preserving the raw detail on the row + log. The toast
+                        // still carries a Retry button that routes straight
                         // back into the row's retry path (App handles the
                         // activation) — the user never has to reopen the flyout
                         // to start the download over.
+                        var failure = DownloadFailurePresentation.Classify(
+                            serverHttpStatus, serverMessage, serverExceptionType);
+                        item.DownloadFailureInfo = failure;
+                        item.DownloadFailed = true;
                         NotifyWhenHidden("Download failed",
-                            DownloadFailureToastBody(item, serverMessage),
+                            DownloadFailurePresentation.ToastBody(item.DisplayName, failure),
                             new ToastAction("Retry",
                                 ("action", "retryDownload"),
                                 ("id", ((IModel)item).ServerModelId)));
@@ -1093,16 +1111,28 @@ namespace LlamaApp.Views
                 else
                     queue.TryEnqueue(Abort);
             }
-            catch
+            catch (Exception ex)
             {
+                // A throw from the stream open / mid-loop (transport fault,
+                // unparseable event) rather than a clean Failed report. Log it
+                // (this path had no message or log before) and classify from
+                // the captured server evidence when present, else from the
+                // exception itself so the row + toast still explain something.
+                Log.Error(ex, $"download for {((IModel)item).ServerModelId} failed unexpectedly");
+                var failureHttpStatus = serverMessage is not null ? serverHttpStatus : null;
+                var failureDetail = serverMessage ?? ex.Message;
+                var failureExceptionType = serverMessage is not null ? serverExceptionType : ex.GetType().Name;
                 void Fail()
                 {
                     if (toastShown) { toastShown = false; Notifications.Close(toastTag); }
                     item.IsDownloading = false;
                     item.DownloadPaused = false;
+                    var failure = DownloadFailurePresentation.Classify(
+                        failureHttpStatus, failureDetail, failureExceptionType);
+                    item.DownloadFailureInfo = failure;
                     item.DownloadFailed = true;
                     NotifyWhenHidden("Download failed",
-                        DownloadFailureToastBody(item, serverMessage),
+                        DownloadFailurePresentation.ToastBody(item.DisplayName, failure),
                         new ToastAction("Retry",
                             ("action", "retryDownload"),
                             ("id", ((IModel)item).ServerModelId)));
@@ -1118,24 +1148,6 @@ namespace LlamaApp.Views
                 // never touch a disposed source.
                 item.DownloadCancellation = null;
             }
-        }
-
-        /// <summary>
-        /// Builds the download-failure toast body, appending the server's
-        /// rejection detail when one was reported (truncated so a JSON error
-        /// body doesn't flood the toast).
-        /// </summary>
-        private static string DownloadFailureToastBody(ModelItem item, string? serverMessage)
-        {
-            var detail = "";
-            if (!string.IsNullOrWhiteSpace(serverMessage))
-            {
-                var trimmed = serverMessage.Length > 140
-                    ? serverMessage[..140] + "…"
-                    : serverMessage;
-                detail = $" Server said: {trimmed}.";
-            }
-            return $"{item.DisplayName} couldn't be downloaded.{detail}";
         }
 
         /// <summary>

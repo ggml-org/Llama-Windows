@@ -664,6 +664,80 @@ public class ModelItemStateMachineTests
 
         // The UI swaps play ↔ warning+retry on this transition.
         Assert.Contains(nameof(ModelItem.PlayGlyphVisible), raised);
+        // The subtitle (headline vs. size) and the warning-dot tooltip track it too.
+        Assert.Contains(nameof(ModelItem.SubtitleText), raised);
+        Assert.Contains(nameof(ModelItem.DownloadFailureTooltip), raised);
+    }
+
+    // ----- Download-failure classification surfacing -----------------------
+
+    [Fact]
+    public void Failed_Row_With_Classified_Detail_Shows_Headline_And_Guidance_Tooltip()
+    {
+        var failure = DownloadFailureClassifier.Classify(401, null, null);
+        var item = new ModelItem
+        {
+            Parameters = "20B",
+            Size = "12.1 GB",
+            DownloadFailureInfo = failure,
+        };
+        item.DownloadFailed = true;
+
+        Assert.Equal(failure.Headline, item.SubtitleText);
+        Assert.Contains(failure.Headline, item.DownloadFailureTooltip);
+        Assert.Contains(failure.Guidance, item.DownloadFailureTooltip);
+    }
+
+    [Fact]
+    public void Failed_Row_Tooltip_Includes_The_Raw_Detail_Verbatim()
+    {
+        const string detail = "GET failed (401): {\"error\":\"Repository Gated\"}";
+        var failure = DownloadFailureClassifier.Classify(401, detail, null);
+        var item = new ModelItem { DownloadFailureInfo = failure };
+        item.DownloadFailed = true;
+
+        Assert.Contains(detail, item.DownloadFailureTooltip);
+    }
+
+    [Fact]
+    public void Clearing_DownloadFailed_Also_Clears_The_Classified_Detail()
+    {
+        var item = new ModelItem
+        {
+            Size = "12.1 GB",
+            DownloadFailureInfo = DownloadFailureClassifier.Classify(404, null, null),
+        };
+        item.DownloadFailed = true;
+
+        var raised = new List<string?>();
+        item.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        item.DownloadFailed = false;
+
+        Assert.Null(item.DownloadFailureInfo);
+        Assert.Equal("12.1 GB", item.SubtitleText);
+        Assert.Equal("Download failed", item.DownloadFailureTooltip);
+        Assert.Contains(nameof(ModelItem.DownloadFailureInfo), raised);
+        Assert.Contains(nameof(ModelItem.SubtitleText), raised);
+        Assert.Contains(nameof(ModelItem.DownloadFailureTooltip), raised);
+    }
+
+    [Fact]
+    public void Failed_Row_Without_Classification_Keeps_The_Plain_Tooltip_Label()
+    {
+        var item = new ModelItem();
+        item.DownloadFailed = true;
+
+        Assert.Equal("Download failed", item.DownloadFailureTooltip);
+    }
+
+    [Fact]
+    public void Failed_Row_Without_Classification_Subtitle_Falls_Back_To_Size()
+    {
+        var item = new ModelItem { Size = "12.1 GB" };
+        item.DownloadFailed = true;
+
+        Assert.Equal("12.1 GB", item.SubtitleText);
     }
 
     [Fact]

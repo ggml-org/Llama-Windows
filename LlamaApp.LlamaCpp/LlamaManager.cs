@@ -1335,7 +1335,8 @@ public sealed class LlamaManager
                 await sseCts.CancelAsync();
                 progress?.Report(new ModelDownloadProgress(
                     modelName, 0, 0, Done: false, Failed: true,
-                    Message: $"Server rejected the request ({(int)postResp.StatusCode}): {body}"));
+                    Message: $"Server rejected the request ({(int)postResp.StatusCode}): {body}",
+                    HttpStatus: (int)postResp.StatusCode));
                 return false;
             }
         }
@@ -1344,7 +1345,8 @@ public sealed class LlamaManager
             Log.Error(ex, "download POST threw");
             await sseCts.CancelAsync();
             progress?.Report(new ModelDownloadProgress(
-                modelName, 0, 0, Done: false, Failed: true, Message: ex.Message));
+                modelName, 0, 0, Done: false, Failed: true, Message: ex.Message,
+                ExceptionType: ex.GetType().Name));
             return false;
         }
 
@@ -1391,9 +1393,18 @@ public sealed class LlamaManager
                         break;
 
                     case "download_failed":
-                        Log.Warn($"server reported download_failed for {modelName}");
+                        // Capture the server's real error payload (a string
+                        // error/message field) instead of discarding it — the
+                        // raw payload is logged verbatim and, when present,
+                        // carried in Message for classification/diagnosis.
+                        // llama.cpp master currently sends data:{} with no
+                        // error field, so fall back to the existing literal.
+                        var detail = ExtractFailureDetail(data);
+                        var rawPayload = data.ValueKind == JsonValueKind.Undefined ? "" : data.GetRawText();
+                        Log.Warn($"server reported download_failed for {modelName}; data: {rawPayload}");
                         progress?.Report(new ModelDownloadProgress(
-                            modelName, 0, 0, Done: false, Failed: true, Message: "Download failed"));
+                            modelName, 0, 0, Done: false, Failed: true,
+                            Message: detail ?? "Download failed"));
                         completed = true;
                         break;
                 }
@@ -1415,6 +1426,14 @@ public sealed class LlamaManager
             // the linked token here so an in-flight ReadLineAsync unwinds.
             await sseCts.CancelAsync();
         }
+
+        // The stream ended without a terminal event (server dropped the
+        // connection mid-download): nothing was reported, so the caller's
+        // failure path has no detail to show. Log it so the "check the app
+        // log" guidance has substance. No new progress report — the return
+        // contract and row-state ownership are unchanged.
+        if (!completed && !success)
+            Log.Warn($"SSE stream ended before a terminal download event for {modelName}");
 
         return success;
     }
@@ -1483,9 +1502,16 @@ public sealed class LlamaManager
                         return true;
 
                     case "download_failed":
-                        Log.Warn($"server reported download_failed for {repoName}");
+                        // Same capture as DownloadModelAsync: keep the server's
+                        // real error payload (logged verbatim) rather than
+                        // discarding it. Row-state transitions stay with the
+                        // poller — this only enriches the report.
+                        var watchDetail = ExtractFailureDetail(data);
+                        var watchRawPayload = data.ValueKind == JsonValueKind.Undefined ? "" : data.GetRawText();
+                        Log.Warn($"server reported download_failed for {repoName}; data: {watchRawPayload}");
                         progress?.Report(new ModelDownloadProgress(
-                            repoName, 0, 0, Done: false, Failed: true, Message: "Download failed"));
+                            repoName, 0, 0, Done: false, Failed: true,
+                            Message: watchDetail ?? "Download failed"));
                         return false;
                 }
             }
@@ -2063,6 +2089,56 @@ public sealed class LlamaManager
         }
 
         return (downloaded, total);
+    }
+
+    /// <summary>
+    /// Extracts the human-readable error text from a <c>download_failed</c> SSE
+    /// event's <c>data</c> payload, tolerating every shape: a string
+    /// <c>error</c> field, an <c>error</c> object with a string <c>message</c>,
+    /// or a string <c>message</c> field. Returns <c>null</c> when no such field
+    /// is present (llama.cpp master currently sends <c>data:{}</c>) — no text
+    /// is fabricated. Total: malformed/absent payloads (including a default
+    /// <see cref="JsonElement"/>, whose <c>ValueKind</c> is
+    /// <c>Undefined</c>) yield <c>null</c> rather than throwing.
+    /// </summary>
+    internal static string? ExtractFailureDetail(JsonElement data)
+    {
+        try
+        {
+            // TryGetProperty throws on a non-Object element, and a default
+            // JsonElement (no `data` field) is Undefined — guard on ValueKind
+            // first, like SumProgress does.
+            if (data.ValueKind != JsonValueKind.Object) return null;
+
+            if (data.TryGetProperty("error", out var error))
+            {
+                if (error.ValueKind == JsonValueKind.String)
+                {
+                    var text = error.GetString();
+                    if (!string.IsNullOrWhiteSpace(text)) return text;
+                }
+                else if (error.ValueKind == JsonValueKind.Object &&
+                         error.TryGetProperty("message", out var nested) &&
+                         nested.ValueKind == JsonValueKind.String)
+                {
+                    var text = nested.GetString();
+                    if (!string.IsNullOrWhiteSpace(text)) return text;
+                }
+            }
+
+            if (data.TryGetProperty("message", out var message) &&
+                message.ValueKind == JsonValueKind.String)
+            {
+                var text = message.GetString();
+                if (!string.IsNullOrWhiteSpace(text)) return text;
+            }
+
+            return null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>

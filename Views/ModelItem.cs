@@ -20,6 +20,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     private long _downloadTotalBytes;
     private double _downloadBytesPerSecond;
     private bool _downloadFailed;
+    private DownloadFailure? _downloadFailureInfo;
     private bool _downloadPaused;
     private bool _pendingFirstDownload;
     private CancellationTokenSource? _downloadCancellation;
@@ -387,7 +388,39 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            // The subtitle (headline vs. size) and the warning-dot tooltip both
+            // depend on this flag.
+            OnPropertyChanged(nameof(SubtitleText));
+            OnPropertyChanged(nameof(DownloadFailureTooltip));
+            if (!value && _downloadFailureInfo is not null)
+            {
+                // Clear the classified detail alongside the flag at every
+                // clear site (retry, resume, row removal) — a stale detail must
+                // not linger on a row that's no longer failed.
+                _downloadFailureInfo = null;
+                OnPropertyChanged(nameof(DownloadFailureInfo));
+            }
             NotifyAccessibleNameChanged();
+        }
+    }
+
+    /// <summary>
+    /// The classified download failure (headline + actionable guidance, plus
+    /// the original technical detail), set by the download driver when a
+    /// download fails. Null when the row isn't failed (or when classification
+    /// wasn't available) — the row falls back to a plain "Download failed"
+    /// label. Cleared automatically when <see cref="DownloadFailed"/> goes false.
+    /// </summary>
+    public DownloadFailure? DownloadFailureInfo
+    {
+        get => _downloadFailureInfo;
+        set
+        {
+            if (ReferenceEquals(_downloadFailureInfo, value)) return;
+            _downloadFailureInfo = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SubtitleText));
+            OnPropertyChanged(nameof(DownloadFailureTooltip));
         }
     }
 
@@ -586,17 +619,32 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         DownloadedBytes, DownloadTotalBytes, DownloadBytesPerSecond);
 
     /// <summary>
-    /// The row's subtitle line: while a download with a known size runs, the
-    /// live progress detail (<see cref="DownloadDetailText"/>); while paused,
-    /// a "Paused" marker; otherwise the model's file <see cref="Size"/> alone
+    /// The row's subtitle line: on a failed row, the failure headline
+    /// (<see cref="DownloadFailureInfo"/>); while a download with a known size
+    /// runs, the live progress detail (<see cref="DownloadDetailText"/>); while
+    /// paused, a "Paused" marker; otherwise the model's file <see cref="Size"/> alone
     /// — the parameter count rides in the chip ahead of it (same tag as the
     /// details view's parameter badge), so it isn't repeated here.
     /// </summary>
-    public string SubtitleText => IsDownloading && DownloadTotalBytes > 0
-        ? DownloadDetailText
-        : DownloadPaused && DownloadTotalBytes > 0
-            ? DownloadProgressPresentation.FormatPausedDetail()
-            : Size;
+    public string SubtitleText => DownloadFailed && DownloadFailureInfo is { } failure
+        ? failure.Headline
+        : IsDownloading && DownloadTotalBytes > 0
+            ? DownloadDetailText
+            : DownloadPaused && DownloadTotalBytes > 0
+                ? DownloadProgressPresentation.FormatPausedDetail()
+                : Size;
+
+    /// <summary>
+    /// Tooltip for the row's download-failure warning dot: the classified
+    /// headline + guidance, plus the original technical detail verbatim (no
+    /// truncation). Falls back to the plain "Download failed" label when no
+    /// classification is available.
+    /// </summary>
+    public string DownloadFailureTooltip => DownloadFailed && DownloadFailureInfo is { } failure
+        ? string.IsNullOrWhiteSpace(failure.RawDetail)
+            ? $"{failure.Headline} {failure.Guidance}"
+            : $"{failure.Headline} {failure.Guidance}\n{failure.RawDetail}"
+        : "Download failed";
 
     // ---- Row state signals ----
     // The running state is a green badge pinned to the logo tile; every other
