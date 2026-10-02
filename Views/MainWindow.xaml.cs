@@ -156,6 +156,12 @@ namespace LlamaApp.Views
         // token is already captured by the in-flight request. UI-thread-only.
         private CancellationTokenSource? _hubSuggestCts;
         private CancellationTokenSource? _hubSearchCts;
+
+        // The query whose results HubResults currently holds — the load-more
+        // page fetch uses it (NOT HubSearchBox.Text, which a picked suggestion
+        // rewrites). Page fetches share _hubSearchId / _hubSearchCts with the
+        // full search, so a newer search or page fetch supersedes the old one.
+        private string? _hubPagedQuery;
         private readonly Dictionary<HubModelItemViewModel, ModelItem> _hubDownloads = new();
 
         // Last observed server state, for the once-per-transition crash toast
@@ -2800,6 +2806,14 @@ namespace LlamaApp.Views
                 }
                 UpdateHubRowStates();
 
+                _hubPagedQuery = query;
+                // A full page means there may be more — append the single
+                // load-more sentinel. The status line keeps the page-1 count
+                // after appends (mid-list appends don't rewrite it; the count
+                // wording is frozen for a separate status-message task).
+                if (HubSearchPagination.PossiblyHasNextPage(results.Count, HubClient.DefaultSearchLimit))
+                    HubResults.Add(NewHubLoadMoreRow());
+
                 HubStatusRing.Visibility = Visibility.Collapsed;
                 HubResultsList.Visibility = results.Count > 0
                     ? Visibility.Visible : Visibility.Collapsed;
@@ -2825,6 +2839,96 @@ namespace LlamaApp.Views
                 HubResultsList.Visibility = Visibility.Collapsed;
                 HubStatusText.Text = "Search failed. Try again.";
             }
+        }
+
+        /// <summary>
+        /// Fired by the load-more row: fetches the next page of the current
+        /// query (skip = number of real result rows already shown) and appends
+        /// it in place. Shares the full search's id/CTS bookkeeping, so a newer
+        /// search or page fetch supersedes this one; a failure flips the row to
+        /// a recoverable "Retry" and never touches the shown results.
+        /// </summary>
+        private async void HubLoadMore_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not FrameworkElement fe || fe.Tag is not HubModelItemViewModel vm)
+                return;
+            if (!vm.IsLoadMoreRow || vm.LoadMoreBusy) return; // guard double-fetch
+            var query = _hubPagedQuery;
+            if (string.IsNullOrWhiteSpace(query)) return;
+
+            var searchId = ++_hubSearchId;
+            _hubSearchCts?.Cancel();
+            _hubSearchCts = new CancellationTokenSource();
+            var cancel = _hubSearchCts.Token;
+
+            // Busy flips synchronously before the first await; skip counts the
+            // REAL result rows (the sentinel excluded), captured pre-await so a
+            // concurrent change can't shift the offset.
+            vm.LoadMoreBusy = true;
+            vm.LoadMoreFailed = false;
+            var skip = HubSearchPagination.NextSkip(CountHubResultRows(HubResults));
+
+            try
+            {
+                // The token is optional for search — pass it when configured.
+                var token = Settings.Current.HuggingFaceToken;
+                var results = await new HubClient(string.IsNullOrWhiteSpace(token) ? null : token)
+                    .SearchModels(query, cancel, skip: skip);
+
+                if (searchId != _hubSearchId) return; // superseded by a newer search/page fetch
+
+                // Append in place — never Clear: the already-shown rows (and
+                // their avatars/download state) must survive a page fetch.
+                HubResults.Remove(vm);
+                foreach (var row in ToHubRows(results))
+                {
+                    HubResults.Add(row);
+                    _ = AttachHubAvatarAsync(row);
+                }
+                UpdateHubRowStates();
+
+                // A full page means there may be more; a short/empty page ends
+                // the list — the affordance is not reattached.
+                if (HubSearchPagination.PossiblyHasNextPage(results.Count, HubClient.DefaultSearchLimit))
+                    HubResults.Add(NewHubLoadMoreRow());
+            }
+            catch (Exception ex) when (ex is HttpRequestException
+                or TaskCanceledException or TimeoutException)
+            {
+                // Superseded (id changed / token canceled) is not a failure —
+                // only a real network error flips the row to Retry. The shown
+                // results are never touched.
+                if (searchId != _hubSearchId) return;
+                if (cancel.IsCancellationRequested) return;
+                vm.LoadMoreBusy = false;
+                vm.LoadMoreFailed = true;
+            }
+            catch (Exception ex)
+            {
+                if (searchId != _hubSearchId) return;
+                if (cancel.IsCancellationRequested) return;
+                Log.Warn(ex, "hub load more failed");
+                vm.LoadMoreBusy = false;
+                vm.LoadMoreFailed = true;
+            }
+        }
+
+        /// <summary>Creates the synthetic "Show more" row appended after a full page.</summary>
+        private static HubModelItemViewModel NewHubLoadMoreRow() => new() { IsLoadMoreRow = true };
+
+        /// <summary>
+        /// The number of REAL result rows in the list — the load-more sentinel
+        /// is excluded, so this is both the offset the next page is fetched at
+        /// and the "shown so far" count. Shared with the pagination tests.
+        /// </summary>
+        internal static int CountHubResultRows(IReadOnlyList<HubModelItemViewModel> rows)
+        {
+            var count = 0;
+            foreach (var row in rows)
+            {
+                if (!row.IsLoadMoreRow) count++;
+            }
+            return count;
         }
 
         /// <summary>
@@ -2910,6 +3014,7 @@ namespace LlamaApp.Views
             if (sender is not FrameworkElement fe || fe.Tag is not HubModelItemViewModel vm)
                 return;
             if (vm.DownloadStarted) return; // already downloading / installed
+            if (vm.IsLoadMoreRow) return; // the synthetic row has no repo to download
 
             var item = new ModelItem
             {
@@ -2949,6 +3054,7 @@ namespace LlamaApp.Views
 
             foreach (var vm in HubResults)
             {
+                if (vm.IsLoadMoreRow) continue; // synthetic row — no repo state
                 var started = installed.Contains(vm.RepoId);
                 if (!started &&
                     _hubDownloads.TryGetValue(vm, out var item) &&

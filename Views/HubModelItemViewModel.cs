@@ -77,6 +77,62 @@ public sealed class HubModelItemViewModel : INotifyPropertyChanged
     public bool AddedGlyphVisible => _downloadStarted;
 
     /// <summary>
+    /// True for the synthetic "Show more" row appended at the end of a full
+    /// page of results — it drives the template selector and is never a real
+    /// model row (no repo id, no download action).
+    /// </summary>
+    public bool IsLoadMoreRow { get; set; }
+
+    private bool _loadMoreBusy;
+
+    /// <summary>
+    /// True while the next page is in flight — the load-more row shows an
+    /// inline progress ring and further clicks are ignored.
+    /// </summary>
+    public bool LoadMoreBusy
+    {
+        get => _loadMoreBusy;
+        set
+        {
+            if (_loadMoreBusy == value) return;
+            _loadMoreBusy = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShowMoreVisible));
+            OnPropertyChanged(nameof(LoadMoreBusyVisible));
+            OnPropertyChanged(nameof(RetryVisible));
+        }
+    }
+
+    private bool _loadMoreFailed;
+
+    /// <summary>
+    /// True when the last page fetch failed — the row offers a recoverable
+    /// "Retry" instead of "Show more"; the shown results are untouched.
+    /// </summary>
+    public bool LoadMoreFailed
+    {
+        get => _loadMoreFailed;
+        set
+        {
+            if (_loadMoreFailed == value) return;
+            _loadMoreFailed = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShowMoreVisible));
+            OnPropertyChanged(nameof(LoadMoreBusyVisible));
+            OnPropertyChanged(nameof(RetryVisible));
+        }
+    }
+
+    /// <summary>True when the load-more row shows the idle "Show more" affordance.</summary>
+    public bool ShowMoreVisible => !_loadMoreBusy && !_loadMoreFailed;
+
+    /// <summary>True when the load-more row shows the inline progress ring.</summary>
+    public bool LoadMoreBusyVisible => _loadMoreBusy;
+
+    /// <summary>True when the load-more row shows the recoverable "Retry" affordance.</summary>
+    public bool RetryVisible => _loadMoreFailed;
+
+    /// <summary>
     /// The gray metadata line under the name: author · downloads · likes,
     /// each part omitted when unknown, e.g. "ggml-org · 1.2M downloads".
     /// </summary>

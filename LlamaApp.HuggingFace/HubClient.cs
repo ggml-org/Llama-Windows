@@ -135,24 +135,29 @@ public class HubClient(string? token)
         public long Likes { get; init; }
     }
 
+    /// <summary>Default page size for a full Hub search (suggestions pass 6).</summary>
+    public const int DefaultSearchLimit = 30;
+
     /// <summary>
     /// Searches the Hub for GGUF models matching <paramref name="query"/>,
     /// most-downloaded first. An empty query returns without a request; a
     /// network failure or a non-success status throws — the caller decides
     /// how to surface it (the search box shows an inline error).
+    /// <paramref name="skip"/> is a 0-based offset for pagination: 0 fetches
+    /// the first page, a later page passes the number of results already shown.
     /// </summary>
     public async Task<List<HubSearchResult>> SearchModels(
-        string query, CancellationToken cancel = default, int limit = 30)
+        string query, CancellationToken cancel = default, int limit = DefaultSearchLimit, int skip = 0)
     {
         if (string.IsNullOrWhiteSpace(query)) return [];
 
-        return await SearchModels(Http, query, cancel, limit);
+        return await SearchModels(Http, query, cancel, limit, skip);
     }
 
     // Split from the public overload so tests can drive the HTTP path with a
     // mock handler; the public overload routes through the shared static client.
     internal async Task<List<HubSearchResult>> SearchModels(
-        HttpClient client, string query, CancellationToken cancel = default, int limit = 30)
+        HttpClient client, string query, CancellationToken cancel = default, int limit = DefaultSearchLimit, int skip = 0)
     {
         if (string.IsNullOrWhiteSpace(query)) return [];
 
@@ -160,9 +165,12 @@ public class HubClient(string? token)
         // the only form the llama server can fetch. sort=downloads ranks
         // the (otherwise relevance-ordered) results by popularity. limit caps
         // the payload (full search uses the 30 default; suggestions pass 6).
+        // skip is a 0-based offset, emitted only when >0 so the first-page URL
+        // stays byte-identical for the frozen full-search/suggestion paths.
         var url = $"{HUGGINGFACE_HUB_BASE_URL}/models" +
                   $"?search={Uri.EscapeDataString(query)}" +
-                  $"&filter=gguf&sort=downloads&direction=-1&limit={limit}";
+                  $"&filter=gguf&sort=downloads&direction=-1&limit={limit}" +
+                  (skip > 0 ? $"&skip={skip}" : "");
 
         using var resp = await client.GetAsync(url, cancel);
         resp.EnsureSuccessStatusCode();

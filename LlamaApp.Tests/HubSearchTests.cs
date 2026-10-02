@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using LlamaApp.HuggingFace;
+using LlamaApp.Views;
 using Xunit;
 
 namespace LlamaApp.Tests;
@@ -162,5 +163,67 @@ public class HubSearchTests
         // call would succeed and return an empty list instead of throwing.
         await Assert.ThrowsAsync<TaskCanceledException>(
             () => new HubClient(null).SearchModels(client, "q", cts.Token));
+    }
+
+    // ----- Pagination: skip param propagation -------------------------------
+
+    [Fact]
+    public async Task Search_url_propagates_skip_keeping_limit_and_filters()
+    {
+        var handler = new StubHandler(_ => Ok("[]"));
+        using var client = new HttpClient(handler);
+
+        await new HubClient(null).SearchModels(client, "gemma 3 GGUF", limit: 30, skip: 30);
+
+        var q = ParseQuery(handler.LastRequestUri!);
+        Assert.Equal("30", q["skip"]);
+        Assert.Equal("30", q["limit"]);
+        // The pagination offset must not disturb the other params.
+        Assert.Equal("gemma 3 GGUF", q["search"]);
+        Assert.Equal("gguf", q["filter"]);
+        Assert.Equal("downloads", q["sort"]);
+        Assert.Equal("-1", q["direction"]);
+    }
+
+    [Fact]
+    public async Task Search_url_omits_skip_when_zero()
+    {
+        var handler = new StubHandler(_ => Ok("[]"));
+        using var client = new HttpClient(handler);
+
+        // Default call (skip defaults to 0): the URL stays byte-identical to
+        // the pre-pagination first-page request — skip is not emitted.
+        await new HubClient(null).SearchModels(client, "gemma");
+
+        var q = ParseQuery(handler.LastRequestUri!);
+        Assert.False(q.ContainsKey("skip"));
+        Assert.Equal("30", q["limit"]);
+    }
+
+    // ----- Pagination: pure helpers -----------------------------------------
+
+    [Fact]
+    public void Possibly_has_next_page_only_when_page_is_full()
+    {
+        Assert.True(HubSearchPagination.PossiblyHasNextPage(30, 30));  // full page
+        Assert.False(HubSearchPagination.PossiblyHasNextPage(29, 30)); // short page
+        Assert.False(HubSearchPagination.PossiblyHasNextPage(0, 30));  // no results
+        Assert.True(HubSearchPagination.PossiblyHasNextPage(6, 6));    // full suggestions page
+        Assert.False(HubSearchPagination.PossiblyHasNextPage(5, 6));   // short suggestions page
+        Assert.False(HubSearchPagination.PossiblyHasNextPage(1, 0));   // guard: non-positive page size
+    }
+
+    [Fact]
+    public void Next_skip_counts_result_rows_not_the_load_more_sentinel()
+    {
+        var rows = new List<HubModelItemViewModel>();
+        for (var i = 0; i < 30; i++)
+            rows.Add(new HubModelItemViewModel { RepoId = $"org/repo-{i}" });
+        rows.Add(new HubModelItemViewModel { IsLoadMoreRow = true });
+
+        // The click handler fetches at skip = real rows shown; the sentinel
+        // must not shift the offset (it would skip a result forever).
+        Assert.Equal(30, MainWindow.CountHubResultRows(rows));
+        Assert.Equal(30, HubSearchPagination.NextSkip(MainWindow.CountHubResultRows(rows)));
     }
 }

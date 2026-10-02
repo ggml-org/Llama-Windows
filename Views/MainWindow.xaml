@@ -758,6 +758,53 @@
                 </Grid>
             </DataTemplate>
 
+            <!-- Load-more row: the single tappable sentinel appended after a
+                 full page of results. Its three states share the row — idle
+                 "Show more", an inline spinner while the next page is in
+                 flight, and a recoverable "Retry" after a failure. Rendered
+                 through HubResultsTemplateSelector so it never gets the model
+                 row's live download button. -->
+            <DataTemplate x:Key="HubLoadMoreRowTemplate"
+                          x:DataType="local:HubModelItemViewModel">
+                <Button Click="HubLoadMore_Click"
+                        Tag="{x:Bind}"
+                        Padding="8,6"
+                        MinWidth="0" MinHeight="0"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        AutomationProperties.Name="Show more results"
+                        ToolTipService.ToolTip="Show more results">
+                    <Button.Resources>
+                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                    </Button.Resources>
+                    <Grid>
+                        <TextBlock Text="Show more"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   Visibility="{x:Bind ShowMoreVisible, Mode=OneWay}" />
+                        <local:ModelProgressRing Width="14" Height="14"
+                                                 IsIndeterminate="True"
+                                                 HorizontalAlignment="Center"
+                                                 Visibility="{x:Bind LoadMoreBusyVisible, Mode=OneWay}" />
+                        <TextBlock Text="Couldn't load more results — Retry"
+                                   FontSize="12"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   Visibility="{x:Bind RetryVisible, Mode=OneWay}" />
+                    </Grid>
+                </Button>
+            </DataTemplate>
+
+            <!-- Selects the load-more row's template vs the model row's; the
+                 results list is the only consumer. -->
+            <local:HubResultsTemplateSelector x:Key="HubResultsTemplateSelector"
+                                              ModelTemplate="{StaticResource HubModelRowTemplate}"
+                                              LoadMoreTemplate="{StaticResource HubLoadMoreRowTemplate}" />
+
             <!-- The list's template selector (installed row / separator /
                  family row) and the chromeless ListViewItem style: zero
                  padding/height so the rows own their own metrics, and no
@@ -1127,7 +1174,7 @@
                 <ListView x:Name="HubResultsList"
                           MaxHeight="190"
                           ItemsSource="{x:Bind HubResults}"
-                          ItemTemplate="{StaticResource HubModelRowTemplate}"
+                          ItemTemplateSelector="{StaticResource HubResultsTemplateSelector}"
                           ItemContainerStyle="{StaticResource ChromelessListViewItemStyle}"
                           SelectionMode="None"
                           IsItemClickEnabled="False"
