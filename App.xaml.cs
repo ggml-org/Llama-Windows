@@ -106,7 +106,7 @@ namespace LlamaApp
             // failed) while the flyout is hidden. Clicking a toast re-opens the
             // flyout; so does a redirected second-launch activation.
             Notifications.Initialize();
-            Notifications.Invoked += () => _dispatcher.TryEnqueue(() => _trayIcon?.ShowFlyout());
+            Notifications.Invoked += args => _dispatcher.TryEnqueue(() => HandleToastActivation(args));
             instance.Activated += (_, _) => _dispatcher.TryEnqueue(() => _trayIcon?.ShowFlyout());
 
             // Ensure a llama.cpp server is reachable on the configured port:
@@ -162,6 +162,36 @@ namespace LlamaApp
                 Notifications.Show("Llama is running",
                     "Find it in the system tray — and press Alt+Space anytime to chat with a loaded model.");
             }
+        }
+
+        /// <summary>
+        /// Responds to a toast activation on the UI thread: a body click keeps
+        /// the long-standing behavior (open the flyout); an action button's
+        /// arguments name the response — retry/cancel a download by model
+        /// id (the MainWindow resolves the row), or open the chat overlay.
+        /// Unknown arguments fall back to the flyout rather than doing
+        /// nothing — a stale toast from a previous version should still go
+        /// somewhere useful.
+        /// </summary>
+        private void HandleToastActivation(IReadOnlyDictionary<string, string> args)
+        {
+            if (args.TryGetValue("action", out var action))
+            {
+                args.TryGetValue("id", out var id);
+                switch (action)
+                {
+                    case "chat":
+                        _overlay?.Summon();
+                        return;
+                    case "retryDownload":
+                        _window?.RetryDownloadFromToast(id);
+                        return;
+                    case "cancelDownload":
+                        _window?.CancelDownloadFromToast(id);
+                        return;
+                }
+            }
+            _trayIcon?.ShowFlyout();
         }
     }
 }

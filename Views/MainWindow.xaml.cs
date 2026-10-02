@@ -925,6 +925,35 @@ namespace LlamaApp.Views
             // server to abort the download when the token fires.
             using var cts = new CancellationTokenSource();
             item.DownloadCancellation = cts;
+
+            // Progress toast: replaces itself in place under this tag, so a
+            // long download streams its percent without flooding Action
+            // Center. Shown only while the flyout is hidden (when it's visible
+            // the row's ring tells the story) — the throttled progress
+            // callback below toggles it either way as the flyout comes and
+            // goes. Closed on every terminal path so no ghost toast
+            // outlives the download.
+            var toastTag = "download:" + ((IModel)item).ServerModelId;
+            var toastShown = false;
+            var cancelToastAction = new ToastAction("Cancel",
+                ("action", "cancelDownload"), ("id", ((IModel)item).ServerModelId));
+            void UpdateProgressToast(double fraction, string status)
+            {
+                if (IsFlyoutVisible)
+                {
+                    if (toastShown)
+                    {
+                        toastShown = false;
+                        Notifications.Close(toastTag);
+                    }
+                }
+                else
+                {
+                    toastShown = true;
+                    Notifications.ShowProgress(toastTag,
+                        "Downloading " + item.DisplayName, status, fraction, cancelToastAction);
+                }
+            }
             // Reset any stale detail from a previous (failed or paused) attempt
             // — the subtitle shows the live detail line as soon as a size is
             // known. Fresh SSE progress events repopulate the byte counts.
@@ -939,6 +968,9 @@ namespace LlamaApp.Views
             // ~10 updates/sec. Terminal events (Done/Failed) always pass through
             // so the final state lands immediately.
             long lastProgressApplyMs = 0;
+            // The toast updates even less often: ~1/sec is plenty for a
+            // progress bar, and every update is a notification-platform call.
+            long lastToastUpdateMs = 0;
             long lastSampleBytes = 0, lastSampleMs = 0;
             double bytesPerSecond = 0;
             string? serverMessage = null;
@@ -947,6 +979,17 @@ namespace LlamaApp.Views
                 var now = Environment.TickCount64;
                 if (!p.Done && !p.Failed && now - lastProgressApplyMs < 100) return;
                 lastProgressApplyMs = now;
+
+                // Progress toast, on its own ~1/sec throttle (a toast update is
+                // a notification-platform call — far pricier than a UI-thread
+                // Apply). Runs on the UI thread like the rest of this callback.
+                if (!p.Done && !p.Failed && now - lastToastUpdateMs >= 1000)
+                {
+                    lastToastUpdateMs = now;
+                    if (p.TotalBytes > 0)
+                        UpdateProgressToast(p.Fraction,
+                            DownloadToastStatus(p.Fraction, bytesPerSecond));
+                }
 
                 // The server's rejection detail (POST error body, stream
                 // failure) — surfaced in the failure toast.
@@ -989,6 +1032,7 @@ namespace LlamaApp.Views
                 var ok = await mgr.DownloadModelAsync(item, progress, cts.Token);
                 void Complete()
                 {
+                    if (toastShown) { toastShown = false; Notifications.Close(toastTag); }
                     item.IsDownloading = false;
                     // A pause click that raced the completion is discarded —
                     // the download is over, there is nothing left to resume.
@@ -1008,8 +1052,15 @@ namespace LlamaApp.Views
                     else
                     {
                         item.DownloadFailed = true;
+                        // The toast carries a Retry button that routes straight
+                        // back into the row's retry path (App handles the
+                        // activation) — the user never has to reopen the flyout
+                        // to start the download over.
                         NotifyWhenHidden("Download failed",
-                            DownloadFailureToastBody(item, serverMessage));
+                            DownloadFailureToastBody(item, serverMessage),
+                            new ToastAction("Retry",
+                                ("action", "retryDownload"),
+                                ("id", ((IModel)item).ServerModelId)));
                     }
                 }
                 if (queue is null || queue.HasThreadAccess)
@@ -1031,6 +1082,7 @@ namespace LlamaApp.Views
                 // the next attempt starts the download over.
                 void Abort()
                 {
+                    if (toastShown) { toastShown = false; Notifications.Close(toastTag); }
                     if (item is { PendingFirstDownload: true, DownloadPaused: false })
                         RemovePendingDownloadRow(item);
                     else
@@ -1045,11 +1097,15 @@ namespace LlamaApp.Views
             {
                 void Fail()
                 {
+                    if (toastShown) { toastShown = false; Notifications.Close(toastTag); }
                     item.IsDownloading = false;
                     item.DownloadPaused = false;
                     item.DownloadFailed = true;
                     NotifyWhenHidden("Download failed",
-                        DownloadFailureToastBody(item, serverMessage));
+                        DownloadFailureToastBody(item, serverMessage),
+                        new ToastAction("Retry",
+                            ("action", "retryDownload"),
+                            ("id", ((IModel)item).ServerModelId)));
                 }
                 if (queue is null || queue.HasThreadAccess)
                     Fail();
@@ -1079,7 +1135,20 @@ namespace LlamaApp.Views
                     : serverMessage;
                 detail = $" Server said: {trimmed}.";
             }
-            return $"{item.DisplayName} couldn't be downloaded.{detail} Click retry to try again.";
+            return $"{item.DisplayName} couldn't be downloaded.{detail}";
+        }
+
+        /// <summary>
+        /// The progress toast's status line — percent + smoothed speed, e.g.
+        /// "42% · 12.3 MB/s". A stalled stream shows just the percent, never a
+        /// bogus "0 B/s".
+        /// </summary>
+        private static string DownloadToastStatus(double fraction, double bytesPerSecond)
+        {
+            var pct = (int)Math.Round(fraction * 100);
+            return bytesPerSecond > 0
+                ? $"{pct}% · {DownloadProgressPresentation.FormatBytes(bytesPerSecond)}/s"
+                : $"{pct}%";
         }
 
         // ---- Model load → open ----
@@ -1310,6 +1379,51 @@ namespace LlamaApp.Views
             item.DownloadFailed = false;
             item.IsDownloading = true;
             _ = DownloadAndLaunchAsync(item);
+        }
+
+        // ---- Toast action routing ----
+
+        /// <summary>
+        /// Resolves a model row from a toast action's id and mirrors the row
+        /// retry glyph's behavior (see <see cref="LocalModelRetryDownload_Click"/>).
+        /// Called by App when the user taps Retry on a download-failed toast;
+        /// a stale toast (row gone, or already retrying/downloading) is a
+        /// no-op — the toast may outlive the state it was shown for.
+        /// </summary>
+        public void RetryDownloadFromToast(string? serverModelId)
+        {
+            var item = FindRowByServerId(serverModelId);
+            if (item is null) return;
+            if (item.IsDownloading || !item.DownloadFailed) return;
+
+            Log.Info("retry clicked (toast): re-downloading " + serverModelId);
+            item.DownloadFailed = false;
+            item.IsDownloading = true;
+            _ = DownloadAndLaunchAsync(item);
+        }
+
+        /// <summary>
+        /// Cancels a running download from its progress toast's Cancel button.
+        /// Same cancellation source as the row's own cancel button, so the
+        /// abort path (SSE close + server-side abort) is identical.
+        /// </summary>
+        public void CancelDownloadFromToast(string? serverModelId)
+        {
+            var item = FindRowByServerId(serverModelId);
+            if (item?.DownloadCancellation is { } cts) cts.Cancel();
+        }
+
+        private ModelItem? FindRowByServerId(string? serverModelId)
+        {
+            if (serverModelId is null)
+            {
+                Log.Warn("toast action carried no model id");
+                return null;
+            }
+            var item = LocalModels.FirstOrDefault(m => ((IModel)m).ServerModelId == serverModelId);
+            if (item is null)
+                Log.Warn("toast action: no row for " + serverModelId);
+            return item;
         }
 
         /// <summary>
@@ -1705,6 +1819,16 @@ namespace LlamaApp.Views
         {
             if (!IsFlyoutVisible)
                 Notifications.Show(title, body);
+        }
+
+        /// <summary>
+        /// <see cref="NotifyWhenHidden(string, string)"/> with action buttons
+        /// (e.g. Retry on a download-failure toast).
+        /// </summary>
+        private void NotifyWhenHidden(string title, string body, params ToastAction[] actions)
+        {
+            if (!IsFlyoutVisible)
+                Notifications.Show(title, body, actions);
         }
 
         // ---- Row hover feedback ----
@@ -2190,8 +2314,12 @@ namespace LlamaApp.Views
                         if (!item.IsLoaded)
                         {
                             Log.Info("model loaded: " + sm.Id);
+                            // The Chat button jumps straight to the overlay —
+                            // the reason the model was loaded in the first
+                            // place — instead of just opening the flyout.
                             NotifyWhenHidden("Model ready",
-                                $"{item.DisplayName} is loaded and ready to chat.");
+                                $"{item.DisplayName} is loaded and ready to chat.",
+                                new ToastAction("Chat", ("action", "chat")));
                         }
                         item.IsLoaded = true;
                         item.IsLoading = false;
