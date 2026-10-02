@@ -119,7 +119,7 @@ public static class Log
         }
     }
 
-    private static string FormatLine(LogLevel level, string? message, Exception? exception, string? member, string? file, int line)
+    internal static string FormatLine(LogLevel level, string? message, Exception? exception, string? member, string? file, int line)
     {
         var sb = new StringBuilder(256);
         sb.Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"))
@@ -135,20 +135,41 @@ public static class Log
         }
 
         if (!string.IsNullOrEmpty(message))
-            sb.Append(message);
+            sb.Append(Sanitize(message));
 
         if (exception is not null)
         {
             if (sb.Length > 0 && sb[^1] != '\n') sb.AppendLine();
-            sb.Append("  Exception: ").Append(exception.GetType().FullName).Append(": ").AppendLine(exception.Message);
+            sb.Append("  Exception: ").Append(exception.GetType().FullName).Append(": ")
+              .Append(Sanitize(exception.Message)).AppendLine();
             for (var ex = exception.InnerException; ex is not null; ex = ex.InnerException)
-                sb.Append("  --> ").Append(ex.GetType().Name).Append(": ").AppendLine(ex.Message);
+                sb.Append("  --> ").Append(ex.GetType().Name).Append(": ")
+                  .Append(Sanitize(ex.Message)).AppendLine();
             if (exception.StackTrace is { } trace)
                 sb.Append("  StackTrace:\n").Append(trace);
         }
 
         if (sb.Length == 0 || sb[^1] != '\n') sb.AppendLine();
         return sb.ToString();
+    }
+
+    private static readonly char[] LineBreakChars = ['\r', '\n'];
+
+    /// <summary>
+    /// Neutralizes CR/LF in interpolated log content — messages and exception
+    /// texts routinely carry remote-controlled data (SSE error payloads, HTTP
+    /// bodies, exception messages embedding server text), and raw newlines
+    /// there would let a hostile server forge authentic-looking log entries
+    /// (CWE-117 log injection). Line breaks become visible escape sequences,
+    /// so the content stays readable while each log record stays one line.
+    /// Stack traces are appended separately: their newlines are structural,
+    /// not attacker-controlled, and remain multi-line by design.
+    /// </summary>
+    private static string Sanitize(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        if (text.IndexOfAny(LineBreakChars) < 0) return text;
+        return text.Replace("\r\n", "\\r\\n").Replace("\r", "\\r").Replace("\n", "\\n");
     }
 
     /// <summary>Opens today's file, rotating at a calendar-day boundary. Caller holds <see cref="Gate"/>.</summary>
