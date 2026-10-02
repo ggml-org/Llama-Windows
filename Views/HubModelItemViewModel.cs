@@ -133,33 +133,30 @@ public sealed class HubModelItemViewModel : INotifyPropertyChanged
     public bool RetryVisible => _loadMoreFailed;
 
     /// <summary>
-    /// The gray metadata line under the name: author · downloads · likes,
-    /// each part omitted when unknown, e.g. "ggml-org · 1.2M downloads".
+    /// The gray metadata line under the name: author · downloads · likes ·
+    /// last update, each part omitted when unknown, e.g.
+    /// "ggml-org · 1.2M downloads · 312 likes · updated 2 months ago".
     /// </summary>
     public string MetaText
     {
         get
         {
-            var parts = new List<string>(3);
+            var parts = new List<string>(4);
             if (Author.Length > 0) parts.Add(Author);
-            if (Downloads > 0) parts.Add(FormatCount(Downloads) + " downloads");
-            if (Likes > 0) parts.Add(FormatCount(Likes) + " likes");
+            if (Downloads > 0) parts.Add(HubRowPresentation.FormatCount(Downloads) + " downloads");
+            if (Likes > 0) parts.Add(HubRowPresentation.FormatCount(Likes) + " likes");
+            if (HubRowPresentation.FormatAge(LastModified, DateTimeOffset.Now) is { } age)
+                parts.Add("updated " + age);
             return string.Join(" · ", parts);
         }
     }
 
     /// <summary>
-    /// Compact count, e.g. 1234 → "1.2K", 12345678 → "12.3M". One fractional
-    /// digit below 10, whole numbers above — the usual Hub-counter style.
+    /// When the Hub says the repo was last updated (null when unknown) —
+    /// rendered as a relative age in <see cref="MetaText"/> so a stale
+    /// mirror is recognizable at a glance.
     /// </summary>
-    private static string FormatCount(long n) => n switch
-    {
-        >= 1_000_000_000 => $"{n / 1_000_000_000.0:0.#}B",
-        >= 1_000_000 => $"{n / 1_000_000.0:0.#}M",
-        >= 10_000 => $"{n / 1_000.0:0}K",
-        >= 1_000 => $"{n / 1_000.0:0.#}K",
-        _ => n.ToString(),
-    };
+    public DateTimeOffset? LastModified { get; set; }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? prop = null)

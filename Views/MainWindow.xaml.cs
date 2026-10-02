@@ -2970,6 +2970,7 @@ namespace LlamaApp.Views
                     Author = sep > 0 ? r.Id[..sep] : "",
                     Downloads = r.Downloads,
                     Likes = r.Likes,
+                    LastModified = r.LastModified,
                 });
             }
             return rows;

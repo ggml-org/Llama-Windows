@@ -154,6 +154,11 @@ public class HubClient(string? token)
 
         /// <summary>Like count (0 when the Hub omits it).</summary>
         public long Likes { get; init; }
+
+        /// <summary>When the repo was last updated (null when the Hub omits
+        /// it or the timestamp doesn't parse) — surfaced as a relative age so
+        /// a stale mirror is recognizable at a glance.</summary>
+        public DateTimeOffset? LastModified { get; init; }
     }
 
     /// <summary>Default page size for a full Hub search (suggestions pass 6).</summary>
@@ -298,7 +303,16 @@ public class HubClient(string? token)
         Id = dto.Id ?? "",
         Downloads = dto.Downloads ?? 0,
         Likes = dto.Likes ?? 0,
+        LastModified = ParseTimestamp(dto.LastModified),
     };
+
+    /// <summary>ISO-8601 wire timestamp → instant; null when absent/malformed
+    /// (a broken timestamp must not cost the row its other metadata).</summary>
+    private static DateTimeOffset? ParseTimestamp(string? text)
+        => DateTimeOffset.TryParse(text, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var value)
+            ? value
+            : null;
 
     /// <summary>
     /// /api/models response DTO — only the fields the search list renders;
@@ -310,5 +324,6 @@ public class HubClient(string? token)
         [JsonPropertyName("id")] public string? Id { get; set; }
         [JsonPropertyName("downloads")] public long? Downloads { get; set; }
         [JsonPropertyName("likes")] public long? Likes { get; set; }
+        [JsonPropertyName("lastModified")] public string? LastModified { get; set; }
     }
 }
