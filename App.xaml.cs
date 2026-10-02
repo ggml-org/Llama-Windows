@@ -165,6 +165,12 @@ namespace LlamaApp
         }
 
         /// <summary>
+        /// Opens the chat overlay — the Alt+Space panel — from surfaces that
+        /// don't own the hotkey (toast Chat button, tray context menu).
+        /// </summary>
+        internal void SummonChatOverlay() => _overlay?.Summon();
+
+        /// <summary>
         /// Responds to a toast activation on the UI thread: a body click keeps
         /// the long-standing behavior (open the flyout); an action button's
         /// arguments name the response — retry/cancel a download by model

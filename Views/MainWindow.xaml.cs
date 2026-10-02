@@ -2586,10 +2586,16 @@ namespace LlamaApp.Views
         }
 
         private void Settings_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+            => OpenSettings();
+
+        /// <summary>
+        /// Opens the Settings window (shared by the flyout's gear and the tray
+        /// context menu). Hides the flyout first so the settings dialog isn't
+        /// drawn behind it (the flyout would otherwise immediately deactivate
+        /// and hide on its own, but doing it explicitly avoids a flash).
+        /// </summary>
+        public void OpenSettings()
         {
-            // Hide the flyout first so the settings dialog isn't drawn behind it
-            // (the flyout would otherwise immediately deactivate and hide on its
-            // own, but doing it explicitly avoids a flash).
             HideFlyout();
 
             var w = new SettingsWindow();

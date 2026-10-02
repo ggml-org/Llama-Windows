@@ -18,8 +18,12 @@ namespace LlamaApp;
 /// and a short deactivation grace period keeps a left-click that *dismissed* it
 /// from bouncing it straight back open.</para>
 ///
-/// <para><b>Right-click</b> shows a native Win32 context menu with
-/// <c>Open</c> and <c>Exit</c> — the standard Windows tray affordance.</para>
+/// <para><b>Right-click</b> shows a native Win32 context menu with the
+/// standard Windows tray affordances: <c>Open</c> (the flyout), <c>Chat</c>
+/// (the overlay — otherwise reachable only via the Alt+Space hotkey),
+/// <c>Settings</c>, a live <c>Stop/Start server</c> toggle (rebuilt on each
+/// right-click so the label matches the server's current state), and
+/// <c>Exit</c>.</para>
 ///
 /// This uses the low-level <c>H.NotifyIcon.Core</c> API directly (rather than
 /// the optional <c>H.NotifyIcon.WinUI</c> XAML control) so we only depend on
@@ -62,7 +66,6 @@ internal sealed class TrayIconManager : IDisposable
     private readonly Icon _lightTaskbarIcon;
     private readonly Icon _darkTaskbarIcon;
     private readonly TrayIcon _trayIcon;
-    private readonly PopupMenu _contextMenu;
     private readonly UISettings _uiSettings = new();
     private nint _appliedIconHandle;
     private bool _disposed;
@@ -92,9 +95,6 @@ internal sealed class TrayIconManager : IDisposable
 
         // Swap the glyph when the OS theme flips (see the class remarks).
         _uiSettings.ColorValuesChanged += OnColorValuesChanged;
-
-        // Shown manually on right-click (see ShowContextMenu).
-        _contextMenu = BuildContextMenu();
 
         // Create the icon, retrying until the shell accepts it (see the class
         // remarks). Fire-and-forget: attempts are separated by awaits that
@@ -222,14 +222,35 @@ internal sealed class TrayIconManager : IDisposable
     }
 
     /// <summary>
-    /// The minimal native context menu shown on right-click — the standard
-    /// Windows tray affordance: <c>Open</c> reveals the flyout, <c>Exit</c>
-    /// quits the app.
+    /// The native context menu shown on right-click, built fresh each time so
+    /// the server item's label matches the live state: the quick actions a
+    /// tray app is expected to offer (chat, settings, server control) plus
+    /// the classic <c>Open</c>/<c>Exit</c> pair.
     /// </summary>
     private PopupMenu BuildContextMenu()
     {
         var menu = new PopupMenu();
         menu.Items.Add(new PopupMenuItem("Open", (_, _) => Enqueue(() => _window.ShowAsFlyout(CursorPoint))));
+        menu.Items.Add(new PopupMenuItem("Chat", (_, _) => Enqueue(() => (App.Current as App)?.SummonChatOverlay())));
+        menu.Items.Add(new PopupMenuItem("Settings", (_, _) => Enqueue(() => _window.OpenSettings())));
+        menu.Items.Add(new PopupMenuSeparator());
+
+        // Live server toggle: rebuilding the menu on every right-click means
+        // the label (and the action) can't go stale while the menu is up.
+        var llama = Llama.LlamaManager.Shared;
+        var running = llama.ServerStatus == Llama.LlamaManager.ServerState.Running;
+        menu.Items.Add(new PopupMenuItem(
+            running ? "Stop server" : "Start server",
+            (_, _) => Enqueue(() =>
+            {
+                // Stop only ever kills a managed server (StopServer leaves
+                // externally-launched ones alone); Start re-enters the usual
+                // ensure path, which adopts an already-running server
+                // instead of spawning a duplicate.
+                if (running) llama.StopServer();
+                else _ = llama.EnsureLlamaOrDownloadAsync();
+            })));
+
         menu.Items.Add(new PopupMenuSeparator());
         menu.Items.Add(new PopupMenuItem("Exit", (_, _) => Enqueue(RequestExit)));
         return menu;
@@ -283,7 +304,7 @@ internal sealed class TrayIconManager : IDisposable
         if (!_trayIcon.IsCreated) return;
         var pos = CurrentCursorPoint();
         _ = SetForegroundWindow(_trayIcon.WindowHandle);
-        _contextMenu.Show(_trayIcon.WindowHandle, pos.X, pos.Y);
+        BuildContextMenu().Show(_trayIcon.WindowHandle, pos.X, pos.Y);
     }
 
     /// <summary>
