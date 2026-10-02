@@ -1,0 +1,30 @@
+# Winget installer manifest — the signed .msixbundle attached to each GitHub
+# Release (x64 + ARM64 in one bundle; Windows picks the right architecture).
+# Per release, `wingetcreate update` rewrites InstallerVersion + InstallerSha256
+# — never hand-edit the SHA256. See README.md for the full flow.
+PackageIdentifier: HuggingFace.Llama
+PackageVersion: 0.12.0
+InstallerLocale: en-US
+Platform:
+  - Windows.Desktop
+MinimumOSVersion: 10.0.26100.0
+Architecture: x64
+InstallerType: msix
+Scope: user
+InstallModes:
+  - interactive
+  - silent
+# TODO(one-time): fill after installing the app once (see README.md) —
+# Get-AppxPackage *Llama* | Select PackageFamilyName. Used by winget to match
+# an installed copy for `winget upgrade`.
+PackageFamilyName:
+Installers:
+  - Architecture: x64
+    InstallerType: msix
+    InstallerUrl: https://github.com/ggml-org/Llama-Windows/releases/download/v0.12.0/LlamaApp-v0.12.0.msixbundle
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+    # MSIX upgrades preserve app data; winget hands the bundle to
+    # AddPackageAsync, which performs the in-place update.
+    UpgradeBehavior: install
+ManifestType: installer
+ManifestVersion: 1.6.0

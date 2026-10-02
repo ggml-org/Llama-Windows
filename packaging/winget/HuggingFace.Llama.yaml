@@ -1,0 +1,9 @@
+# Winget version manifest — https://github.com/microsoft/winget-cli
+# Mirrors the copy in winget-pkgs at manifests/h/HuggingFace/Llama/<version>/.
+# Update the version per release via `wingetcreate update` (see README.md).
+# YAML comments here are for maintainers and are NOT submitted to winget-pkgs.
+PackageIdentifier: HuggingFace.Llama
+PackageVersion: 0.12.0
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

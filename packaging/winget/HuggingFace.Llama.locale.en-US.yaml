@@ -1,0 +1,33 @@
+# Winget default-locale manifest — package metadata users see in
+# `winget show Llama`. One-time values only; `wingetcreate update` preserves
+# them across version bumps. See README.md before the first submission.
+PackageIdentifier: HuggingFace.Llama
+PackageVersion: 0.12.0
+PackageLocale: en-US
+Publisher: Hugging Face
+PackageName: Llama
+# TODO(one-time): replace with the repository's actual license once declared.
+License: Copyright © Hugging Face
+ShortDescription: Local LLMs, one click away — right from your Windows system tray.
+Description: |-
+  Llama is a Windows 11 tray app for running llama.cpp models locally — a
+  WinUI 3 port of Llama for Mac. Browse and download recommended models from
+  the Hugging Face Hub, chat via the Alt+Space overlay, and keep your models
+  in the standard Hugging Face cache. Models run 100% locally — your prompts
+  never leave your machine.
+PackageUrl: https://github.com/ggml-org/Llama-Windows
+Moniker: llama
+Tags:
+  - ai
+  - llm
+  - llama
+  - llama.cpp
+  - local
+  - assistant
+  - chat
+PurchaseUrl:
+# The MSIX declares runFullTrust and lives outside the Store; support happens
+# through the GitHub issue tracker.
+PublisherSupportUrl: https://github.com/ggml-org/Llama-Windows/issues
+ManifestType: locale
+ManifestVersion: 1.6.0
