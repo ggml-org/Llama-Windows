@@ -251,33 +251,54 @@ public class HubClient(string? token)
         }
     }
 
-    // GET /api/users/{name}/avatarUrl → {"avatarUrl": "…", "type": "user"|"org"}.
-    // The avatarUrl points at the cdn-avatars CDN — fetch the bytes separately.
+    // Avatar URL resolution, tried in order (verified against the live Hub —
+    // the historical /api/users/{name}/avatarUrl endpoint no longer exists
+    // for anyone, which silently blanked every avatar):
+    //   1. GET /api/users/{name}/avatar → {"avatarUrl": "…"} — users, cheap.
+    //   2. GET /api/organizations/{name}/overview → {"avatarUrl": "…", …} —
+    //      organizations are NOT served under /api/users (a 404 there says
+    //      "This user does not exist"), so the org lookup is the fallback.
+    // The avatarUrl points at the cdn-avatars CDN; the bytes are fetched
+    // separately (its content-type header says webp even for PNG/JPEG
+    // payloads — the image decoder sniffs the real format from the bytes).
     private async Task<string?> ResolveUserAvatarUrlAsync(
         HttpClient client, string userName, CancellationToken cancel)
     {
-        using var resp = await client.GetAsync(
-            $"{HUGGINGFACE_HUB_BASE_URL}/users/{Uri.EscapeDataString(userName)}/avatarUrl", cancel);
+        var userUrl = await ResolveAvatarUrlAsync(
+            client, $"{HUGGINGFACE_HUB_BASE_URL}/users/{Uri.EscapeDataString(userName)}/avatar", cancel);
+        if (!string.IsNullOrWhiteSpace(userUrl)) return userUrl;
 
-        // A user/org without an avatar (404) is an expected answer, not an error.
-        if (!resp.IsSuccessStatusCode) return null;
+        // Not a user (or a user with no avatar) — try as an organization.
+        return await ResolveAvatarUrlAsync(
+            client, $"{HUGGINGFACE_HUB_BASE_URL}/organizations/{Uri.EscapeDataString(userName)}/overview", cancel);
+    }
 
-        var json = await resp.Content.ReadAsStringAsync(cancel);
+    /// <summary>Fetches one avatar-URL endpoint and extracts its avatarUrl;
+    /// a non-success status (a 404 for the wrong actor kind is the expected
+    /// path) or malformed JSON yields null so the caller's fallback runs.</summary>
+    private static async Task<string?> ResolveAvatarUrlAsync(
+        HttpClient client, string url, CancellationToken cancel)
+    {
         try
         {
+            using var resp = await client.GetAsync(url, cancel);
+
+            // An actor without an avatar (404) is an expected answer, not an error.
+            if (!resp.IsSuccessStatusCode) return null;
+
+            var json = await resp.Content.ReadAsStringAsync(cancel);
             return JsonSerializer.Deserialize<UserAvatarDto>(json)?.AvatarUrl;
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException)
         {
             return null;
         }
     }
 
-    /// <summary>/api/users/{name}/avatarUrl response DTO.</summary>
+    /// <summary>Avatar-URL DTO — the key both endpoints share.</summary>
     internal sealed class UserAvatarDto
     {
         [JsonPropertyName("avatarUrl")] public string? AvatarUrl { get; set; }
-        [JsonPropertyName("type")] public string? Type { get; set; }
     }
 
     /// <summary>
