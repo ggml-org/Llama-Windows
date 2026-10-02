@@ -41,10 +41,10 @@ public class RuntimeUpdateSchedulerTests
     // ---- ParseReleaseBuild: GitHub tags (strict b<build>) ----
 
     [Theory]
-    [InlineData("b6726", 6726)]
-    [InlineData(" b6726 ", 6726)]
-    [InlineData("b1", 1)]
-    public void ParseReleaseBuild_ParsesPlainBuildTags(string tag, int expected)
+    [InlineData("b6726", 6726u)]
+    [InlineData(" b6726 ", 6726u)]
+    [InlineData("b1", 1u)]
+    public void ParseReleaseBuild_ParsesPlainBuildTags(string tag, uint expected)
     {
         Assert.Equal(expected, RuntimeUpdateScheduler.ParseReleaseBuild(tag));
     }

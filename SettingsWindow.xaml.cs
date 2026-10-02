@@ -22,6 +22,11 @@ namespace LlamaApp
         private const int WindowWidthDips = 960;
         private const int WindowHeightDips = 560;
 
+        // Re-entrancy guard for the runtime-update Check button — a double
+        // click must not start two checks (the second could race the first
+        // install).
+        private bool _runtimeCheckInFlight;
+
         public SettingsWindow()
         {
             InitializeComponent();
@@ -29,6 +34,7 @@ namespace LlamaApp
             Configure();
             SizeAndCenterOnScreen();
             LoadCurrent();
+            UpdateRuntimeUpdateCard();
 
             // Extend Mica/content into the titlebar area and register our
             // AppTitleBar element as the drag region. The system caption
@@ -170,6 +176,62 @@ namespace LlamaApp
             catch (Exception ex)
             {
                 Common.Log.Warn(ex, "open log folder failed");
+            }
+        }
+
+        // ---- llama.cpp runtime update card ----
+
+        /// <summary>
+        /// Refreshes the runtime card's description line: the installed
+        /// version (from the resolved binary) and when the weekly checker last
+        /// ran. Harmless with no binary yet — the card says "unknown".
+        /// </summary>
+        private void UpdateRuntimeUpdateCard()
+        {
+            var version = Llama.LlamaManager.Shared.Version;
+            var scheduler = (App.Current as App)?.RuntimeUpdates;
+            var lastCheck = scheduler?.LastCheckUtc;
+            RuntimeUpdateDescriptionText.Text =
+                $"Llama keeps the llama.cpp runtime up to date with a weekly check. " +
+                $"Installed: {(version is null ? "unknown" : version)}. " +
+                $"Last checked: {(lastCheck is { } at ? at.LocalDateTime.ToString("g") : "never")}.";
+        }
+
+        /// <summary>
+        /// The card's Check-for-updates button: runs the scheduler's manual
+        /// check (same safety gates as the weekly one) and shows what came of
+        /// it. The button + ring make the wait visible; an install can take a
+        /// while on slow links. Re-entrancy guarded — a double click must not
+        /// start two checks.
+        /// </summary>
+        private async void CheckRuntimeUpdate_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            if (_runtimeCheckInFlight) return;
+            var scheduler = (App.Current as App)?.RuntimeUpdates;
+            if (scheduler is null) return;
+
+            _runtimeCheckInFlight = true;
+            CheckRuntimeUpdateButton.IsEnabled = false;
+            CheckRuntimeUpdateRing.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+            CheckRuntimeUpdateRing.IsActive = true;
+            CheckRuntimeUpdateResultText.Text = "Checking GitHub for a newer llama.cpp release…";
+            try
+            {
+                var outcome = await scheduler.CheckNowAsync();
+                CheckRuntimeUpdateResultText.Text = RuntimeUpdateMessages.Describe(outcome);
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "runtime update check threw");
+                CheckRuntimeUpdateResultText.Text = "The check failed unexpectedly — try again later.";
+            }
+            finally
+            {
+                _runtimeCheckInFlight = false;
+                CheckRuntimeUpdateButton.IsEnabled = true;
+                CheckRuntimeUpdateRing.IsActive = false;
+                CheckRuntimeUpdateRing.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+                UpdateRuntimeUpdateCard();
             }
         }
 

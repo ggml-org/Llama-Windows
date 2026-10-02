@@ -531,6 +531,60 @@
                                     </StackPanel>
                                 </StackPanel>
                             </Border>
+
+                            <!-- llama.cpp runtime updater: the weekly auto-update
+                                 (RuntimeUpdateScheduler) made visible — installed
+                                 version, last check, and a manual trigger. -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE895;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="llama.cpp Runtime"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock x:Name="RuntimeUpdateDescriptionText"
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <StackPanel Orientation="Horizontal"
+                                                Spacing="8">
+                                        <Button x:Name="CheckRuntimeUpdateButton"
+                                                Content="Check for Updates"
+                                                Click="CheckRuntimeUpdate_Click"
+                                                ToolTipService.ToolTip="Check GitHub for a newer llama.cpp release now" />
+                                        <ProgressRing x:Name="CheckRuntimeUpdateRing"
+                                                      Width="18" Height="18"
+                                                      IsActive="False"
+                                                      Visibility="Collapsed"
+                                                      VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="CheckRuntimeUpdateResultText"
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
                 </Grid>

@@ -29,6 +29,11 @@ namespace LlamaApp.Llama;
 /// During a session the loop defers whenever the server is up and retries the
 /// next hour; nothing is ever restarted or interrupted.</para>
 ///
+/// <para><b>Visibility.</b> The weekly pass is silent, but not invisible:
+/// <see cref="CheckNowAsync"/> backs a Settings "Check for updates" button
+/// and returns what happened (<see cref="CheckOutcome"/>), and a successful
+/// install raises <see cref="RuntimeUpdated"/> so the app can toast it.</para>
+///
 /// <para><b>Failure handling.</b> Only a confirmed outcome marks the weekly
 /// check done: up to date, installed, install attempted-and-failed, or a
 /// deterministic "can't compare" (unparsable installed version). A failed
@@ -45,6 +50,27 @@ namespace LlamaApp.Llama;
 /// </summary>
 public sealed class RuntimeUpdateScheduler
 {
+    /// <summary>The result of a runtime check — what the UI should say about it.</summary>
+    public enum CheckOutcome
+    {
+        /// <summary>The weekly interval hasn't elapsed (scheduled checks only).</summary>
+        NotDue,
+        /// <summary>The binary is the user's own (PATH) installation — never managed here.</summary>
+        SkippedNotManaged,
+        /// <summary>An install would run, but the server is up — deferred (retried when idle).</summary>
+        DeferredServerBusy,
+        /// <summary>The latest release couldn't be determined (network/GitHub/tag).</summary>
+        FetchFailed,
+        /// <summary>The installed version has no comparable build number.</summary>
+        SkippedUnparsableVersion,
+        /// <summary>Checked: the installed runtime is the latest release.</summary>
+        UpToDate,
+        /// <summary>A newer release was found and installed.</summary>
+        Installed,
+        /// <summary>A newer release was found but the install failed (see the log).</summary>
+        InstallFailed,
+    }
+
     /// <summary>How often the runtime is allowed to check for a new release.</summary>
     public static readonly TimeSpan Interval = TimeSpan.FromDays(7);
 
@@ -59,11 +85,33 @@ public sealed class RuntimeUpdateScheduler
     private readonly LlamaManager _manager;
     private readonly LastCheckStore _store;
 
+    /// <summary>Serializes checks — the hourly tick, the startup pass, and a
+    /// manual Check Now click must never race an install against each other.</summary>
+    private readonly SemaphoreSlim _checkGate = new(1, 1);
+
+    /// <summary>Raised (on a background thread) after a successful runtime
+    /// install, with the new build number — lets the app toast the event.</summary>
+    public event Action<uint>? RuntimeUpdated;
+
     public RuntimeUpdateScheduler(LlamaManager manager, LastCheckStore? store = null)
     {
         _manager = manager;
         _store = store ?? new LastCheckStore();
     }
+
+    /// <summary>When the last confirmed check ran (from the persisted stamp),
+    /// or null when never — surfaced in Settings.</summary>
+    public DateTimeOffset? LastCheckUtc => _store.Load();
+
+    /// <summary>
+    /// Runs a check now, bypassing the weekly gate — the Settings "Check for
+    /// updates" button. Keeps every safety gate (external installs are never
+    /// managed; installs never run under a live server) and stamps the same
+    /// way a scheduled check does. Network failures leave the stamp untouched
+    /// so the scheduled cadence still catches up later.
+    /// </summary>
+    public async Task<CheckOutcome> CheckNowAsync()
+        => await RunCheckAsync(force: true, fetchBudget: null);
 
     /// <summary>
     /// Runs the startup check (bounded — a due check may install, delaying the
@@ -118,97 +166,122 @@ public sealed class RuntimeUpdateScheduler
 
     /// <summary>Runs the weekly check when its interval has elapsed.</summary>
     private async Task CheckDueAsync(bool bounded)
+        => await RunCheckAsync(force: false, fetchBudget: bounded ? StartupCheckBudget : null);
+
+    /// <summary>
+    /// One check, shared by the scheduled path (<paramref name="force"/> is
+    /// false) and Check Now (true). Stamping rules: only a confirmed outcome
+    /// (not managed, unparsable, up to date, install attempted) marks the
+    /// weekly check done; transient failures (fetch) and deferrals (server
+    /// busy) leave the stamp so the next tick retries.
+    /// </summary>
+    private async Task<CheckOutcome> RunCheckAsync(bool force, TimeSpan? fetchBudget)
     {
-        var manager = _manager;
-        if (!IsDue(_store.Load(), DateTimeOffset.UtcNow, Interval)) return;
+        await _checkGate.WaitAsync();
+        try
+        {
+            var manager = _manager;
+            if (!force && !IsDue(_store.Load(), DateTimeOffset.UtcNow, Interval))
+                return CheckOutcome.NotDue;
 
         // Never manage an installation the user brought themselves, and never
         // install while a server transition or another install is in flight.
         // A non-managed origin is a stable situation worth stamping — polling
         // GitHub hourly for a binary we will never touch buys nothing.
-        if (manager.CurrentOrigin != LlamaManager.Origin.Managed)
-        {
-            Log.Info($"runtime update skipped: installation is {manager.CurrentOrigin}, not app-managed");
-            _store.Save(DateTimeOffset.UtcNow);
-            return;
-        }
+            // Never manage an installation the user brought themselves, and
+            // never install while a server transition or another install is in
+            // flight. A non-managed origin is a stable situation worth
+            // stamping — polling GitHub hourly for a binary we will never
+            // touch buys nothing.
+            if (manager.CurrentOrigin != LlamaManager.Origin.Managed)
+            {
+                Log.Info($"runtime update skipped: installation is {manager.CurrentOrigin}, not app-managed");
+                _store.Save(DateTimeOffset.UtcNow);
+                return CheckOutcome.SkippedNotManaged;
+            }
 
-        // The overwrite needs the binary idle; skip without stamping so the
-        // check retries when the server is down (or at the next app start,
-        // which runs before the server launches).
-        if (!IsServerSafe(manager.ServerStatus) || manager.State == LlamaManager.InstallState.Installing)
-        {
-            Log.Debug("runtime update deferred: llama server is not idle");
-            return;
-        }
+            // The overwrite needs the binary idle; skip without stamping so
+            // the check retries when the server is down (or at the next app
+            // start, which runs before the server launches).
+            if (!IsServerSafe(manager.ServerStatus) || manager.State == LlamaManager.InstallState.Installing)
+            {
+                Log.Debug("runtime update deferred: llama server is not idle");
+                return CheckOutcome.DeferredServerBusy;
+            }
 
-        CancellationToken cancel = CancellationToken.None;
-        CancellationTokenSource? boundedCts = null;
-        if (bounded)
-        {
-            boundedCts = new CancellationTokenSource(StartupCheckBudget);
-            cancel = boundedCts.Token;
-        }
+            CancellationToken cancel = CancellationToken.None;
+            CancellationTokenSource? boundedCts = null;
+            if (fetchBudget is { } budget)
+            {
+                boundedCts = new CancellationTokenSource(budget);
+                cancel = boundedCts.Token;
+            }
 
-        int? latest;
-        try
-        {
-            latest = await FetchLatestBuildAsync(cancel);
-        }
-        finally { boundedCts?.Dispose(); }
+            uint? latest;
+            try
+            {
+                latest = await FetchLatestBuildAsync(cancel);
+            }
+            finally { boundedCts?.Dispose(); }
 
-        // Transient failure (network, GitHub, unparsable tag) — the next tick
-        // retries, so this week's check stays "due".
-        if (latest is null)
-        {
-            Log.Warn("runtime update check failed: could not determine the latest llama.cpp release");
-            return;
-        }
+            // Transient failure (network, GitHub, unparsable tag) — the next
+            // tick retries, so this week's check stays "due".
+            if (latest is null)
+            {
+                Log.Warn("runtime update check failed: could not determine the latest llama.cpp release");
+                return CheckOutcome.FetchFailed;
+            }
 
-        var installed = ParseInstalledBuild(manager.Version);
-        if (installed is null)
-        {
-            // Deterministic (the binary prints what it prints) — retrying
-            // hourly won't change the answer, so stamp the check as done.
-            Log.Warn($"runtime update skipped: installed version '{manager.Version}' has no recognizable build number");
-            _store.Save(DateTimeOffset.UtcNow);
-            return;
-        }
+            var installed = ParseInstalledBuild(manager.Version);
+            if (installed is null)
+            {
+                // Deterministic (the binary prints what it prints) — retrying
+                // hourly won't change the answer, so stamp the check as done.
+                Log.Warn($"runtime update skipped: installed version '{manager.Version}' has no recognizable build number");
+                _store.Save(DateTimeOffset.UtcNow);
+                return CheckOutcome.SkippedUnparsableVersion;
+            }
 
-        if (latest.Value <= installed.Value)
-        {
-            Log.Info($"llama.cpp runtime is up to date (installed b{installed}, latest b{latest})");
-            _store.Save(DateTimeOffset.UtcNow);
-            return;
-        }
+            if (latest.Value <= installed.Value)
+            {
+                Log.Info($"llama.cpp runtime is up to date (installed b{installed}, latest b{latest})");
+                _store.Save(DateTimeOffset.UtcNow);
+                return CheckOutcome.UpToDate;
+            }
 
-        // Re-check after the fetch: the server may have come up in between
-        // (e.g. a sibling tool or a state change during the network call).
-        if (!IsServerSafe(manager.ServerStatus) || manager.State == LlamaManager.InstallState.Installing)
-        {
-            Log.Debug("runtime update deferred: llama server became busy during the check");
-            return;
-        }
+            // Re-check after the fetch: the server may have come up in
+            // between (e.g. a sibling tool or a state change during the call).
+            if (!IsServerSafe(manager.ServerStatus) || manager.State == LlamaManager.InstallState.Installing)
+            {
+                Log.Debug("runtime update deferred: llama server became busy during the check");
+                return CheckOutcome.DeferredServerBusy;
+            }
 
-        Log.Info($"llama.cpp runtime update available: installed b{installed}, latest b{latest} — installing");
-        try
-        {
-            // InstallAsync surfaces failure via its own log + InstallState;
-            // either way the weekly check is done — a failure is not retried
-            // hourly (it would hammer install.ps1 for a systematic problem).
-            await manager.InstallAsync(CancellationToken.None);
+            Log.Info($"llama.cpp runtime update available: installed b{installed}, latest b{latest} — installing");
+            try
+            {
+                // InstallAsync surfaces failure via its own log + InstallState;
+                // either way the weekly check is done — a failure is not
+                // retried hourly (it would hammer install.ps1 for a
+                // systematic problem).
+                var installedOk = await manager.InstallAsync(CancellationToken.None);
+                if (installedOk)
+                    RuntimeUpdated?.Invoke(latest.Value);
+                return installedOk ? CheckOutcome.Installed : CheckOutcome.InstallFailed;
+            }
+            finally
+            {
+                _store.Save(DateTimeOffset.UtcNow);
+            }
         }
-        finally
-        {
-            _store.Save(DateTimeOffset.UtcNow);
-        }
+        finally { _checkGate.Release(); }
     }
 
     /// <summary>
     /// Fetches the latest llama.cpp release from GitHub and returns its build
     /// number. Null on any failure — the check simply stays due.
     /// </summary>
-    private static async Task<int?> FetchLatestBuildAsync(CancellationToken cancel)
+    private static async Task<uint?> FetchLatestBuildAsync(CancellationToken cancel)
     {
         try
         {
@@ -295,14 +368,14 @@ public sealed class RuntimeUpdateScheduler
     /// release-candidate tags) yields null: only tags this app understands are
     /// comparable, and skipping is always safe.
     /// </summary>
-    internal static int? ParseReleaseBuild(string? tag)
+    internal static uint? ParseReleaseBuild(string? tag)
     {
         if (string.IsNullOrWhiteSpace(tag)) return null;
         var t = tag.Trim();
         if (t.Length < 2 || t[0] != 'b') return null;
         foreach (var c in t[1..])
             if (c is < '0' or > '9') return null;
-        return int.Parse(t[1..]);
+        return uint.Parse(t[1..]);
     }
 
     /// <summary>releases/latest response — only the tag matters here.</summary>

@@ -132,6 +132,12 @@ namespace LlamaApp
             // defers installs while the server is up. Fire-and-forget like
             // the ensure it wraps.
             _runtimeUpdates = new Llama.RuntimeUpdateScheduler(Llama.LlamaManager.Shared);
+            // The weekly pass is silent — but a successful install deserves a
+            // toast (it explains why the server takes a moment longer the
+            // next time it starts, and why the version footer changed).
+            _runtimeUpdates.RuntimeUpdated += build => _dispatcher.TryEnqueue(() =>
+                Notifications.Show("llama.cpp updated",
+                    $"The llama.cpp runtime was updated to b{build}. The new version is used the next time the server starts."));
             _ = _runtimeUpdates.StartAsync(
                 () => Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync());
 
@@ -163,6 +169,12 @@ namespace LlamaApp
                     "Find it in the system tray — and press Alt+Space anytime to chat with a loaded model.");
             }
         }
+
+        /// <summary>
+        /// The app-wide runtime update scheduler (created in OnLaunched) —
+        /// Settings uses it for the Check-for-updates card.
+        /// </summary>
+        internal Llama.RuntimeUpdateScheduler RuntimeUpdates => _runtimeUpdates!;
 
         /// <summary>
         /// Opens the chat overlay — the Alt+Space panel — from surfaces that
