@@ -28,7 +28,7 @@ public static class Telemetry
     private const string EnvVarName = "LLAMA_WINDOWS_TELEMETRY";
 
     /// <summary>Period between ping events while the app is running.</summary>
-    private static readonly TimeSpan PingInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan PingInterval = TimeSpan.FromMinutes(30);
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
 
