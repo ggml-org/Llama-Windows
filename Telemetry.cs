@@ -22,7 +22,7 @@ namespace LlamaApp;
 /// </summary>
 public static class Telemetry
 {
-    private const string Endpoint = "https://huggingface.co/api/telemetry-llamacpp";
+    private const string Endpoint = "https://huggingface.co/api/telemetry/llamacpp";
 
     /// <summary>Env override: OFF (case-insensitive) disables, ON/unset/malformed falls through to the setting.</summary>
     private const string EnvVarName = "LLAMA_WINDOWS_TELEMETRY";
