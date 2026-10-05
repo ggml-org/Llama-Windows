@@ -30,7 +30,15 @@ public static class Telemetry
     /// <summary>Period between ping events while the app is running.</summary>
     private static readonly TimeSpan PingInterval = TimeSpan.FromMinutes(30);
 
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static readonly HttpClient Http = CreateClient();
+
+    /// <summary>Client for telemetry POSTs, branded with the shared User-Agent.</summary>
+    private static HttpClient CreateClient()
+    {
+        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
+        return client;
+    }
 
     private static bool _started;
     private static Timer? _pingTimer;

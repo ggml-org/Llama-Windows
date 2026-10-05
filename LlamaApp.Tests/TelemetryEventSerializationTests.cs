@@ -66,7 +66,7 @@ public class TelemetryEventSerializationTests
         Assert.Equal(32, env.GetProperty("cpu_count").GetInt32());
         Assert.Equal(34359738368UL, env.GetProperty("memory_total").GetUInt64());
         Assert.Equal(["NVIDIA GeForce RTX 4060 Ti"],
-            env.GetProperty("gpu").EnumerateArray().Select(g => g.GetString()).ToArray());
+            env.GetProperty("gpu").EnumerateArray().Select(g => g.GetString()!).ToArray());
     }
 
     [Fact]

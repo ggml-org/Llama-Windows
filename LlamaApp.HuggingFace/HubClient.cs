@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LlamaApp.Common;
 
 namespace LlamaApp.HuggingFace;
 
@@ -39,6 +40,7 @@ public class HubClient(string? token)
             if (string.IsNullOrWhiteSpace(token)) return null;
 
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
             return await WhoAmI(client, cancel);
         }
 

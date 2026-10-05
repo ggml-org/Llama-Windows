@@ -311,6 +311,9 @@ public sealed class LlamaManager
             BaseAddress = new Uri($"http://127.0.0.1:{serverPort}"),
             Timeout = Timeout.InfiniteTimeSpan,
         };
+        // Same User-Agent as the internet-facing clients — the loopback
+        // server logs then identify the caller consistently.
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
 
         // The supervisor is the ONLY source of truth for server status: it
         // polls the HTTP API for the app's whole lifetime and derives
@@ -2281,7 +2284,7 @@ public sealed class LlamaManager
             using (var client = new HttpClient())
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
-                client.DefaultRequestHeaders.UserAgent.ParseAdd("Llama/1.0");
+                client.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
                 using var resp = await client.GetAsync(InstallScriptUrl, cancel);
                 
                 resp.EnsureSuccessStatusCode();

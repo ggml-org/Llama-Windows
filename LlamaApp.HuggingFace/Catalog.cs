@@ -52,7 +52,7 @@ public sealed class Catalog : IModelSource
     private static async Task<CatalogFamily[]> FetchCatalogFamiliesAsync(CancellationToken cancel)
     {
         using var client = new HttpClient();
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("Llama/1.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
         client.Timeout = TimeSpan.FromSeconds(15);
 
         using var response = await client.GetAsync(CatalogUrl, cancel);
