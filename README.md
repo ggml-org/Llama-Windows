@@ -36,7 +36,7 @@ Llama manages a `llama serve` process and talks to it over its REST API. Your mo
 Llama sends anonymous usage statistics to Hugging Face (same idea as [text-generation-inference](https://github.com/huggingface/text-generation-inference)'s telemetry, tagged `app: "llamawin"`), to understand which hardware the community runs local models on:
 
 - **What is sent** — a random per-install id (a GUID stored in `settings.json`, unlinkable to you), the app version, Windows version, CPU name and core count, total RAM, and installed GPU names.
-- **When** — once when the app starts (`start`), every 5 minutes while it runs (`ping`), and once on a clean exit (`stop`). POSTed to `https://huggingface.co/api/telemetry-llamacpp`.
+- **When** — once when the app starts (`start`), every 30 minutes while it runs (`ping`), and once on a clean exit (`stop`). POSTed to `https://huggingface.co/api/telemetry/llamacpp`.
 - **What is never sent** — prompts, model names, model files, or any file contents. Inference stays 100% local.
 
 To opt out, either:

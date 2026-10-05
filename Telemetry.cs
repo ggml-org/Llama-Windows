@@ -12,7 +12,7 @@ namespace LlamaApp;
 /// or file data ever leaves the machine — only the hardware summary below.
 ///
 /// Flow: <see cref="StartAsync"/> at app launch sends one <c>start</c> event
-/// with the hardware snapshot, a <c>ping</c> every 5 minutes while the process
+/// with the hardware snapshot, a <c>ping</c> every 30 minutes while the process
 /// is alive, and <see cref="SendStop"/> at exit sends a final <c>stop</c>
 /// event. Every event carries a random, per-install <c>id</c> (persisted in
 /// settings.json — NOT a hardware or account identifier) and
