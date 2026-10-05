@@ -31,6 +31,19 @@ Grab the latest `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.c
 
 Llama manages a `llama serve` process and talks to it over its REST API. Your models stay in the standard Hugging Face cache (`%USERPROFILE%\.cache\huggingface\hub`), shared with `llama.cpp` and HF tooling. Settings and logs live under `%LOCALAPPDATA%\Llama`.
 
+## Telemetry
+
+Llama sends anonymous usage statistics to Hugging Face (same idea as [text-generation-inference](https://github.com/huggingface/text-generation-inference)'s telemetry, tagged `app: "llamawin"`), to understand which hardware the community runs local models on:
+
+- **What is sent** — a random per-install id (a GUID stored in `settings.json`, unlinkable to you), the app version, Windows version, CPU name and core count, total RAM, and installed GPU names.
+- **When** — once when the app starts (`start`), every 5 minutes while it runs (`ping`), and once on a clean exit (`stop`). POSTed to `https://huggingface.co/api/telemetry-llamacpp`.
+- **What is never sent** — prompts, model names, model files, or any file contents. Inference stays 100% local.
+
+To opt out, either:
+
+- untick **Usage telemetry** in Settings (turning it off takes effect immediately; turning it back on needs an app restart), or
+- set the environment variable `LLAMA_WINDOWS_TELEMETRY=OFF` before launching Llama (an explicit `ON` or any other/unset value falls back to the setting above).
+
 ## Building from source
 
 You'll need the **.NET 10 SDK** with the Windows App SDK workload:
