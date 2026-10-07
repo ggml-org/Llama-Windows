@@ -112,7 +112,6 @@ namespace LlamaApp
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
             LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
-            TelemetryBox.IsChecked = s.TelemetryEnabled;
             LoadInstallInfo();
         }
 
@@ -287,18 +286,6 @@ namespace LlamaApp
             catch (Exception ex)
             {
                 Common.Log.Warn(ex, "startup shortcut update failed");
-            }
-
-            // Turning telemetry off takes effect immediately: stop the ping
-            // timer (SendStop also emits the final stop event, and no-ops
-            // when telemetry never started this session). Turning it back on
-            // takes effect at the next launch.
-            var wantTelemetry = TelemetryBox.IsChecked == true;
-            s.TelemetryEnabled = wantTelemetry;
-            if (!wantTelemetry)
-            {
-                try { Telemetry.SendStop(); }
-                catch (Exception ex) { Common.Log.Warn(ex, "telemetry stop failed"); }
             }
 
             s.Save();

@@ -92,24 +92,6 @@ public sealed class Settings
     /// </summary>
     public Dictionary<string, int> ModelContextLengths { get; set; } = new();
 
-    /// <summary>
-    /// Whether anonymous usage telemetry is sent (see
-    /// <see cref="Telemetry"/>): start/ping/stop events with a hardware
-    /// summary (Windows version, CPU, total RAM, GPU names) and a random
-    /// per-install id — never prompt or model data. Default on, mirroring
-    /// tgi's default-on telemetry. Toggled in Settings (General page) and
-    /// overridable per-session with the LLAMA_WINDOWS_TELEMETRY=OFF
-    /// environment variable.
-    /// </summary>
-    public bool TelemetryEnabled { get; set; } = true;
-
-    /// <summary>
-    /// Random per-install client id used as the telemetry <c>id</c> field.
-    /// Generated once by <see cref="Telemetry"/> and persisted here;
-    /// empty until the first telemetry-enabled launch.
-    /// </summary>
-    public string TelemetryId { get; set; } = "";
-
     private static Settings Load()
     {
         try

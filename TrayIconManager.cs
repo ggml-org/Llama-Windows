@@ -321,12 +321,6 @@ internal sealed class TrayIconManager : IDisposable
     {
         Log.Info("app exit requested");
 
-        // Final telemetry event before the process disappears: synchronous
-        // with a 3 s cap inside, so Environment.Exit below can't kill the
-        // POST mid-flight but a stalled network can't stall the exit.
-        try { Telemetry.SendStop(); }
-        catch (Exception ex) { Log.Warn(ex, "telemetry stop failed"); }
-
         // Unregister the toast-notification activator before going down.
         Notifications.Unregister();
         // Stop the llama server first so it doesn't outlive the app (and leave

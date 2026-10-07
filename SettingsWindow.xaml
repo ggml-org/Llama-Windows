@@ -178,48 +178,6 @@
                                 </Grid>
                             </Border>
 
-                            <!-- Usage telemetry (toggle). Off stops the ping
-                                 timer immediately (a final stop event is
-                                 sent); back on takes effect at next launch. -->
-                            <Border CornerRadius="8"
-                                    Padding="16,14"
-                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1">
-                                <Grid ColumnSpacing="12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <Border Grid.Column="0"
-                                            Width="36" Height="36"
-                                            CornerRadius="{ThemeResource ControlCornerRadius}"
-                                            Background="{StaticResource BrandAccentBrush}"
-                                            VerticalAlignment="Top">
-                                        <FontIcon Glyph="&#xE9D9;"
-                                                  FontSize="16"
-                                                  Foreground="White"
-                                                  HorizontalAlignment="Center"
-                                                  VerticalAlignment="Center" />
-                                    </Border>
-                                    <StackPanel Grid.Column="1" Spacing="2">
-                                        <TextBlock Text="Usage telemetry"
-                                                   FontSize="14"
-                                                   FontWeight="SemiBold" />
-                                        <TextBlock Text="Send anonymous usage statistics to Hugging Face — app version, Windows version, CPU, RAM and GPU names only. Your prompts and models never leave your machine. Can also be disabled with LLAMA_WINDOWS_TELEMETRY=OFF."
-                                                   FontSize="12"
-                                                   Opacity="0.6"
-                                                   TextWrapping="WrapWholeWords" />
-                                    </StackPanel>
-                                    <CheckBox x:Name="TelemetryBox"
-                                              Grid.Column="2"
-                                              VerticalAlignment="Top"
-                                              MinWidth="0"
-                                              ToolTipService.ToolTip="Send anonymous usage statistics (no prompts, no model data)" />
-                                </Grid>
-                            </Border>
-
                             <!-- Chat overlay shortcut (informational — the
                                  hotkey is hard-coded Alt+Space; this card is
                                  how a user discovers it exists). -->

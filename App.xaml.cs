@@ -125,14 +125,6 @@ namespace LlamaApp
             Common.Log.Info($"HF token: {(string.IsNullOrWhiteSpace(Settings.Current.HuggingFaceToken) ? "not set" : "configured")}");
             _ = Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
 
-            // Anonymous usage telemetry (tgi-style start/ping/stop events to
-            // the Hugging Face backend). Fire-and-forget: the start event is
-            // sent from a background task and the ping timer runs there; all
-            // telemetry failures are swallowed (see Telemetry). A
-            // single-instance redirect below exits before this point, so a
-            // redirected second launch never reports a phantom start.
-            _ = Telemetry.StartAsync();
-
             // Spotlight-style prompt overlay, summoned by a global Alt+Space
             // hotkey. Created lazily on first press and reused thereafter; the
             // hotkey is registered for the app's lifetime only, so it stops
