@@ -117,6 +117,7 @@ namespace LlamaApp
             Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
             Llama.LlamaManager.Shared.HuggingFaceToken = Settings.Current.HuggingFaceToken;
             Llama.LlamaManager.Shared.IdleUnloadSeconds = Settings.Current.IdleUnloadSeconds;
+            Llama.LlamaManager.Shared.MaxLoadedModels = Settings.Current.MaxLoadedModels;
             // Shared by reference: the details view mutates this dictionary when
             // the user picks a context length, and the manager renders it into
             // the server's --models-preset INI (see ReloadModelPresetsAsync).

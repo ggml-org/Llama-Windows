@@ -177,6 +177,18 @@ public sealed class LlamaManager
     public int IdleUnloadSeconds { get; set; } = -1;
 
     /// <summary>
+    /// Maximum number of models loaded in parallel in router mode, passed as
+    /// <c>--models-max</c> at launch; 0 (the default) means unlimited. Set by
+    /// the caller (App.OnLaunched reads it from
+    /// <c>Settings.Current.MaxLoadedModels</c>) — kept here rather than reading
+    /// <c>Settings</c> directly to avoid a circular project dependency. Only
+    /// affects servers the app launches: an adopted already-running server
+    /// keeps whatever arguments it was started with, and a changed value takes
+    /// effect on the next server start.
+    /// </summary>
+    public int MaxLoadedModels { get; set; } = 0;
+
+    /// <summary>
     /// Per-model context-length preferences (keyed by server model id,
     /// <c>repo:quant</c>), rendered into a llama.cpp <c>--models-preset</c> INI
     /// at server launch so the router spawns each child with its chosen
@@ -598,6 +610,15 @@ public sealed class LlamaManager
                 psi.ArgumentList.Add(IdleUnloadSeconds.ToString());
             }
 
+            // Max loaded models. Router mode loads each model in its own child
+            // process; 0 (the default) leaves the server's unlimited behavior,
+            // otherwise the router refuses to exceed N simultaneous loads.
+            if (MaxLoadedModels > 0)
+            {
+                psi.ArgumentList.Add("--models-max");
+                psi.ArgumentList.Add(MaxLoadedModels.ToString());
+            }
+
             // Per-model context lengths. The router's /models/load ignores a
             // ctx field in the request body (it reads only the model name), so
             // the chosen sizes are rendered into a --models-preset INI that the
@@ -627,7 +648,8 @@ public sealed class LlamaManager
             }
 
             Log.Info($"starting llama server: {BinaryPath} serve --port {ServerPort} --jinja" +
-                (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : ""));
+                (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : "") +
+                (MaxLoadedModels > 0 ? $" --models-max {MaxLoadedModels}" : ""));
 
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             proc.Exited += (_, _) =>

@@ -434,8 +434,16 @@
                                 </StackPanel>
                             </Border>
 
+                            <!-- Idle unload + max loaded models, shown side by side -->
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
                             <!-- Unload model when idle (ComboBox: 5m / 15m / 1h / Never) -->
-                            <Border CornerRadius="8"
+                            <Border Grid.Column="0"
+                                    CornerRadius="8"
                                     Padding="16,14"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -477,6 +485,50 @@
                                     </ComboBox>
                                 </StackPanel>
                             </Border>
+
+                                <!-- Max models loaded in parallel (NumberBox: 0 = unlimited) -->
+                                <Border Grid.Column="1"
+                                        CornerRadius="8"
+                                        Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE8F1;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Max Loaded Models"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Maximum number of models the router keeps loaded at the same time. 0 means unlimited. Applies the next time the llama server starts."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <NumberBox x:Name="ModelsMaxBox"
+                                               Minimum="0"
+                                               SmallChange="1"
+                                               LargeChange="4"
+                                               SpinButtonPlacementMode="Hidden"
+                                               ToolTipService.ToolTip="Maximum number of models loaded at once (0 = unlimited)" />
+                                </StackPanel>
+                                </Border>
+                            </Grid>
 
                             <!-- Installation folder (read-only — informational,
                                  not a setting) -->

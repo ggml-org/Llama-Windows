@@ -114,6 +114,7 @@ namespace LlamaApp
             }
             if (IdleUnloadBox.SelectedItem is null)
                 IdleUnloadBox.SelectedIndex = IdleUnloadBox.Items.Count - 1; // Never
+            ModelsMaxBox.Value = s.MaxLoadedModels;
             // The OS shortcut is the source of truth: a user may have toggled
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
@@ -334,6 +335,12 @@ namespace LlamaApp
             if ((IdleUnloadBox.SelectedItem as Microsoft.UI.Xaml.Controls.ComboBoxItem)?.Tag is string idleTag
                 && int.TryParse(idleTag, out var idleSeconds))
                 s.IdleUnloadSeconds = idleSeconds;
+
+            // 0 = unlimited; the NumberBox enforces non-negative values, and an
+            // empty box reads as NaN — fall back to the default (unlimited).
+            s.MaxLoadedModels = double.IsNaN(ModelsMaxBox.Value)
+                ? 0
+                : (int)Math.Clamp(ModelsMaxBox.Value, 0, int.MaxValue);
 
             // Apply the startup preference to the OS (create/delete the .lnk)
             // and mirror it into settings.json as a hint for the checkbox on
