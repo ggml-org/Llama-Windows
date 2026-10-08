@@ -9,7 +9,8 @@ namespace LlamaApp
     /// A small centered settings window (separate from the tray flyout) styled
     /// after the Windows 11 Settings app: a left NavigationView with three
     /// pages — General (launch at startup, local models cache), Identity
-    /// (Hugging Face token) and Llama (server port, idle model unload). Saves
+    /// (Hugging Face token) and Llama (server port, idle model unload, KV cache
+    /// quantization). Saves
     /// to <see cref="Settings"/> on Save; discards on Cancel.
     /// </summary>
     public sealed partial class SettingsWindow : Window
@@ -115,11 +116,42 @@ namespace LlamaApp
             if (IdleUnloadBox.SelectedItem is null)
                 IdleUnloadBox.SelectedIndex = IdleUnloadBox.Items.Count - 1; // Never
             ModelsMaxBox.Value = s.MaxLoadedModels;
+            SelectComboBoxTag(KvCacheKBox, s.CacheTypeK, "f16");
+            SelectComboBoxTag(KvCacheVBox, s.CacheTypeV, "f16");
             // The OS shortcut is the source of truth: a user may have toggled
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
             LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
             LoadInstallInfo();
+        }
+
+        /// <summary>
+        /// Selects the ComboBox item whose <c>Tag</c> matches
+        /// <paramref name="tag"/>; falls back to <paramref name="fallbackTag"/>
+        /// (then to the first item) when the saved value isn't in the list —
+        /// e.g. after a hand-edited settings.json or a version that lacked the
+        /// value.
+        /// </summary>
+        private static void SelectComboBoxTag(ComboBox box, string? tag, string fallbackTag)
+        {
+            foreach (var item in box.Items.OfType<ComboBoxItem>())
+            {
+                if (item.Tag as string == tag)
+                {
+                    box.SelectedItem = item;
+                    return;
+                }
+            }
+            foreach (var item in box.Items.OfType<ComboBoxItem>())
+            {
+                if (item.Tag as string == fallbackTag)
+                {
+                    box.SelectedItem = item;
+                    return;
+                }
+            }
+            if (box.Items.Count > 0)
+                box.SelectedIndex = 0;
         }
 
         /// <summary>
@@ -341,6 +373,12 @@ namespace LlamaApp
             s.MaxLoadedModels = double.IsNaN(ModelsMaxBox.Value)
                 ? 0
                 : (int)Math.Clamp(ModelsMaxBox.Value, 0, int.MaxValue);
+
+            // The K/V ComboBox items carry the cache type in their Tag.
+            // Applied the next time the server starts (launch arguments), so
+            // no live server restart here.
+            s.CacheTypeK = (KvCacheKBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "f16";
+            s.CacheTypeV = (KvCacheVBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "f16";
 
             // Apply the startup preference to the OS (create/delete the .lnk)
             // and mirror it into settings.json as a hint for the checkbox on
