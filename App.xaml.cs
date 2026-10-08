@@ -120,6 +120,7 @@ namespace LlamaApp
             Llama.LlamaManager.Shared.MaxLoadedModels = Settings.Current.MaxLoadedModels;
             Llama.LlamaManager.Shared.CacheTypeK = Settings.Current.CacheTypeK;
             Llama.LlamaManager.Shared.CacheTypeV = Settings.Current.CacheTypeV;
+            Llama.LlamaManager.Shared.CustomServeArguments = Settings.Current.CustomServeArguments;
             // Shared by reference: the details view mutates this dictionary when
             // the user picks a context length, and the manager renders it into
             // the server's --models-preset INI (see ReloadModelPresetsAsync).

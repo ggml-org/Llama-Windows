@@ -608,6 +608,55 @@
                                 </StackPanel>
                             </Border>
 
+                            <!-- Custom serve arguments (free-form, appended last) -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE943;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Custom Serve Arguments"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Extra arguments appended after the built-in ones, so they can override them. Use the same syntax as the llama.cpp command line — quote values that contain spaces. Applies the next time the llama server starts; if the server rejects a flag, the failure reason appears on the status dot."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <TextBox x:Name="CustomArgsBox"
+                                             AcceptsReturn="True"
+                                             TextWrapping="Wrap"
+                                             MinHeight="72"
+                                             MaxHeight="140"
+                                             PlaceholderText="--threads 4 --flash-attn"
+                                             ToolTipService.ToolTip="Additional llama serve arguments, appended after the built-in ones" />
+                                    <TextBlock x:Name="CustomArgsErrorText"
+                                               Text=""
+                                               FontSize="12"
+                                               Foreground="#F85149"
+                                               TextWrapping="Wrap"
+                                               Visibility="Collapsed" />
+                                </StackPanel>
+                            </Border>
+
                             <!-- Installation folder (read-only — informational,
                                  not a setting) -->
                             <Border CornerRadius="8"
