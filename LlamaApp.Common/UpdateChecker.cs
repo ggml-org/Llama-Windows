@@ -51,7 +51,7 @@ public static class UpdateChecker
     public static async Task<AppUpdate?> GetLatestUpdateAsync(Version current, CancellationToken cancel = default)
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("Llama/1.0");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
         client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         return await GetLatestUpdateAsync(client, current, cancel);
     }

@@ -31,6 +31,16 @@ Grab the latest `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.c
 
 Llama manages a `llama serve` process and talks to it over its REST API. Your models stay in the standard Hugging Face cache (`%USERPROFILE%\.cache\huggingface\hub`), shared with `llama.cpp` and HF tooling. Settings and logs live under `%LOCALAPPDATA%\Llama`.
 
+## Privacy
+
+Llama sends no telemetry — no events, no analytics, no install id. The only thing outbound HTTP requests (model downloads, release-update checks, and calls to the local llama-server) carry is the standard User-Agent header:
+
+```
+llama-win/0.12.0 (10.0.26100; x64)
+```
+
+— the app version, the Windows build, and the processor architecture. Prompts and inference stay 100% local.
+
 ## Building from source
 
 You'll need the **.NET 10 SDK** on Windows (ARM64 or x64 host; the SDK cross-builds both).
