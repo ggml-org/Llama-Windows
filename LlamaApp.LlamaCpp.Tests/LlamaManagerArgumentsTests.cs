@@ -78,37 +78,39 @@ public sealed class LlamaManagerArgumentsTests
         }
     }
 
-    // ---- --api-key (non-loopback binds) ----
+    // ---- --api-key-file (non-loopback binds) ----
 
     [Fact]
-    public void BuildServeArguments_AddsApiKey_WhenProvided()
+    public void BuildServeArguments_AddsApiKeyFile_WhenPathProvided()
     {
         var args = LlamaManager.BuildServeArguments(
-            9931, "0.0.0.0", -1, 0, null, null, null, null, apiKey: "cafe1234");
+            9931, "0.0.0.0", -1, 0, null, null, null, null,
+            apiKeyFilePath: @"C:\Users\me\AppData\Local\Llama\.llama.apikey");
 
-        var flagIndex = args.IndexOf("--api-key");
+        var flagIndex = args.IndexOf("--api-key-file");
         Assert.True(flagIndex >= 0);
-        Assert.Equal("cafe1234", args[flagIndex + 1]);
-        // App-owned auth sits before any custom tail.
-        Assert.True(flagIndex < args.Count - 1);
-    }
-
-    [Fact]
-    public void BuildServeArguments_OmitsApiKey_ForLoopback()
-    {
-        var args = LlamaManager.BuildServeArguments(
-            9931, "127.0.0.1", -1, 0, null, null, null, null, apiKey: null);
-
+        Assert.Equal(@"C:\Users\me\AppData\Local\Llama\.llama.apikey", args[flagIndex + 1]);
+        // The KEY value itself must never be an argument (argv is readable by
+        // any local user via WMI) — only the file path is.
         Assert.DoesNotContain("--api-key", args);
     }
 
     [Fact]
-    public void BuildServeArguments_OmitsApiKey_WhenBlank()
+    public void BuildServeArguments_OmitsApiKeyFile_ForLoopback()
     {
         var args = LlamaManager.BuildServeArguments(
-            9931, "0.0.0.0", -1, 0, null, null, null, null, apiKey: "   ");
+            9931, "127.0.0.1", -1, 0, null, null, null, null, apiKeyFilePath: null);
 
-        Assert.DoesNotContain("--api-key", args);
+        Assert.DoesNotContain("--api-key-file", args);
+    }
+
+    [Fact]
+    public void BuildServeArguments_OmitsApiKeyFile_WhenBlank()
+    {
+        var args = LlamaManager.BuildServeArguments(
+            9931, "0.0.0.0", -1, 0, null, null, null, null, apiKeyFilePath: "   ");
+
+        Assert.DoesNotContain("--api-key-file", args);
     }
 
     [Fact]

@@ -8,8 +8,10 @@ namespace LlamaApp.Common;
 /// Access control for the local llama server. The server has no authentication
 /// by default, so binding it to anything other than loopback publishes a
 /// control API (model download/load/delete and chat) to the network. When the
-/// user chooses a non-loopback address the app generates a key, passes it to
-/// the server as <c>--api-key</c>, and sends it on every request.
+/// user chooses a non-loopback address the app generates a key, hands it to
+/// the server via a per-user key file (<c>--api-key-file</c> — never an argv
+/// flag, which any local user could read via WMI), and sends it as a Bearer
+/// token on every request.
 /// </summary>
 public static class ServerAuth
 {
