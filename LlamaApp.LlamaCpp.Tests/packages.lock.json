@@ -53,6 +53,11 @@
         "resolved": "13.0.1",
         "contentHash": "ppPFpBcvxdsfUonNcvITKqLl3bqxWbDCZIzDWHzjpdAHRFfZe0Dw9HmA0+za13IdyrgJwpkDTDA9fHaxOrt20A=="
       },
+      "System.Security.Cryptography.ProtectedData": {
+        "type": "Transitive",
+        "resolved": "9.0.4",
+        "contentHash": "o94k2RKuAce3GeDMlUvIXlhVa1kWpJw95E6C9LwW0KlG0nj5+SgCiIxJ2Eroqb9sLtG1mEMbFttZIBZ13EJPvQ=="
+      },
       "xunit.abstractions": {
         "type": "Transitive",
         "resolved": "2.0.3",
@@ -94,7 +99,10 @@
         }
       },
       "llamaapp.common": {
-        "type": "Project"
+        "type": "Project",
+        "dependencies": {
+          "System.Security.Cryptography.ProtectedData": "[9.0.4, )"
+        }
       },
       "llamaapp.llamacpp": {
         "type": "Project",
