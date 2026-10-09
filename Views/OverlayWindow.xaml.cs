@@ -23,7 +23,7 @@ namespace LlamaApp.Views;
 ///
 /// <para>The embedded WebUI drives its own prompt + streaming chat against the
 /// loaded model — the overlay just points a WebView2 at the right model URL
-/// (<c>http://localhost:{ServerPort}?model={LoadedModelId}</c>, the same URL
+/// (<c>http://{ConnectAddress}:{ServerPort}?model={LoadedModelId}</c>, the same URL
 /// <c>MainWindow</c> opens in the system browser) and lets it run. When no
 /// model is loaded yet the base WebUI (router mode) is shown, which still lists
 /// models; the header chip flips to amber + "No model".</para>
@@ -140,7 +140,7 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     private static Uri BuildModelUri()
     {
-        var baseUrl = $"http://localhost:{LlamaManager.Shared.ServerPort}";
+        var baseUrl = $"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}";
         var id = LlamaManager.Shared.LoadedModelId;
         return id is null
             ? new Uri(baseUrl)

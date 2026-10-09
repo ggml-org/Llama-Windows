@@ -23,6 +23,7 @@ public sealed class ModelItemDetailsViewModelTests
     private sealed class FakeHost : IModelItemDetailsHost
     {
         public int ServerPort => 9931;
+        public string ServerAddress => "localhost";
         public List<string> CopiedTexts { get; } = [];
         public List<string> OpenedUris { get; } = [];
         public List<ModelItem> Loads { get; } = [];

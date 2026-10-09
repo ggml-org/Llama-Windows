@@ -19,7 +19,12 @@
 
         Cards use a stacked layout (title row, then wrapping description, then a
         full-width control) so descriptive text never gets cropped and the
-        inputs get the full card width rather than a cramped right column.
+        inputs get the full card width rather than a cramped right column. The
+        Llama page additionally arranges its cards in one aligned two-column
+        grid: paired settings sit side by side, wide settings span both
+        columns, and every card shares the same left edge and gutter. Within a
+        pair, each card anchors its control to the bottom of the card so the
+        two inputs line up no matter how long their descriptions wrap.
     -->
     <Window.SystemBackdrop>
         <MicaBackdrop Kind="Base" />
@@ -381,24 +386,58 @@
                     </ScrollViewer>
 
                     <!-- ============ Llama page ============ -->
+                    <!--
+                        One aligned two-column grid for the whole page: each row
+                        is a pair of half-width cards (or one full-width card
+                        spanning both columns), so every card shares the same
+                        left edge, the same 12px gutter, and the same vertical
+                        rhythm. Within a row the taller card sets the height and
+                        the shorter one stretches to match.
+                    -->
                     <ScrollViewer x:Name="LlamaPage"
                                   Visibility="Collapsed"
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   HorizontalScrollMode="Disabled">
-                        <StackPanel Spacing="10" Padding="8,4,20,8">
-                            <TextBlock Text="Llama"
+                        <Grid Padding="8,4,20,8"
+                              RowSpacing="10"
+                              ColumnSpacing="12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" /> <!-- Page header -->
+                                <RowDefinition Height="Auto" /> <!-- Port + listen address -->
+                                <RowDefinition Height="Auto" /> <!-- Idle unload + max loaded models -->
+                                <RowDefinition Height="Auto" /> <!-- Key/Value cache -->
+                                <RowDefinition Height="Auto" /> <!-- Custom serve arguments -->
+                                <RowDefinition Height="Auto" /> <!-- Installation folder -->
+                                <RowDefinition Height="Auto" /> <!-- llama.cpp runtime -->
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Row="0"
+                                       Grid.ColumnSpan="2"
+                                       Text="Llama"
                                        Style="{ThemeResource SubtitleTextBlockStyle}"
-                                       Margin="4,4,0,10" />
+                                       Margin="4,4,0,0" />
 
                             <!-- Llama server port -->
-                            <Border CornerRadius="8"
+                            <Border Grid.Row="1"
+                                    Grid.Column="0"
                                     Padding="16,14"
+                                    CornerRadius="8"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
-                                <StackPanel Spacing="10">
-                                    <Grid ColumnSpacing="12">
+                                <Grid RowSpacing="10">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /> <!-- Header -->
+                                        <RowDefinition Height="Auto" /> <!-- Description -->
+                                        <RowDefinition Height="*" />    <!-- Control, bottom-aligned -->
+                                    </Grid.RowDefinitions>
+                                    <Grid Grid.Row="0"
+                                          ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
@@ -420,36 +459,89 @@
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock Text="Port the local llama server listens on (1–65535). Takes effect the next time Llama starts."
+                                    <TextBlock Grid.Row="1"
+                                               Text="Port the local llama server listens on (1–65535). Takes effect the next time Llama starts."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
                                     <NumberBox x:Name="PortBox"
+                                               Grid.Row="2"
+                                               VerticalAlignment="Bottom"
                                                Minimum="1"
                                                Maximum="65535"
                                                SmallChange="1"
                                                LargeChange="10"
                                                SpinButtonPlacementMode="Hidden"
                                                ToolTipService.ToolTip="Port for the local llama server (1–65535)" />
-                                </StackPanel>
+                                </Grid>
                             </Border>
 
-                            <!-- Idle unload + max loaded models, shown side by side -->
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-
-                            <!-- Unload model when idle (ComboBox: 5m / 15m / 1h / Never) -->
-                            <Border Grid.Column="0"
-                                    CornerRadius="8"
+                            <!-- Listen address (all interfaces / localhost / per-interface IPs) -->
+                            <Border Grid.Row="1"
+                                    Grid.Column="1"
                                     Padding="16,14"
+                                    CornerRadius="8"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
-                                <StackPanel Spacing="10">
-                                    <Grid ColumnSpacing="12">
+                                <Grid RowSpacing="10">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /> <!-- Header -->
+                                        <RowDefinition Height="Auto" /> <!-- Description -->
+                                        <RowDefinition Height="*" />    <!-- Control, bottom-aligned -->
+                                    </Grid.RowDefinitions>
+                                    <Grid Grid.Row="0"
+                                          ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE943;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Listen On"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Grid.Row="1"
+                                               Text="Network address the llama server binds to — localhost (127.0.0.1, this machine only), a specific interface's IP, or all interfaces (0.0.0.0, reachable from other devices on your network). Takes effect the next time the app starts."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <ComboBox x:Name="ListenAddressBox"
+                                              Grid.Row="2"
+                                              VerticalAlignment="Bottom"
+                                              HorizontalAlignment="Stretch"
+                                              ToolTipService.ToolTip="Address the llama server listens on" />
+                                </Grid>
+                            </Border>
+
+                            <!-- Unload model when idle (5m / 15m / 1h / Never) -->
+                            <Border Grid.Row="2"
+                                    Grid.Column="0"
+                                    Padding="16,14"
+                                    CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <Grid RowSpacing="10">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /> <!-- Header -->
+                                        <RowDefinition Height="Auto" /> <!-- Description -->
+                                        <RowDefinition Height="*" />    <!-- Control, bottom-aligned -->
+                                    </Grid.RowDefinitions>
+                                    <Grid Grid.Row="0"
+                                          ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
@@ -471,11 +563,14 @@
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock Text="Free the model's memory after it's been idle for a while. The model stays available — the next chat request reloads it automatically. Applies the next time the llama server starts."
+                                    <TextBlock Grid.Row="1"
+                                               Text="Free the model's memory after it's been idle for a while. The model stays available — the next chat request reloads it automatically. Applies the next time the llama server starts."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
                                     <ComboBox x:Name="IdleUnloadBox"
+                                              Grid.Row="2"
+                                              VerticalAlignment="Bottom"
                                               HorizontalAlignment="Stretch"
                                               ToolTipService.ToolTip="How long a loaded model may stay idle before it's unloaded from memory">
                                         <ComboBoxItem Content="After 5 minutes" Tag="300" />
@@ -483,18 +578,25 @@
                                         <ComboBoxItem Content="After 1 hour" Tag="3600" />
                                         <ComboBoxItem Content="Never" Tag="-1" />
                                     </ComboBox>
-                                </StackPanel>
+                                </Grid>
                             </Border>
 
-                                <!-- Max models loaded in parallel (NumberBox: 0 = unlimited) -->
-                                <Border Grid.Column="1"
-                                        CornerRadius="8"
-                                        Padding="16,14"
+                            <!-- Max models loaded in parallel (0 = unlimited) -->
+                            <Border Grid.Row="2"
+                                    Grid.Column="1"
+                                    Padding="16,14"
+                                    CornerRadius="8"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
-                                <StackPanel Spacing="10">
-                                    <Grid ColumnSpacing="12">
+                                <Grid RowSpacing="10">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" /> <!-- Header -->
+                                        <RowDefinition Height="Auto" /> <!-- Description -->
+                                        <RowDefinition Height="*" />    <!-- Control, bottom-aligned -->
+                                    </Grid.RowDefinitions>
+                                    <Grid Grid.Row="0"
+                                          ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
@@ -516,23 +618,27 @@
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock Text="Maximum number of models the router keeps loaded at the same time. 0 means unlimited. Applies the next time the llama server starts."
+                                    <TextBlock Grid.Row="1"
+                                               Text="Maximum number of models the router keeps loaded at the same time. 0 means unlimited. Applies the next time the llama server starts."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
                                     <NumberBox x:Name="ModelsMaxBox"
+                                               Grid.Row="2"
+                                               VerticalAlignment="Bottom"
                                                Minimum="0"
                                                SmallChange="1"
                                                LargeChange="4"
                                                SpinButtonPlacementMode="Hidden"
                                                ToolTipService.ToolTip="Maximum number of models loaded at once (0 = unlimited)" />
-                                </StackPanel>
-                                </Border>
-                            </Grid>
+                                </Grid>
+                            </Border>
 
-                            <!-- Key/Value cache quantization (K and V ComboBoxes) -->
-                            <Border CornerRadius="8"
+                            <!-- Key/Value cache quantization (K and V) -->
+                            <Border Grid.Row="3"
+                                    Grid.ColumnSpan="2"
                                     Padding="16,14"
+                                    CornerRadius="8"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
@@ -609,8 +715,10 @@
                             </Border>
 
                             <!-- Custom serve arguments (free-form, appended last) -->
-                            <Border CornerRadius="8"
+                            <Border Grid.Row="4"
+                                    Grid.ColumnSpan="2"
                                     Padding="16,14"
+                                    CornerRadius="8"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
@@ -659,8 +767,10 @@
 
                             <!-- Installation folder (read-only — informational,
                                  not a setting) -->
-                            <Border CornerRadius="8"
+                            <Border Grid.Row="5"
+                                    Grid.ColumnSpan="2"
                                     Padding="16,14"
+                                    CornerRadius="8"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
@@ -714,8 +824,10 @@
                             <!-- llama.cpp runtime updater: the weekly auto-update
                                  (RuntimeUpdateScheduler) made visible — installed
                                  version, last check, and a manual trigger. -->
-                            <Border CornerRadius="8"
+                            <Border Grid.Row="6"
+                                    Grid.ColumnSpan="2"
                                     Padding="16,14"
+                                    CornerRadius="8"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1">
@@ -764,7 +876,7 @@
                                                TextWrapping="WrapWholeWords" />
                                 </StackPanel>
                             </Border>
-                        </StackPanel>
+                        </Grid>
                     </ScrollViewer>
                 </Grid>
             </NavigationView>

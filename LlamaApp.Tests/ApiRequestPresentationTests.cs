@@ -1,0 +1,44 @@
+using LlamaApp.Views;
+using Xunit;
+
+namespace LlamaApp.Tests;
+
+/// <summary>
+/// Tests for the sample API request strings: they must target the server's
+/// connect address (which follows the Settings listen choice) rather than a
+/// hard-coded localhost, so a server bound to a specific interface produces a
+/// URL that actually reaches it.
+/// </summary>
+public sealed class ApiRequestPresentationTests
+{
+    [Fact]
+    public void BuildCurlCommand_UsesTheGivenAddress()
+    {
+        var cmd = ApiRequestPresentation.BuildCurlCommand(
+            "192.168.1.42", 9931, "unsloth/Qwen3-4B-GGUF:Q4_K_M");
+
+        Assert.StartsWith("curl ", cmd);
+        Assert.Contains("http://192.168.1.42:9931/v1/chat/completions", cmd);
+        Assert.Contains("unsloth/Qwen3-4B-GGUF:Q4_K_M", cmd);
+    }
+
+    [Fact]
+    public void BuildWebUiUrl_UsesTheGivenAddress()
+    {
+        var url = ApiRequestPresentation.BuildWebUiUrl(
+            "10.0.0.5", 8080, "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M");
+
+        Assert.Equal(
+            "http://10.0.0.5:8080?model=ggml-org%2Fgemma-3-4b-it-GGUF%3AQ4_K_M",
+            url);
+    }
+
+    [Fact]
+    public void BuildWebUiUrl_EscapesTheModelId()
+    {
+        var url = ApiRequestPresentation.BuildWebUiUrl(
+            "127.0.0.1", 9931, "a/b:Q4_K_M");
+
+        Assert.Equal("http://127.0.0.1:9931?model=a%2Fb%3AQ4_K_M", url);
+    }
+}

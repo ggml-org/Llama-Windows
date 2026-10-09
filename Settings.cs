@@ -58,6 +58,18 @@ public sealed class Settings
     public int ServerPort { get; set; } = Llama.LlamaManager.DefaultServerPort;
 
     /// <summary>
+    /// IPv4 address the llama server binds to (<c>--host</c>): the loopback
+    /// <c>127.0.0.1</c> (the default, reachable only from this machine),
+    /// <c>0.0.0.0</c> for every interface, or a specific interface's address
+    /// from Settings → Llama. Read once at startup when the
+    /// <see cref="Llama.LlamaManager"/> singleton is created, so a changed
+    /// value takes effect on the next app launch — the app's own REST client
+    /// follows the same address (loopback when the server binds all
+    /// interfaces).
+    /// </summary>
+    public string ListenAddress { get; set; } = LlamaApp.Common.ListenAddresses.Localhost;
+
+    /// <summary>
     /// Seconds of idleness after which the llama server unloads the model from
     /// memory: 300 (5 min), 900 (15 min), 3600 (1 hour), or -1 (never, the
     /// default). Handed to the server as <c>--sleep-idle-seconds</c> at launch

@@ -9,8 +9,8 @@ namespace LlamaApp
     /// A small centered settings window (separate from the tray flyout) styled
     /// after the Windows 11 Settings app: a left NavigationView with three
     /// pages — General (launch at startup, local models cache), Identity
-    /// (Hugging Face token) and Llama (server port, idle model unload, KV cache
-    /// quantization, custom serve arguments). Saves
+    /// (Hugging Face token) and Llama (server port, listen address, idle model
+    /// unload, KV cache quantization, custom serve arguments). Saves
     /// to <see cref="Settings"/> on Save; discards on Cancel.
     /// </summary>
     public sealed partial class SettingsWindow : Window
@@ -101,6 +101,8 @@ namespace LlamaApp
             TokenBox.Password = s.HuggingFaceToken ?? "";
             CacheBox.Text = s.CacheDirectory ?? "";
             PortBox.Value = s.ServerPort;
+            PopulateListenAddressBox();
+            SelectComboBoxTag(ListenAddressBox, s.ListenAddress, Common.ListenAddresses.Localhost);
             // Select the idle-unload choice matching the saved seconds; an
             // unrecognized value (hand-edited settings.json) falls back to
             // Never, the safe default.
@@ -126,6 +128,26 @@ namespace LlamaApp
             // state rather than the persisted preference.
             LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
             LoadInstallInfo();
+        }
+
+        /// <summary>
+        /// Fills the Listen On ComboBox from the machine's network interfaces:
+        /// the two pseudo-addresses first (all interfaces, localhost), then
+        /// every up, non-loopback IPv4 interface. Each item carries the address
+        /// in its Tag so Save_Click can persist exactly what the server will
+        /// bind to.
+        /// </summary>
+        private void PopulateListenAddressBox()
+        {
+            ListenAddressBox.Items.Clear();
+            foreach (var entry in Common.ListenAddresses.List())
+            {
+                ListenAddressBox.Items.Add(new ComboBoxItem
+                {
+                    Content = $"{entry.Name} ({entry.Address})",
+                    Tag = entry.Address,
+                });
+            }
         }
 
         /// <summary>
@@ -363,6 +385,12 @@ namespace LlamaApp
             s.ServerPort = double.IsNaN(PortBox.Value)
                 ? Llama.LlamaManager.DefaultServerPort
                 : (int)PortBox.Value;
+
+            // The ComboBox items carry the IPv4 address in their Tag. Applied
+            // the next time the app starts (the manager's bind address and REST
+            // client are fixed at construction).
+            s.ListenAddress = (ListenAddressBox.SelectedItem as ComboBoxItem)?.Tag as string
+                ?? Common.ListenAddresses.Localhost;
 
             // The ComboBox items carry the seconds in their Tag. Applied the
             // next time the server starts (it's a launch argument), so no

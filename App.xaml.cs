@@ -77,17 +77,18 @@ namespace LlamaApp
             StartupHelper.RemoveLegacyShortcut();
 
             // Create the llama-server manager singleton with the configured
-            // port BEFORE anything else can touch LlamaManager.Shared — the
-            // MainWindow constructor below already subscribes to its events.
-            // The port is baked into the manager at construction, so a value
-            // changed in Settings only takes effect on the next launch.
+            // port and listen address BEFORE anything else can touch
+            // LlamaManager.Shared — the MainWindow constructor below already
+            // subscribes to its events. Both are baked into the manager at
+            // construction, so values changed in Settings only take effect on
+            // the next launch.
             var serverPort = Settings.Current.ServerPort;
             if (serverPort is < 1 or > 65535)
             {
                 Common.Log.Warn($"configured server port {serverPort} is out of range; falling back to {Llama.LlamaManager.DefaultServerPort}");
                 serverPort = Llama.LlamaManager.DefaultServerPort;
             }
-            Llama.LlamaManager.Initialize(serverPort);
+            Llama.LlamaManager.Initialize(serverPort, Settings.Current.ListenAddress);
 
             // The app is tray-only: the main window is created but never shown
             // on launch. It is revealed on demand as a flyout anchored to the
