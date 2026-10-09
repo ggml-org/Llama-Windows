@@ -870,6 +870,10 @@ public sealed class LlamaManager
             var psi = new ProcessStartInfo
             {
                 FileName = BinaryPath,
+                // Pin the working directory to the binary's own folder so the
+                // server never inherits (or resolves relative custom paths
+                // against) an unpredictable app CWD.
+                WorkingDirectory = Path.GetDirectoryName(BinaryPath),
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
@@ -2703,9 +2707,7 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Absolute path of Windows PowerShell 5.1 — the interpreter the install
-    /// script runs under. Internal so tests can pin the invariant. (Deliberate
-    /// duplicate of the pin on security/at-rest-and-webview-hardening so this
-    /// branch is safe to merge alone; resolve to one definition when merging.)
+    /// script runs under. Internal so tests can pin the invariant.
     /// </summary>
     internal static string PowerShellExePath =>
         Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -2788,7 +2790,7 @@ public sealed class LlamaManager
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            
+
             // Bypass the per-process execution policy so the downloaded script can
             // run without changing the machine/user policy. The script is fetched
             // over HTTPS from the official llama.app endpoint.
