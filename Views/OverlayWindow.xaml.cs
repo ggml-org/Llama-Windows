@@ -188,29 +188,42 @@ public sealed partial class OverlayWindow : Window
     }
 
     /// <summary>
-    /// Points the embedded WebView2 at <see cref="BuildModelUri"/>. The
-    /// initial Source assignment also lazily initializes the WebView2's
-    /// CoreWebView2 (setting Source is equivalent to EnsureCoreWebView2Async
-    /// + Navigate). Only re-navigates when the URL changes so a re-summon
-    /// mid-chat doesn't reset it.
+    /// Points the embedded WebView2 at <see cref="BuildModelUri"/>. Only
+    /// re-navigates when the URL changes so a re-summon mid-chat doesn't
+    /// reset it. Until the CoreWebView2 exists (and is therefore configured
+    /// with the navigation policy), every navigation goes through
+    /// <see cref="ConfigureWebViewThenNavigateAsync"/> — a bare Source
+    /// assignment would trigger the WebView2 control's implicit
+    /// initialization and render the first page with NO policy attached.
     /// </summary>
     private void NavigateToModel()
     {
         var uri = BuildModelUri();
-        if (_currentUri is not null && _currentUri == uri)
+        _desiredUri = uri;
+
+        // "Unchanged" only counts while a page is actually live; after a
+        // failed initialization (_currentUri set, CoreWebView2 null) this
+        // path must retry, not skip.
+        if (ModelWebUi.CoreWebView2 is not null &&
+            _currentUri is not null && _currentUri == uri)
         {
             Common.Log.Info($"overlay webview: URL unchanged ({uri}), keeping current page");
             return;
         }
 
         _currentUri = uri;
-        if (ModelWebUi.CoreWebView2 is null && !_webViewInitStarted)
+        if (ModelWebUi.CoreWebView2 is null)
         {
-            // Configure before the first navigation: the overlay is a
-            // chromeless window with no address bar, so it must never end up
-            // showing a page from anywhere but the local llama server.
-            _webViewInitStarted = true;
-            _ = ConfigureWebViewThenNavigateAsync(uri);
+            if (!_webViewInitStarted)
+            {
+                // Configure before the first navigation: the overlay is a
+                // chromeless window with no address bar, so it must never end
+                // up showing a page from anywhere but the local llama server.
+                _webViewInitStarted = true;
+                _ = ConfigureWebViewThenNavigateAsync();
+            }
+            // else: an initialization attempt is already in flight; it
+            // navigates to the latest _desiredUri once it comes up.
             return;
         }
 
@@ -220,13 +233,20 @@ public sealed partial class OverlayWindow : Window
 
     private bool _webViewInitStarted;
 
+    // The latest URI NavigateToModel wants shown. An in-flight initialization
+    // navigates to this once the CoreWebView2 is ready, so a model change
+    // during startup isn't lost.
+    private Uri? _desiredUri;
+
     /// <summary>
     /// Initializes the WebView2's CoreWebView2, applies the navigation policy
-    /// (see <see cref="Common.WebOriginPolicy"/>), then navigates. Failures
-    /// are logged and swallowed — a missing/broken WebView2 runtime must
-    /// never fault the summon.
+    /// (see <see cref="Common.WebOriginPolicy"/>), then navigates to
+    /// <see cref="_desiredUri"/>. Failures are logged and swallowed — a
+    /// missing/broken WebView2 runtime must never fault the summon — and they
+    /// reset the init flag so the next summon retries the configured path
+    /// instead of falling back to an unconfigured implicit initialization.
     /// </summary>
-    private async Task ConfigureWebViewThenNavigateAsync(Uri uri)
+    private async Task ConfigureWebViewThenNavigateAsync()
     {
         try
         {
@@ -240,18 +260,11 @@ public sealed partial class OverlayWindow : Window
 
             // Only the local llama server's own origin may display inside the
             // overlay — anything else (a link in the page, a redirect, a
-            // squatter on the port) is cancelled.
-            core.NavigationStarting += (_, e) =>
-            {
-                Uri? target = null;
-                try { Uri.TryCreate(e.Uri, UriKind.Absolute, out target); } catch { /* malformed — cancelled below */ }
-                if (!Common.WebOriginPolicy.IsServerOrigin(
-                        target, LlamaManager.Shared.ConnectAddress, LlamaManager.Shared.ServerPort))
-                {
-                    e.Cancel = true;
-                    Common.Log.Warn($"overlay webview: refused navigation to {e.Uri}");
-                }
-            };
+            // squatter on the port) is cancelled. Top-level documents AND
+            // child iframes: a page on the allowed origin could otherwise
+            // embed a cross-origin frame in the chromeless window.
+            core.NavigationStarting += (sender, e) => GuardNavigation(e);
+            core.FrameNavigationStarting += (sender, e) => GuardNavigation(e);
 
             // New windows (target=_blank) go to the system browser, and only
             // for plain http(s) — never a custom scheme. (The sender is a
@@ -266,12 +279,35 @@ public sealed partial class OverlayWindow : Window
                 }
             };
 
-            ModelWebUi.Source = uri;
-            Common.Log.Info($"overlay webview: navigating to {uri}");
+            if (_desiredUri is not null)
+            {
+                ModelWebUi.Source = _desiredUri;
+                Common.Log.Info($"overlay webview: navigating to {_desiredUri}");
+            }
         }
         catch (Exception ex)
         {
+            // Reset so the next summon retries the configured path — the
+            // fallback must never be an unconfigured WebView.
+            _webViewInitStarted = false;
             Common.Log.Warn(ex, "overlay webview: initialization failed");
+        }
+    }
+
+    /// <summary>
+    /// Cancels any document or frame navigation whose target is not the local
+    /// llama server's origin — see <see cref="Common.WebOriginPolicy"/>.
+    /// </summary>
+    private void GuardNavigation(Microsoft.Web.WebView2.Core.CoreWebView2NavigationStartingEventArgs e)
+    {
+        Uri? target = null;
+        try { Uri.TryCreate(e.Uri, UriKind.Absolute, out target); }
+        catch { /* malformed — cancelled below */ }
+        if (!Common.WebOriginPolicy.IsServerOrigin(
+                target, LlamaManager.Shared.ConnectAddress, LlamaManager.Shared.ServerPort))
+        {
+            e.Cancel = true;
+            Common.Log.Warn($"overlay webview: refused navigation to {e.Uri}");
         }
     }
 
