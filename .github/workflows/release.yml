@@ -48,13 +48,13 @@ jobs:
           - rid: win-arm64
     steps:
       - name: Download unsigned MSIX
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: msix-unsigned-${{ matrix.rid }}-${{ github.sha }}
           path: unsigned/${{ matrix.rid }}
 
       - name: Sign MSIX (Azure Trusted Signing)
-        uses: azure/trusted-signing-action@v2
+        uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
         with:
           azure-tenant-id:              ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id:              ${{ secrets.AZURE_CLIENT_ID }}
@@ -70,7 +70,7 @@ jobs:
           timestamp-digest:             SHA256
 
       - name: Upload signed MSIX
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: LlamaApp-msix-${{ matrix.rid }}-${{ github.sha }}
           path: unsigned/${{ matrix.rid }}/**/*.msix
@@ -82,7 +82,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Download signed MSIX (all architectures)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: LlamaApp-msix-*-${{ github.sha }}
           path: signed
@@ -112,7 +112,7 @@ jobs:
           & "${{ steps.makeappx.outputs.path }}" bundle /d bundle-input /p "bundle/LlamaApp-${{ github.ref_name }}.msixbundle" /v
 
       - name: Sign .msixbundle (Azure Trusted Signing)
-        uses: azure/trusted-signing-action@v2
+        uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2
         with:
           azure-tenant-id:              ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id:              ${{ secrets.AZURE_CLIENT_ID }}
@@ -128,7 +128,7 @@ jobs:
           timestamp-digest:             SHA256
 
       - name: Upload .msixbundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: LlamaApp-msixbundle-${{ github.sha }}
           path: bundle/*.msixbundle
@@ -140,14 +140,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: LlamaApp-msix*-${{ github.sha }}
           path: artifacts
           merge-multiple: true
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           generate_release_notes: true
           fail_on_unmatched_files: true

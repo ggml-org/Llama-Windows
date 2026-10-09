@@ -1,0 +1,11 @@
+<Project>
+
+    <!-- Restore writes/reads a committed packages.lock.json per project: the
+         full transitive closure of every build is reviewable, and a restore
+         that would pull different packages shows up as a lock-file diff
+         instead of being silent. -->
+    <PropertyGroup>
+        <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    </PropertyGroup>
+
+</Project>
