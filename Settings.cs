@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace LlamaApp;
 
@@ -33,10 +34,23 @@ public sealed class Settings
 
     /// <summary>
     /// Hugging Face access token (hf_…). Optional — only needed for downloading
-    /// private/gated repos. Stored in the local settings file (per-user, not
-    /// roamed); leave empty for anonymous access to public repos.
+    /// private/gated repos. Never serialized: <see cref="Save"/> writes it to
+    /// <see cref="ProtectedHuggingFaceToken"/> through DPAPI (bound to this
+    /// user on this machine), so the settings file carries no working
+    /// credential if it is copied or stolen. Leave empty for anonymous access
+    /// to public repos.
     /// </summary>
+    [JsonIgnore]
     public string HuggingFaceToken { get; set; } = "";
+
+    /// <summary>
+    /// DPAPI-protected form of <see cref="HuggingFaceToken"/> — the only
+    /// representation ever written to settings.json. Written by
+    /// <see cref="Save"/>; restored (best-effort, empty on any failure) by
+    /// <see cref="Load"/>. Not for direct use.
+    /// </summary>
+    [JsonPropertyName("ProtectedHuggingFaceToken")]
+    public string ProtectedHuggingFaceToken { get; set; } = "";
 
     /// <summary>
     /// Local directory where downloaded GGUF models are cached. Defaults to the
@@ -160,7 +174,11 @@ public sealed class Settings
             {
                 var json = File.ReadAllText(SettingsPath);
                 var s = JsonSerializer.Deserialize<Settings>(json);
-                if (s != null) return s;
+                if (s != null)
+                {
+                    RestoreSecrets(s, json);
+                    return s;
+                }
             }
         }
         catch (Exception ex)
@@ -173,14 +191,52 @@ public sealed class Settings
     }
 
     /// <summary>
-    /// Persists the current values to <c>settings.json</c>. Best-effort: a
-    /// failure (e.g. disk full) is swallowed and returns false rather than
-    /// surfacing in the UI flow.
+    /// Moves the token from the raw JSON into <see cref="HuggingFaceToken"/>:
+    /// the DPAPI blob wins; a file written before the token was protected
+    /// still carries the plaintext field and is migrated (and will be
+    /// rewritten protected on the next <see cref="Save"/>). Best-effort — a
+    /// blob that can't be decrypted (another machine/user, corruption) reads
+    /// back as empty and the token is simply unset. Internal for tests.
+    /// </summary>
+    internal static void RestoreSecrets(Settings s, string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("HuggingFaceToken", out var legacy) &&
+                legacy.ValueKind == JsonValueKind.String)
+            {
+                var plaintext = legacy.GetString() ?? "";
+                if (plaintext.Length > 0 && string.IsNullOrWhiteSpace(s.ProtectedHuggingFaceToken))
+                    s.HuggingFaceToken = plaintext;
+            }
+
+            if (root.TryGetProperty("ProtectedHuggingFaceToken", out var blob) &&
+                blob.ValueKind == JsonValueKind.String)
+            {
+                var plaintext = Common.SecretProtector.Unprotect(blob.GetString());
+                if (plaintext.Length > 0)
+                    s.HuggingFaceToken = plaintext;
+            }
+        }
+        catch (JsonException)
+        {
+            // Handled by Load's caller path — keep whatever deserialized.
+        }
+    }
+
+    /// <summary>
+    /// Persists the current values to <c>settings.json</c> with the Hugging
+    /// Face token DPAPI-protected. Best-effort: a failure (e.g. disk full) is
+    /// swallowed and returns false rather than surfacing in the UI flow.
     /// </summary>
     public bool Save()
     {
         try
         {
+            ProtectedHuggingFaceToken = Common.SecretProtector.Protect(HuggingFaceToken);
             var json = JsonSerializer.Serialize(this, new JsonSerializerOptions
             {
                 WriteIndented = true,

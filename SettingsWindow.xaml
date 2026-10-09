@@ -369,10 +369,12 @@
                                                    IsTextSelectionEnabled="False">
                                         <Paragraph>
                                             Used to pull private or gated models. Optional — leave
-                                            blank for public repos. Create one at
+                                            blank for public repos. Stored encrypted for this Windows
+                                            account. Create one at
                                             <Hyperlink NavigateUri="https://huggingface.co/settings/tokens">
                                                 huggingface.co/settings/tokens
-                                            </Hyperlink>.
+                                            </Hyperlink>. Changes apply the next time the app starts —
+                                            the running server keeps the previous token until then.
                                         </Paragraph>
                                     </RichTextBlock>
                                     <!-- Control: full card width -->
