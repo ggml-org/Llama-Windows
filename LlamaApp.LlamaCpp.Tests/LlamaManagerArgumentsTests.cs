@@ -78,6 +78,39 @@ public sealed class LlamaManagerArgumentsTests
         }
     }
 
+    // ---- --api-key (non-loopback binds) ----
+
+    [Fact]
+    public void BuildServeArguments_AddsApiKey_WhenProvided()
+    {
+        var args = LlamaManager.BuildServeArguments(
+            9931, "0.0.0.0", -1, 0, null, null, null, null, apiKey: "cafe1234");
+
+        var flagIndex = args.IndexOf("--api-key");
+        Assert.True(flagIndex >= 0);
+        Assert.Equal("cafe1234", args[flagIndex + 1]);
+        // App-owned auth sits before any custom tail.
+        Assert.True(flagIndex < args.Count - 1);
+    }
+
+    [Fact]
+    public void BuildServeArguments_OmitsApiKey_ForLoopback()
+    {
+        var args = LlamaManager.BuildServeArguments(
+            9931, "127.0.0.1", -1, 0, null, null, null, null, apiKey: null);
+
+        Assert.DoesNotContain("--api-key", args);
+    }
+
+    [Fact]
+    public void BuildServeArguments_OmitsApiKey_WhenBlank()
+    {
+        var args = LlamaManager.BuildServeArguments(
+            9931, "0.0.0.0", -1, 0, null, null, null, null, apiKey: "   ");
+
+        Assert.DoesNotContain("--api-key", args);
+    }
+
     [Fact]
     public void BuildServeArguments_AddsCacheTypeKAndV_WhenConfigured()
     {
