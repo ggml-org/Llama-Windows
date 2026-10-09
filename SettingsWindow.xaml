@@ -530,6 +530,84 @@
                                 </Border>
                             </Grid>
 
+                            <!-- Key/Value cache quantization (K and V ComboBoxes) -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE950;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Key/Value Cache"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Quantize the key and value tensors independently. Lower precision shrinks the KV cache, which can make a larger context window fit on consumer/prosumer GPUs, with some quality trade-off. Applies the next time the llama server starts."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Spacing="6">
+                                            <TextBlock Text="Key Quantization (K)"
+                                                       FontSize="12"
+                                                       Opacity="0.8" />
+                                            <ComboBox x:Name="KvCacheKBox"
+                                                      HorizontalAlignment="Stretch"
+                                                      ToolTipService.ToolTip="Quantization type for the KV cache key tensor">
+                                                <ComboBoxItem Content="f32" Tag="f32" />
+                                                <ComboBoxItem Content="f16" Tag="f16" />
+                                                <ComboBoxItem Content="bf16" Tag="bf16" />
+                                                <ComboBoxItem Content="q8_0" Tag="q8_0" />
+                                                <ComboBoxItem Content="q4_0" Tag="q4_0" />
+                                                <ComboBoxItem Content="q4_1" Tag="q4_1" />
+                                                <ComboBoxItem Content="iq4_nl" Tag="iq4_nl" />
+                                                <ComboBoxItem Content="q5_0" Tag="q5_0" />
+                                                <ComboBoxItem Content="q5_1" Tag="q5_1" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="6">
+                                            <TextBlock Text="Value Quantization (V)"
+                                                       FontSize="12"
+                                                       Opacity="0.8" />
+                                            <ComboBox x:Name="KvCacheVBox"
+                                                      HorizontalAlignment="Stretch"
+                                                      ToolTipService.ToolTip="Quantization type for the KV cache value tensor">
+                                                <ComboBoxItem Content="f32" Tag="f32" />
+                                                <ComboBoxItem Content="f16" Tag="f16" />
+                                                <ComboBoxItem Content="bf16" Tag="bf16" />
+                                                <ComboBoxItem Content="q8_0" Tag="q8_0" />
+                                                <ComboBoxItem Content="q4_0" Tag="q4_0" />
+                                                <ComboBoxItem Content="q4_1" Tag="q4_1" />
+                                                <ComboBoxItem Content="iq4_nl" Tag="iq4_nl" />
+                                                <ComboBoxItem Content="q5_0" Tag="q5_0" />
+                                                <ComboBoxItem Content="q5_1" Tag="q5_1" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
                             <!-- Installation folder (read-only — informational,
                                  not a setting) -->
                             <Border CornerRadius="8"

@@ -133,6 +133,17 @@ public sealed class LlamaManager
     public const int DefaultServerPort = 9931;
 
     /// <summary>
+    /// KV cache quantization types accepted as <c>--cache-type-k</c>/
+    /// <c>--cache-type-v</c> values. Kept in one place so a hand-edited
+    /// settings.json with an unrecognized value never reaches the server as an
+    /// invalid flag.
+    /// </summary>
+    internal static readonly string[] SupportedKvCacheTypes =
+    {
+        "f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1",
+    };
+
+    /// <summary>
     /// Port the local llama server listens on (matches the flyout link). Fixed
     /// at construction via <see cref="Initialize"/> — the supervisor loop,
     /// health probes, server launch arguments and every REST URL are built
@@ -187,6 +198,27 @@ public sealed class LlamaManager
     /// effect on the next server start.
     /// </summary>
     public int MaxLoadedModels { get; set; } = 0;
+
+    /// <summary>
+    /// KV cache quantization type for the key tensor, passed as
+    /// <c>--cache-type-k</c> at launch; defaults to <c>f16</c>, llama.cpp's
+    /// own default. Supported values are <c>f32</c>, <c>f16</c>, <c>bf16</c>,
+    /// <c>q8_0</c>, <c>q4_0</c>, <c>q4_1</c>, <c>iq4_nl</c>, <c>q5_0</c>, and
+    /// <c>q5_1</c>. Set by the caller (App.OnLaunched reads it from
+    /// <c>Settings.Current.CacheTypeK</c>) — kept here rather than reading
+    /// <c>Settings</c> directly to avoid a circular project dependency. Only
+    /// affects servers the app launches: an adopted already-running server
+    /// keeps whatever arguments it was started with, and a changed value takes
+    /// effect on the next server start.
+    /// </summary>
+    public string CacheTypeK { get; set; } = "f16";
+
+    /// <summary>
+    /// KV cache quantization type for the value tensor, passed as
+    /// <c>--cache-type-v</c> at launch. Same supported values and default as
+    /// <see cref="CacheTypeK"/>; K and V may be quantized independently.
+    /// </summary>
+    public string CacheTypeV { get; set; } = "f16";
 
     /// <summary>
     /// Per-model context-length preferences (keyed by server model id,
@@ -535,13 +567,17 @@ public sealed class LlamaManager
     /// so the launch flag matrix (which flags are always passed, which are
     /// conditional on their value, and in what order) is unit-testable without
     /// spawning a process. <c>0</c>/negative <paramref name="maxLoadedModels"/>
-    /// means unlimited and omits <c>--models-max</c>; a non-null
+    /// means unlimited and omits <c>--models-max</c>; supported non-empty
+    /// <paramref name="cacheTypeK"/>/<paramref name="cacheTypeV"/> values add
+    /// <c>--cache-type-k</c>/<c>--cache-type-v</c>; a non-null
     /// <paramref name="contextPresetPath"/> adds <c>--models-preset</c>.
     /// </summary>
     internal static List<string> BuildServeArguments(
         int serverPort,
         int idleUnloadSeconds,
         int maxLoadedModels,
+        string? cacheTypeK,
+        string? cacheTypeV,
         string? contextPresetPath)
     {
         // `serve` is the unified subcommand (replaces the old llama-server).
@@ -573,6 +609,24 @@ public sealed class LlamaManager
         {
             args.Add("--models-max");
             args.Add(maxLoadedModels.ToString());
+        }
+
+        // KV cache quantization. K and V are configured independently so a
+        // user can, for example, keep keys in q8_0 while values stay f16 when
+        // quality is more sensitive to one side. Only values the server
+        // understands are forwarded; unrecognized hand-edited settings are
+        // ignored rather than passed as an invalid flag.
+        if (!string.IsNullOrWhiteSpace(cacheTypeK) &&
+            SupportedKvCacheTypes.Contains(cacheTypeK, StringComparer.Ordinal))
+        {
+            args.Add("--cache-type-k");
+            args.Add(cacheTypeK);
+        }
+        if (!string.IsNullOrWhiteSpace(cacheTypeV) &&
+            SupportedKvCacheTypes.Contains(cacheTypeV, StringComparer.Ordinal))
+        {
+            args.Add("--cache-type-v");
+            args.Add(cacheTypeV);
         }
 
         // Per-model context lengths. The router's /models/load ignores a ctx
@@ -654,7 +708,8 @@ public sealed class LlamaManager
             // launch from the current preferences.
             var contextPresetPath = WriteContextPresetsIni();
             foreach (var arg in BuildServeArguments(
-                         ServerPort, IdleUnloadSeconds, MaxLoadedModels, contextPresetPath))
+                         ServerPort, IdleUnloadSeconds, MaxLoadedModels,
+                         CacheTypeK, CacheTypeV, contextPresetPath))
                 psi.ArgumentList.Add(arg);
 
             // Point the HF cache at the user-configured directory so the server
@@ -675,7 +730,9 @@ public sealed class LlamaManager
 
             Log.Info($"starting llama server: {BinaryPath} serve --port {ServerPort} --jinja" +
                 (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : "") +
-                (MaxLoadedModels > 0 ? $" --models-max {MaxLoadedModels}" : ""));
+                (MaxLoadedModels > 0 ? $" --models-max {MaxLoadedModels}" : "") +
+                (!string.IsNullOrWhiteSpace(CacheTypeK) ? $" --cache-type-k {CacheTypeK}" : "") +
+                (!string.IsNullOrWhiteSpace(CacheTypeV) ? $" --cache-type-v {CacheTypeV}" : ""));
 
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             proc.Exited += (_, _) =>

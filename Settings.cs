@@ -78,6 +78,24 @@ public sealed class Settings
     public int MaxLoadedModels { get; set; } = 0;
 
     /// <summary>
+    /// KV cache quantization type for the key tensor, handed to the server as
+    /// <c>--cache-type-k</c> at launch. One of <c>f32</c>, <c>f16</c>,
+    /// <c>bf16</c>, <c>q8_0</c>, <c>q4_0</c>, <c>q4_1</c>, <c>iq4_nl</c>,
+    /// <c>q5_0</c>, or <c>q5_1</c>. Defaults to <c>f16</c>, llama.cpp's own
+    /// default; lower-precision types shrink the KV cache so a larger context
+    /// fits in GPU memory. A changed value takes effect on the next server
+    /// start.
+    /// </summary>
+    public string CacheTypeK { get; set; } = "f16";
+
+    /// <summary>
+    /// KV cache quantization type for the value tensor, handed to the server
+    /// as <c>--cache-type-v</c> at launch. Same value set and default as
+    /// <see cref="CacheTypeK"/>. K and V can be quantized independently.
+    /// </summary>
+    public string CacheTypeV { get; set; } = "f16";
+
+    /// <summary>
     /// Whether Llama should launch automatically when the user signs in to
     /// Windows. The authoritative state is the presence of the startup
     /// shortcut managed by <see cref="StartupHelper"/> (in the user's Startup
