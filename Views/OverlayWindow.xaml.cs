@@ -204,8 +204,75 @@ public sealed partial class OverlayWindow : Window
         }
 
         _currentUri = uri;
+        if (ModelWebUi.CoreWebView2 is null && !_webViewInitStarted)
+        {
+            // Configure before the first navigation: the overlay is a
+            // chromeless window with no address bar, so it must never end up
+            // showing a page from anywhere but the local llama server.
+            _webViewInitStarted = true;
+            _ = ConfigureWebViewThenNavigateAsync(uri);
+            return;
+        }
+
         ModelWebUi.Source = uri;
         Common.Log.Info($"overlay webview: navigating to {uri}");
+    }
+
+    private bool _webViewInitStarted;
+
+    /// <summary>
+    /// Initializes the WebView2's CoreWebView2, applies the navigation policy
+    /// (see <see cref="Common.WebOriginPolicy"/>), then navigates. Failures
+    /// are logged and swallowed — a missing/broken WebView2 runtime must
+    /// never fault the summon.
+    /// </summary>
+    private async Task ConfigureWebViewThenNavigateAsync(Uri uri)
+    {
+        try
+        {
+            await ModelWebUi.EnsureCoreWebView2Async();
+            var core = ModelWebUi.CoreWebView2;
+
+#if !DEBUG
+            // Release builds ship no developer surface.
+            core.Settings.AreDevToolsEnabled = false;
+#endif
+
+            // Only the local llama server's own origin may display inside the
+            // overlay — anything else (a link in the page, a redirect, a
+            // squatter on the port) is cancelled.
+            core.NavigationStarting += (_, e) =>
+            {
+                Uri? target = null;
+                try { Uri.TryCreate(e.Uri, UriKind.Absolute, out target); } catch { /* malformed — cancelled below */ }
+                if (!Common.WebOriginPolicy.IsServerOrigin(
+                        target, LlamaManager.Shared.ConnectAddress, LlamaManager.Shared.ServerPort))
+                {
+                    e.Cancel = true;
+                    Common.Log.Warn($"overlay webview: refused navigation to {e.Uri}");
+                }
+            };
+
+            // New windows (target=_blank) go to the system browser, and only
+            // for plain http(s) — never a custom scheme. (The sender is a
+            // typed CoreWebView2 — don't reuse the `_` name for it here.)
+            core.NewWindowRequested += (sender, e) =>
+            {
+                e.Handled = true;
+                if (Uri.TryCreate(e.Uri, UriKind.Absolute, out var target) &&
+                    Common.WebOriginPolicy.IsOpenableExternal(target))
+                {
+                    _ = Windows.System.Launcher.LaunchUriAsync(target);
+                }
+            };
+
+            ModelWebUi.Source = uri;
+            Common.Log.Info($"overlay webview: navigating to {uri}");
+        }
+        catch (Exception ex)
+        {
+            Common.Log.Warn(ex, "overlay webview: initialization failed");
+        }
     }
 
     private void RefreshModelBadge()
