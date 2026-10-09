@@ -391,48 +391,97 @@
                                        Style="{ThemeResource SubtitleTextBlockStyle}"
                                        Margin="4,4,0,10" />
 
-                            <!-- Llama server port -->
-                            <Border CornerRadius="8"
-                                    Padding="16,14"
-                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1">
-                                <StackPanel Spacing="10">
-                                    <Grid ColumnSpacing="12">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <Border Grid.Column="0"
-                                                Width="36" Height="36"
-                                                CornerRadius="{ThemeResource ControlCornerRadius}"
-                                                Background="{StaticResource BrandAccentBrush}"
-                                                VerticalAlignment="Center">
-                                            <FontIcon Glyph="&#xE968;"
-                                                      FontSize="16"
-                                                      Foreground="White"
-                                                      HorizontalAlignment="Center"
-                                                      VerticalAlignment="Center" />
-                                        </Border>
-                                        <TextBlock Grid.Column="1"
-                                                   Text="Llama Server Port"
-                                                   FontSize="14"
-                                                   FontWeight="SemiBold"
-                                                   VerticalAlignment="Center" />
-                                    </Grid>
-                                    <TextBlock Text="Port the local llama server listens on (1–65535). Takes effect the next time Llama starts."
-                                               FontSize="12"
-                                               Opacity="0.6"
-                                               TextWrapping="WrapWholeWords" />
-                                    <NumberBox x:Name="PortBox"
-                                               Minimum="1"
-                                               Maximum="65535"
-                                               SmallChange="1"
-                                               LargeChange="10"
-                                               SpinButtonPlacementMode="Hidden"
-                                               ToolTipService.ToolTip="Port for the local llama server (1–65535)" />
-                                </StackPanel>
-                            </Border>
+                            <!-- Server port + listen address, shown side by side -->
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Llama server port -->
+                                <Border Grid.Column="0"
+                                        CornerRadius="8"
+                                        Padding="16,14"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1">
+                                    <StackPanel Spacing="10">
+                                        <Grid ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border Grid.Column="0"
+                                                    Width="36" Height="36"
+                                                    CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                    Background="{StaticResource BrandAccentBrush}"
+                                                    VerticalAlignment="Center">
+                                                <FontIcon Glyph="&#xE968;"
+                                                          FontSize="16"
+                                                          Foreground="White"
+                                                          HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Grid.Column="1"
+                                                       Text="Llama Server Port"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold"
+                                                       VerticalAlignment="Center" />
+                                        </Grid>
+                                        <TextBlock Text="Port the local llama server listens on (1–65535). Takes effect the next time Llama starts."
+                                                   FontSize="12"
+                                                   Opacity="0.6"
+                                                   TextWrapping="WrapWholeWords" />
+                                        <NumberBox x:Name="PortBox"
+                                                   Minimum="1"
+                                                   Maximum="65535"
+                                                   SmallChange="1"
+                                                   LargeChange="10"
+                                                   SpinButtonPlacementMode="Hidden"
+                                                   ToolTipService.ToolTip="Port for the local llama server (1–65535)" />
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Listen address (ComboBox: all interfaces / localhost / per-interface IPs) -->
+                                <Border Grid.Column="1"
+                                        CornerRadius="8"
+                                        Padding="16,14"
+                                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1">
+                                    <StackPanel Spacing="10">
+                                        <Grid ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border Grid.Column="0"
+                                                    Width="36" Height="36"
+                                                    CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                    Background="{StaticResource BrandAccentBrush}"
+                                                    VerticalAlignment="Center">
+                                                <FontIcon Glyph="&#xE943;"
+                                                          FontSize="16"
+                                                          Foreground="White"
+                                                          HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Grid.Column="1"
+                                                       Text="Listen On"
+                                                       FontSize="14"
+                                                       FontWeight="SemiBold"
+                                                       VerticalAlignment="Center" />
+                                        </Grid>
+                                        <TextBlock Text="Network address the llama server binds to — localhost (127.0.0.1, this machine only), a specific interface's IP, or all interfaces (0.0.0.0, reachable from other devices on your network). Takes effect the next time the app starts."
+                                                   FontSize="12"
+                                                   Opacity="0.6"
+                                                   TextWrapping="WrapWholeWords" />
+                                        <ComboBox x:Name="ListenAddressBox"
+                                                  HorizontalAlignment="Stretch"
+                                                  ToolTipService.ToolTip="Address the llama server listens on" />
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
 
                             <!-- Idle unload + max loaded models, shown side by side -->
                             <Grid ColumnSpacing="12">

@@ -5,20 +5,21 @@ namespace LlamaApp.LlamaCpp.Tests;
 
 /// <summary>
 /// Tests for the argv matrix assembled when the app launches a llama server:
-/// <c>BuildServeArguments</c> owns the fixed flags plus the conditional
-/// <c>--sleep-idle-seconds</c>, <c>--models-max</c>, <c>--cache-type-k</c>,
-/// <c>--cache-type-v</c>, and <c>--models-preset</c> flags, plus the trailing
-/// custom-argument tokens, so changes don't accidentally reorder or drop flags.
+/// <c>BuildServeArguments</c> owns the fixed prefix (<c>serve --host …
+/// --port … --jinja</c>) plus the conditional <c>--sleep-idle-seconds</c>,
+/// <c>--models-max</c>, <c>--cache-type-k</c>, <c>--cache-type-v</c>, and
+/// <c>--models-preset</c> flags, plus the trailing custom-argument tokens, so
+/// changes don't accidentally reorder or drop flags.
 /// </summary>
 public sealed class LlamaManagerArgumentsTests
 {
     [Fact]
-    public void BuildServeArguments_AlwaysStartsWithServePortAndJinja()
+    public void BuildServeArguments_AlwaysStartsWithServeHostPortAndJinja()
     {
-        var args = LlamaManager.BuildServeArguments(9931, -1, 0, null, null, null, null);
+        var args = LlamaManager.BuildServeArguments(9931, "0.0.0.0", -1, 0, null, null, null, null);
 
         Assert.Equal(
-            new[] { "serve", "--port", "9931", "--jinja" },
+            new[] { "serve", "--host", "0.0.0.0", "--port", "9931", "--jinja" },
             args);
     }
 
@@ -27,7 +28,7 @@ public sealed class LlamaManagerArgumentsTests
     {
         // -1 = idle unload disabled; 0 = unlimited loaded models; K/V types
         // blank = keep the server's default (no flag).
-        var args = LlamaManager.BuildServeArguments(9931, -1, 0, null, null, null, null);
+        var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, null, null, null, null);
 
         Assert.DoesNotContain("--sleep-idle-seconds", args);
         Assert.DoesNotContain("--models-max", args);
@@ -39,7 +40,7 @@ public sealed class LlamaManagerArgumentsTests
     [Fact]
     public void BuildServeArguments_AddsModelsMax_WhenPositive()
     {
-        var args = LlamaManager.BuildServeArguments(9931, -1, 3, null, null, null, null);
+        var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 3, null, null, null, null);
 
         Assert.Contains("--models-max", args);
         var flagIndex = args.IndexOf("--models-max");
@@ -50,7 +51,7 @@ public sealed class LlamaManagerArgumentsTests
     [Fact]
     public void BuildServeArguments_AddsSleepIdleSeconds_WhenPositive()
     {
-        var args = LlamaManager.BuildServeArguments(9931, 900, 0, null, null, null, null);
+        var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", 900, 0, null, null, null, null);
 
         Assert.Contains("--sleep-idle-seconds", args);
         var flagIndex = args.IndexOf("--sleep-idle-seconds");
@@ -60,7 +61,7 @@ public sealed class LlamaManagerArgumentsTests
     [Fact]
     public void BuildServeArguments_AddsModelsPreset_WhenPathProvided()
     {
-        var args = LlamaManager.BuildServeArguments(9931, -1, 0, null, null, @"C:\temp\models.ini", null);
+        var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, null, null, @"C:\temp\models.ini", null);
 
         Assert.Contains("--models-preset", args);
         var flagIndex = args.IndexOf("--models-preset");
@@ -72,7 +73,7 @@ public sealed class LlamaManagerArgumentsTests
     {
         foreach (var value in new[] { 0, -1 })
         {
-            var args = LlamaManager.BuildServeArguments(9931, -1, value, null, null, null, null);
+            var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, value, null, null, null, null);
             Assert.DoesNotContain("--models-max", args);
         }
     }
@@ -80,7 +81,7 @@ public sealed class LlamaManagerArgumentsTests
     [Fact]
     public void BuildServeArguments_AddsCacheTypeKAndV_WhenConfigured()
     {
-        var args = LlamaManager.BuildServeArguments(9931, -1, 0, "q8_0", "q4_0", null, null);
+        var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, "q8_0", "q4_0", null, null);
 
         var kIndex = args.IndexOf("--cache-type-k");
         var vIndex = args.IndexOf("--cache-type-v");
@@ -93,7 +94,7 @@ public sealed class LlamaManagerArgumentsTests
     [Fact]
     public void BuildServeArguments_OmitsEmptyCacheTypes()
     {
-        var args = LlamaManager.BuildServeArguments(9931, -1, 0, "", " ", null, null);
+        var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, "", " ", null, null);
 
         Assert.DoesNotContain("--cache-type-k", args);
         Assert.DoesNotContain("--cache-type-v", args);
@@ -102,7 +103,7 @@ public sealed class LlamaManagerArgumentsTests
     [Fact]
     public void BuildServeArguments_OmitsUnsupportedCacheTypes()
     {
-        var args = LlamaManager.BuildServeArguments(9931, -1, 0, "foo", "q8", null, null);
+        var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, "foo", "q8", null, null);
 
         Assert.DoesNotContain("--cache-type-k", args);
         Assert.DoesNotContain("--cache-type-v", args);
@@ -114,7 +115,7 @@ public sealed class LlamaManagerArgumentsTests
         var custom = new[] { "--threads", "4", "--flash-attn" };
 
         var args = LlamaManager.BuildServeArguments(
-            9931, -1, 0, null, null, @"C:\temp\models.ini", custom);
+            9931, "127.0.0.1", -1, 0, null, null, @"C:\temp\models.ini", custom);
 
         // Custom tokens come after the built-ins so they win when llama.cpp
         // honors the last occurrence of a repeated flag.
@@ -125,10 +126,52 @@ public sealed class LlamaManagerArgumentsTests
     [Fact]
     public void BuildServeArguments_EmptyCustomArguments_ChangeNothing()
     {
-        var without = LlamaManager.BuildServeArguments(9931, -1, 0, null, null, null, null);
-        var withEmpty = LlamaManager.BuildServeArguments(9931, -1, 0, null, null, null, Array.Empty<string>());
+        var without = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, null, null, null, null);
+        var withEmpty = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, null, null, null, Array.Empty<string>());
 
         Assert.Equal(without, withEmpty);
+    }
+
+    // ----- Listen-address forwarding -----------------------------------------
+
+    [Fact]
+    public void BuildServeArguments_ForwardsTheSelectedListenAddress()
+    {
+        var args = LlamaManager.BuildServeArguments(9931, "192.168.1.10", -1, 0, null, null, null, null);
+
+        var hostIndex = args.IndexOf("--host");
+        Assert.True(hostIndex >= 0);
+        Assert.Equal("192.168.1.10", args[hostIndex + 1]);
+    }
+
+    [Fact]
+    public void BuildServeArguments_KeepsAllInterfacesAndLocalhostVerbatim()
+    {
+        foreach (var address in new[] { "0.0.0.0", "127.0.0.1" })
+        {
+            var args = LlamaManager.BuildServeArguments(9931, address, -1, 0, null, null, null, null);
+            var hostIndex = args.IndexOf("--host");
+            Assert.Equal(address, args[hostIndex + 1]);
+        }
+    }
+
+    [Fact]
+    public void ConnectAddressFor_MapsAllInterfacesToLocalhost()
+    {
+        Assert.Equal(
+            LlamaApp.Common.ListenAddresses.Localhost,
+            LlamaManager.ConnectAddressFor(LlamaApp.Common.ListenAddresses.AllInterfaces));
+    }
+
+    [Fact]
+    public void ConnectAddressFor_KeepsSpecificAddressesVerbatim()
+    {
+        Assert.Equal(
+            "192.168.1.42",
+            LlamaManager.ConnectAddressFor("192.168.1.42"));
+        Assert.Equal(
+            LlamaApp.Common.ListenAddresses.Localhost,
+            LlamaManager.ConnectAddressFor(LlamaApp.Common.ListenAddresses.Localhost));
     }
 
     // ----- Launch-failure phrasing -------------------------------------------

@@ -51,18 +51,24 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Creates the <see cref="Shared"/> singleton bound to
-    /// <paramref name="serverPort"/>. Must be called once at startup, before the
-    /// first <see cref="Shared"/> access: the port is baked in at construction
-    /// and every health probe / launch argument / REST URL derives from it, so
-    /// a changed setting only takes effect on the next app launch.
+    /// <paramref name="serverPort"/> and <paramref name="listenAddress"/>.
+    /// Must be called once at startup, before the first
+    /// <see cref="Shared"/> access: both are baked in at construction and
+    /// every health probe / launch argument / REST URL derives from them, so
+    /// changed settings only take effect on the next app launch. A null,
+    /// blank, or unparseable address falls back to loopback.
     /// </summary>
-    public static LlamaManager Initialize(int serverPort)
+    public static LlamaManager Initialize(int serverPort, string? listenAddress = null)
     {
         if (_shared is not null)
             throw new InvalidOperationException("LlamaManager is already initialized.");
         if (serverPort is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(serverPort), "Port must be in 1..65535.");
-        _shared = new LlamaManager(serverPort);
+        if (!System.Net.IPAddress.TryParse(listenAddress, out var parsed))
+            listenAddress = Common.ListenAddresses.Localhost;
+        else if (parsed.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+            listenAddress = Common.ListenAddresses.Localhost; // IPv4 only — matches the server's bind.
+        _shared = new LlamaManager(serverPort, listenAddress);
         return _shared;
     }
 
@@ -150,6 +156,37 @@ public sealed class LlamaManager
     /// from it.
     /// </summary>
     public int ServerPort { get; }
+
+    /// <summary>
+    /// IPv4 address the llama server binds to via <c>--host</c>: the loopback
+    /// <c>127.0.0.1</c> (the default), <c>0.0.0.0</c> for every interface, or
+    /// a specific interface's address. Fixed at construction via
+    /// <see cref="Initialize"/>, like the port — the app's own REST client
+    /// follows it (loopback when the server binds all interfaces, so the
+    /// client and the bind address never disagree). A changed value takes
+    /// effect on the next app launch.
+    /// </summary>
+    public string ListenAddress { get; }
+
+    /// <summary>
+    /// The address the app's own REST client and user-facing URLs connect to:
+    /// the <see cref="ListenAddress"/> itself, except loopback when the
+    /// server binds all interfaces (<c>0.0.0.0</c> is not a connectable
+    /// destination). Kept separate from <see cref="ListenAddress"/> so the
+    /// bind flag and the client never disagree.
+    /// </summary>
+    public string ConnectAddress { get; }
+
+    /// <summary>
+    /// The address the app's REST client connects to for a given bind address:
+    /// loopback when the server binds all interfaces (<c>0.0.0.0</c> is not a
+    /// connectable destination), the address itself otherwise. Pure so the
+    /// mapping is unit-testable.
+    /// </summary>
+    internal static string ConnectAddressFor(string listenAddress)
+        => listenAddress == Common.ListenAddresses.AllInterfaces
+            ? Common.ListenAddresses.Localhost
+            : listenAddress;
 
     /// <summary>
     /// Hugging Face cache directory passed to the server via
@@ -262,14 +299,15 @@ public sealed class LlamaManager
 
     /// <summary>
     /// The single <see cref="HttpClient"/> for every llama-server REST call.
-    /// <see cref="HttpClient.BaseAddress"/> carries the configured port —
-    /// 127.0.0.1, not localhost: llama.cpp binds the IPv4 loopback by default,
-    /// and this sidesteps localhost→::1 resolution quirks. The handler bypasses
-    /// the system proxy: a configured proxy/VPN must never intercept loopback
-    /// traffic (the classic cause of "browser gets 200 OK, HttpClient fails").
-    /// The client-level timeout is infinite; each call bounds itself with a
-    /// linked token (<see cref="WithTimeout"/>) so SSE streams can run
-    /// unbounded while probes stay snappy.
+    /// <see cref="HttpClient.BaseAddress"/> carries the configured port and
+    /// the selected listen address — loopback (<c>127.0.0.1</c>) whenever the
+    /// server binds all interfaces, so the client always has an address that
+    /// can actually be connected to. The handler bypasses the system proxy: a
+    /// configured proxy/VPN must never intercept local traffic (the classic
+    /// cause of "browser gets 200 OK, HttpClient fails"). The client-level
+    /// timeout is infinite; each call bounds itself with a linked token
+    /// (<see cref="WithTimeout"/>) so SSE streams can run unbounded while
+    /// probes stay snappy.
     /// </summary>
     private readonly HttpClient _http;
 
@@ -360,12 +398,18 @@ public sealed class LlamaManager
     /// </summary>
     public event EventHandler<IReadOnlyList<ServerModel>>? ModelsChanged;
 
-    private LlamaManager(int serverPort)
+    private LlamaManager(int serverPort, string listenAddress)
     {
         ServerPort = serverPort;
+        ListenAddress = listenAddress;
+        // The app's REST client follows the bind address, except that
+        // 0.0.0.0 means "the server listens on every interface" — for the
+        // client, pick loopback, the one address that is always among them.
+        var connectAddress = ConnectAddressFor(listenAddress);
+        ConnectAddress = connectAddress;
         _http = new HttpClient(new SocketsHttpHandler { UseProxy = false })
         {
-            BaseAddress = new Uri($"http://127.0.0.1:{serverPort}"),
+            BaseAddress = new Uri($"http://{connectAddress}:{serverPort}"),
             Timeout = Timeout.InfiniteTimeSpan,
         };
         // Same User-Agent as the internet-facing clients — the loopback
@@ -381,8 +425,9 @@ public sealed class LlamaManager
     }
 
     /// <summary>
-    /// Ensures a llama server is reachable at <c>localhost:<see cref="ServerPort"/></c> —
-    /// the app's single point of contact for the model REST API. Resolution order:
+    /// Ensures a llama server is reachable at
+    /// <c><see cref="ConnectAddress"/>:<see cref="ServerPort"/></c> — the app's
+    /// single point of contact for the model REST API. Resolution order:
     /// <list type="number">
     /// <item><b>Probe</b> <c>GET /health</c>. If a server is already running (a
     /// previous app instance, another tool, or a manual launch), adopt it as the
@@ -579,8 +624,10 @@ public sealed class LlamaManager
     /// Builds the argv for a server the app launches. Kept as a pure function
     /// so the launch flag matrix (which flags are always passed, which are
     /// conditional on their value, and in what order) is unit-testable without
-    /// spawning a process. <c>0</c>/negative <paramref name="maxLoadedModels"/>
-    /// means unlimited and omits <c>--models-max</c>; supported non-empty
+    /// spawning a process. The fixed prefix is <c>serve --host &lt;addr&gt;
+    /// --port &lt;port&gt; --jinja</c>; <c>0</c>/negative
+    /// <paramref name="maxLoadedModels"/> means unlimited and omits
+    /// <c>--models-max</c>; supported non-empty
     /// <paramref name="cacheTypeK"/>/<paramref name="cacheTypeV"/> values add
     /// <c>--cache-type-k</c>/<c>--cache-type-v</c>; a non-null
     /// <paramref name="contextPresetPath"/> adds <c>--models-preset</c>;
@@ -589,6 +636,7 @@ public sealed class LlamaManager
     /// </summary>
     internal static List<string> BuildServeArguments(
         int serverPort,
+        string listenAddress,
         int idleUnloadSeconds,
         int maxLoadedModels,
         string? cacheTypeK,
@@ -598,10 +646,13 @@ public sealed class LlamaManager
     {
         // `serve` is the unified subcommand (replaces the old llama-server).
         // Router mode hosts the webui and serves requests even with no model
-        // loaded — models load on demand. --jinja enables chat templates.
+        // loaded — models load on demand. --host pins the server to the
+        // interface the user picked; --jinja enables chat templates.
         var args = new List<string>
         {
             "serve",
+            "--host",
+            listenAddress,
             "--port",
             serverPort.ToString(),
             "--jinja",
@@ -778,7 +829,7 @@ public sealed class LlamaManager
             // launch from the current preferences.
             var contextPresetPath = WriteContextPresetsIni();
             foreach (var arg in BuildServeArguments(
-                         ServerPort, IdleUnloadSeconds, MaxLoadedModels,
+                         ServerPort, ListenAddress, IdleUnloadSeconds, MaxLoadedModels,
                          CacheTypeK, CacheTypeV, contextPresetPath, customArguments))
                 psi.ArgumentList.Add(arg);
 
@@ -801,7 +852,7 @@ public sealed class LlamaManager
             var customArgsText = customArguments.Count == 0
                 ? ""
                 : " " + string.Join(' ', customArguments);
-            Log.Info($"starting llama server: {BinaryPath} serve --port {ServerPort} --jinja" +
+            Log.Info($"starting llama server: {BinaryPath} serve --host {ListenAddress} --port {ServerPort} --jinja" +
                 (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : "") +
                 (MaxLoadedModels > 0 ? $" --models-max {MaxLoadedModels}" : "") +
                 (!string.IsNullOrWhiteSpace(CacheTypeK) ? $" --cache-type-k {CacheTypeK}" : "") +
