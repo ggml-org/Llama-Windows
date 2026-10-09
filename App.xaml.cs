@@ -88,7 +88,17 @@ namespace LlamaApp
                 Common.Log.Warn($"configured server port {serverPort} is out of range; falling back to {Llama.LlamaManager.DefaultServerPort}");
                 serverPort = Llama.LlamaManager.DefaultServerPort;
             }
-            Llama.LlamaManager.Initialize(serverPort, Settings.Current.ListenAddress);
+            // The saved listen address may no longer be assigned to this
+            // machine (DHCP change, a different network, or a hand-edited
+            // settings.json). Resolve it against the live interfaces so the
+            // app never targets — or adopts a server from — a foreign host;
+            // fall back to loopback and warn when it can't be used.
+            var resolvedListen = Common.ListenAddresses.Resolve(
+                Settings.Current.ListenAddress, Common.ListenAddresses.List());
+            if (resolvedListen.FellBack)
+                Common.Log.Warn(
+                    $"listen address '{Settings.Current.ListenAddress}' is not assigned to this machine; using {resolvedListen.Address}");
+            Llama.LlamaManager.Initialize(serverPort, resolvedListen.Address);
 
             // The app is tray-only: the main window is created but never shown
             // on launch. It is revealed on demand as a flyout anchored to the
@@ -107,6 +117,11 @@ namespace LlamaApp
             // failed) while the flyout is hidden. Clicking a toast re-opens the
             // flyout; so does a redirected second-launch activation.
             Notifications.Initialize();
+            // Surface a listen-address fallback once notifications exist.
+            if (resolvedListen.FellBack)
+                Notifications.Show("Listen address unavailable",
+                    $"The configured listen address ({Settings.Current.ListenAddress}) isn't assigned to this machine. " +
+                    $"The llama server will listen on {resolvedListen.Address} instead.");
             Notifications.Invoked += args => _dispatcher.TryEnqueue(() => HandleToastActivation(args));
             instance.Activated += (_, _) => _dispatcher.TryEnqueue(() => _trayIcon?.ShowFlyout());
 
