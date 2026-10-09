@@ -221,6 +221,19 @@ public sealed class LlamaManager
     public string CacheTypeV { get; set; } = "f16";
 
     /// <summary>
+    /// Free-form extra <c>llama serve</c> arguments from the Settings page,
+    /// tokenized at launch (<see cref="Common.ArgumentTokenizer.Tokenize"/>)
+    /// and appended AFTER the built-in flags so they can override them.
+    /// Set by the caller (App.OnLaunched reads it from
+    /// <c>Settings.Current.CustomServeArguments</c>) — kept here rather than
+    /// reading <c>Settings</c> directly to avoid a circular project dependency.
+    /// Only affects servers the app launches: an adopted already-running
+    /// server keeps whatever arguments it was started with, and a changed
+    /// value takes effect on the next server start.
+    /// </summary>
+    public string? CustomServeArguments { get; set; }
+
+    /// <summary>
     /// Per-model context-length preferences (keyed by server model id,
     /// <c>repo:quant</c>), rendered into a llama.cpp <c>--models-preset</c> INI
     /// at server launch so the router spawns each child with its chosen
@@ -570,7 +583,9 @@ public sealed class LlamaManager
     /// means unlimited and omits <c>--models-max</c>; supported non-empty
     /// <paramref name="cacheTypeK"/>/<paramref name="cacheTypeV"/> values add
     /// <c>--cache-type-k</c>/<c>--cache-type-v</c>; a non-null
-    /// <paramref name="contextPresetPath"/> adds <c>--models-preset</c>.
+    /// <paramref name="contextPresetPath"/> adds <c>--models-preset</c>;
+    /// <paramref name="customArguments"/> tokens are appended LAST so they can
+    /// override the built-in flags (llama.cpp honors the last occurrence).
     /// </summary>
     internal static List<string> BuildServeArguments(
         int serverPort,
@@ -578,7 +593,8 @@ public sealed class LlamaManager
         int maxLoadedModels,
         string? cacheTypeK,
         string? cacheTypeV,
-        string? contextPresetPath)
+        string? contextPresetPath,
+        IReadOnlyList<string>? customArguments)
     {
         // `serve` is the unified subcommand (replaces the old llama-server).
         // Router mode hosts the webui and serves requests even with no model
@@ -639,7 +655,39 @@ public sealed class LlamaManager
             args.Add(contextPresetPath);
         }
 
+        // Custom arguments go last so they win when llama.cpp keeps the
+        // final occurrence of a repeated flag — the user's typed text is the
+        // most specific intent.
+        if (customArguments is { Count: > 0 })
+            args.AddRange(customArguments);
+
         return args;
+    }
+
+    /// <summary>
+    /// Formats the user-facing reason for a failed launch from the captured
+    /// stderr tail. llama.cpp writes its INFO chatter to stderr too, so the
+    /// last line that mentions an error wins; without one, the last non-blank
+    /// line is the best available clue. Kept pure so the phrasing is
+    /// unit-testable; the footer presentation sanitizes it further.
+    /// </summary>
+    internal static string FormatStartFailureMessage(string? stderrTail)
+    {
+        if (string.IsNullOrWhiteSpace(stderrTail))
+            return "The llama server failed to start.";
+
+        var lines = stderrTail
+            .Split('\n')
+            .Select(line => line.Trim().TrimEnd('\r'))
+            .Where(line => line.Length > 0)
+            .ToArray();
+        if (lines.Length == 0)
+            return "The llama server failed to start.";
+
+        var errorLine = lines.LastOrDefault(line =>
+            line.Contains("error", StringComparison.OrdinalIgnoreCase));
+        var chosen = errorLine ?? lines[^1];
+        return $"The llama server failed to start: {chosen}";
     }
 
     /// <summary>
@@ -653,6 +701,7 @@ public sealed class LlamaManager
         if (ServerStatus == ServerState.Running) return true;
         if (BinaryPath is null || !File.Exists(BinaryPath))
         {
+            FailureMessage = "The llama server binary is missing.";
             ServerStatus = ServerState.Failed;
             return false;
         }
@@ -665,6 +714,7 @@ public sealed class LlamaManager
         if (await ProbeHealthAsync(cancel))
         {
             Log.Info("adopted an already-running llama server (pre-start re-probe)");
+            FailureMessage = null;
             ServerStatus = ServerState.Running;
             _ = ResolveAndReadVersionAsync(cancel);
             return true;
@@ -682,6 +732,7 @@ public sealed class LlamaManager
             if (await WaitForReachableAsync(TimeSpan.FromSeconds(15), cancel))
             {
                 Log.Info($"adopted the managed llama server (pid {managedPid})");
+                FailureMessage = null;
                 ServerStatus = ServerState.Running;
                 _ = ResolveAndReadVersionAsync(cancel);
                 return true;
@@ -691,6 +742,25 @@ public sealed class LlamaManager
 
         StopServer(); // reclaim any prior instance / port
 
+        // Tokenize the custom arguments BEFORE flipping to Starting: an open
+        // quote is a settings error, not a launch attempt, and must fail fast
+        // with the parser's message rather than a 15s port timeout.
+        IReadOnlyList<string> customArguments;
+        try
+        {
+            customArguments = Common.ArgumentTokenizer.Tokenize(CustomServeArguments);
+        }
+        catch (FormatException ex)
+        {
+            Log.Error(ex, "custom serve arguments failed to parse");
+            FailureMessage = ex.Message;
+            ServerStatus = ServerState.Failed;
+            return false;
+        }
+
+        // A fresh attempt invalidates whatever the previous launch failed
+        // with; a new reason is set below if this one fails too.
+        FailureMessage = null;
         ServerStatus = ServerState.Starting;
 
         try
@@ -709,7 +779,7 @@ public sealed class LlamaManager
             var contextPresetPath = WriteContextPresetsIni();
             foreach (var arg in BuildServeArguments(
                          ServerPort, IdleUnloadSeconds, MaxLoadedModels,
-                         CacheTypeK, CacheTypeV, contextPresetPath))
+                         CacheTypeK, CacheTypeV, contextPresetPath, customArguments))
                 psi.ArgumentList.Add(arg);
 
             // Point the HF cache at the user-configured directory so the server
@@ -728,11 +798,15 @@ public sealed class LlamaManager
                 Log.Info("HF token configured; passing HF_TOKEN to the llama server");
             }
 
+            var customArgsText = customArguments.Count == 0
+                ? ""
+                : " " + string.Join(' ', customArguments);
             Log.Info($"starting llama server: {BinaryPath} serve --port {ServerPort} --jinja" +
                 (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : "") +
                 (MaxLoadedModels > 0 ? $" --models-max {MaxLoadedModels}" : "") +
                 (!string.IsNullOrWhiteSpace(CacheTypeK) ? $" --cache-type-k {CacheTypeK}" : "") +
-                (!string.IsNullOrWhiteSpace(CacheTypeV) ? $" --cache-type-v {CacheTypeV}" : ""));
+                (!string.IsNullOrWhiteSpace(CacheTypeV) ? $" --cache-type-v {CacheTypeV}" : "") +
+                customArgsText);
 
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             proc.Exited += (_, _) =>
@@ -748,6 +822,7 @@ public sealed class LlamaManager
             if (!proc.Start())
             {
                 Log.Error("llama server process failed to start (proc.Start returned false)");
+                FailureMessage = "The llama server process failed to start.";
                 ServerStatus = ServerState.Failed;
                 return false;
             }
@@ -758,8 +833,10 @@ public sealed class LlamaManager
 
             // The server's stdout/stderr are redirected; drain them or a chatty
             // server blocks once the pipe buffer fills. Draining also captures
-            // server errors (e.g. a bad launch flag) into the app log.
-            DrainServerOutput(proc);
+            // server errors (e.g. a bad launch flag) into the app log — and, via
+            // the stderr tail, into the user-facing failure reason below.
+            var stderrTail = new ServerOutputTail();
+            var (stdoutTask, stderrTask) = DrainServerOutput(proc, stderrTail);
 
             // Wait for the port to respond — the server takes a moment to bind.
             // We pass `proc` so the wait fast-fails if the process exits before
@@ -768,6 +845,7 @@ public sealed class LlamaManager
             if (await WaitForPortAsync(proc, TimeSpan.FromSeconds(15), cancel))
             {
                 Log.Info("llama server is reachable");
+                FailureMessage = null;
                 ServerStatus = ServerState.Running;
                 return true;
             }
@@ -780,6 +858,13 @@ public sealed class LlamaManager
             // before killing (deliberate intent — the supervisor never leaves
             // Stopped on its own), then we surface the failure.
             Log.Error("llama server failed to become ready within 15s (port probe timed out)");
+            // The pipes close when the process exits, so the drain tasks finish
+            // almost immediately in the died-at-startup case; the timeout only
+            // matters for a genuinely hung server, where we surface whatever
+            // stderr arrived before giving up.
+            try { await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromMilliseconds(500)); }
+            catch { /* snapshot whatever arrived */ }
+            FailureMessage = FormatStartFailureMessage(stderrTail.Snapshot());
             StopServer();
             ServerStatus = ServerState.Failed;
             return false;
@@ -791,6 +876,7 @@ public sealed class LlamaManager
         catch (Exception ex)
         {
             Log.Error(ex, "llama server start threw");
+            FailureMessage = ex.Message;
             ServerStatus = ServerState.Failed;
             return false;
         }
@@ -963,27 +1049,66 @@ public sealed class LlamaManager
     }
 
     /// <summary>
+    /// A bounded, thread-safe tail of the server's stderr. The drain task
+    /// appends every line; a failed launch reads the tail back so the footer
+    /// can say WHY the server died (llama.cpp prints its errors to stderr).
+    /// </summary>
+    private sealed class ServerOutputTail
+    {
+        private const int Capacity = 20;
+        private readonly object _gate = new();
+        private readonly Queue<string> _lines = new();
+
+        public void Add(string line)
+        {
+            lock (_gate)
+            {
+                _lines.Enqueue(line);
+                while (_lines.Count > Capacity)
+                    _lines.Dequeue();
+            }
+        }
+
+        /// <summary>The captured lines joined with newlines, or null when none.</summary>
+        public string? Snapshot()
+        {
+            lock (_gate)
+            {
+                return _lines.Count == 0 ? null : string.Join(Environment.NewLine, _lines);
+            }
+        }
+    }
+
+    /// <summary>
     /// Drains a spawned server's redirected stdout/stderr on background threads.
     /// Redirecting without draining lets a chatty server block once the pipe
     /// buffer fills (a silent stall); draining also keeps server output available
     /// for diagnosing a failed launch. llama.cpp writes everything (INFO
     /// included) to stderr, so both streams log at Debug — anything higher would
-    /// spam the app log with per-request noise.
+    /// spam the app log with per-request noise. The returned tasks let a failed
+    /// launch wait for the pipes to close before snapshotting the stderr tail.
     /// </summary>
-    private static void DrainServerOutput(Process proc)
+    private static (Task Stdout, Task Stderr) DrainServerOutput(
+        Process proc, ServerOutputTail? stderrTail = null)
     {
-        void Drain(StreamReader reader, string tag)
+        Task Drain(StreamReader reader, string tag, ServerOutputTail? tail)
         {
-            try
+            return Task.Run(() =>
             {
-                string? line;
-                while ((line = reader.ReadLine()) is not null)
-                    Log.Debug($"[llama{tag}] {line}");
-            }
-            catch { /* stream closed when the server exits */ }
+                try
+                {
+                    string? line;
+                    while ((line = reader.ReadLine()) is not null)
+                    {
+                        Log.Debug($"[llama{tag}] {line}");
+                        tail?.Add(line);
+                    }
+                }
+                catch { /* stream closed when the server exits */ }
+            });
         }
-        _ = Task.Run(() => Drain(proc.StandardOutput, ""));
-        _ = Task.Run(() => Drain(proc.StandardError, " stderr"));
+
+        return (Drain(proc.StandardOutput, "", null), Drain(proc.StandardError, " stderr", stderrTail));
     }
 
     private static void DeletePidFile() => DeletePidFile(PidFilePath);

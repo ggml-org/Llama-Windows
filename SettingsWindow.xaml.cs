@@ -10,7 +10,7 @@ namespace LlamaApp
     /// after the Windows 11 Settings app: a left NavigationView with three
     /// pages — General (launch at startup, local models cache), Identity
     /// (Hugging Face token) and Llama (server port, idle model unload, KV cache
-    /// quantization). Saves
+    /// quantization, custom serve arguments). Saves
     /// to <see cref="Settings"/> on Save; discards on Cancel.
     /// </summary>
     public sealed partial class SettingsWindow : Window
@@ -118,6 +118,9 @@ namespace LlamaApp
             ModelsMaxBox.Value = s.MaxLoadedModels;
             SelectComboBoxTag(KvCacheKBox, s.CacheTypeK, "f16");
             SelectComboBoxTag(KvCacheVBox, s.CacheTypeV, "f16");
+            CustomArgsBox.Text = s.CustomServeArguments ?? "";
+            CustomArgsErrorText.Text = "";
+            CustomArgsErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
             // The OS shortcut is the source of truth: a user may have toggled
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
@@ -379,6 +382,23 @@ namespace LlamaApp
             // no live server restart here.
             s.CacheTypeK = (KvCacheKBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "f16";
             s.CacheTypeV = (KvCacheVBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "f16";
+
+            // Validate the free-form serve arguments before saving: an open
+            // quote would otherwise only surface as a launch failure after the
+            // user has already closed the window.
+            try
+            {
+                _ = Common.ArgumentTokenizer.Tokenize(CustomArgsBox.Text);
+                CustomArgsErrorText.Text = "";
+                CustomArgsErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            }
+            catch (FormatException ex)
+            {
+                CustomArgsErrorText.Text = ex.Message;
+                CustomArgsErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+                return;
+            }
+            s.CustomServeArguments = CustomArgsBox.Text.Trim();
 
             // Apply the startup preference to the OS (create/delete the .lnk)
             // and mirror it into settings.json as a hint for the checkbox on

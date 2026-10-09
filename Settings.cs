@@ -96,6 +96,17 @@ public sealed class Settings
     public string CacheTypeV { get; set; } = "f16";
 
     /// <summary>
+    /// Free-form extra <c>llama serve</c> arguments, appended after the
+    /// built-in flags so they can override them (llama.cpp honors the last
+    /// occurrence). Stored exactly as typed — including newlines, which the
+    /// tokenizer treats as whitespace — and split into argv tokens at launch
+    /// (see <see cref="Common.ArgumentTokenizer.Tokenize"/>). Applies the
+    /// next time the llama server starts; a bad flag makes the server exit
+    /// with an error, which the app surfaces as the failure reason.
+    /// </summary>
+    public string CustomServeArguments { get; set; } = "";
+
+    /// <summary>
     /// Whether Llama should launch automatically when the user signs in to
     /// Windows. The authoritative state is the presence of the startup
     /// shortcut managed by <see cref="StartupHelper"/> (in the user's Startup
