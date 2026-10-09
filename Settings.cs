@@ -68,6 +68,16 @@ public sealed class Settings
     public int IdleUnloadSeconds { get; set; } = -1;
 
     /// <summary>
+    /// Maximum number of models the llama server loads simultaneously in
+    /// router mode: 0 (the default) means unlimited, any positive value caps
+    /// how many per-model child servers run at once. Handed to the server as
+    /// <c>--models-max</c> at launch (see
+    /// <see cref="Llama.LlamaManager.MaxLoadedModels"/>), so a changed value
+    /// takes effect on the next server start.
+    /// </summary>
+    public int MaxLoadedModels { get; set; } = 0;
+
+    /// <summary>
     /// Whether Llama should launch automatically when the user signs in to
     /// Windows. The authoritative state is the presence of the startup
     /// shortcut managed by <see cref="StartupHelper"/> (in the user's Startup

@@ -177,6 +177,18 @@ public sealed class LlamaManager
     public int IdleUnloadSeconds { get; set; } = -1;
 
     /// <summary>
+    /// Maximum number of models loaded in parallel in router mode, passed as
+    /// <c>--models-max</c> at launch; 0 (the default) means unlimited. Set by
+    /// the caller (App.OnLaunched reads it from
+    /// <c>Settings.Current.MaxLoadedModels</c>) — kept here rather than reading
+    /// <c>Settings</c> directly to avoid a circular project dependency. Only
+    /// affects servers the app launches: an adopted already-running server
+    /// keeps whatever arguments it was started with, and a changed value takes
+    /// effect on the next server start.
+    /// </summary>
+    public int MaxLoadedModels { get; set; } = 0;
+
+    /// <summary>
     /// Per-model context-length preferences (keyed by server model id,
     /// <c>repo:quant</c>), rendered into a llama.cpp <c>--models-preset</c> INI
     /// at server launch so the router spawns each child with its chosen
@@ -519,6 +531,64 @@ public sealed class LlamaManager
     // ---- Server ----
 
     /// <summary>
+    /// Builds the argv for a server the app launches. Kept as a pure function
+    /// so the launch flag matrix (which flags are always passed, which are
+    /// conditional on their value, and in what order) is unit-testable without
+    /// spawning a process. <c>0</c>/negative <paramref name="maxLoadedModels"/>
+    /// means unlimited and omits <c>--models-max</c>; a non-null
+    /// <paramref name="contextPresetPath"/> adds <c>--models-preset</c>.
+    /// </summary>
+    internal static List<string> BuildServeArguments(
+        int serverPort,
+        int idleUnloadSeconds,
+        int maxLoadedModels,
+        string? contextPresetPath)
+    {
+        // `serve` is the unified subcommand (replaces the old llama-server).
+        // Router mode hosts the webui and serves requests even with no model
+        // loaded — models load on demand. --jinja enables chat templates.
+        var args = new List<string>
+        {
+            "serve",
+            "--port",
+            serverPort.ToString(),
+            "--jinja",
+        };
+
+        // Idle model unload. Done server-side because the server is the only
+        // place that sees ALL model traffic — the overlay's WebUI chats
+        // straight with it, invisible to the app, so an app-side idle timer
+        // could unload a model mid-conversation. The router propagates the
+        // flag to each per-model child server.
+        if (idleUnloadSeconds > 0)
+        {
+            args.Add("--sleep-idle-seconds");
+            args.Add(idleUnloadSeconds.ToString());
+        }
+
+        // Max loaded models. Router mode loads each model in its own child
+        // process; 0 (the default) leaves the server's unlimited behavior,
+        // otherwise the router refuses to exceed N simultaneous loads.
+        if (maxLoadedModels > 0)
+        {
+            args.Add("--models-max");
+            args.Add(maxLoadedModels.ToString());
+        }
+
+        // Per-model context lengths. The router's /models/load ignores a ctx
+        // field in the request body (it reads only the model name), so the
+        // chosen sizes are rendered into a --models-preset INI that the router
+        // merges into each model's child args (--ctx-size N).
+        if (contextPresetPath is not null)
+        {
+            args.Add("--models-preset");
+            args.Add(contextPresetPath);
+        }
+
+        return args;
+    }
+
+    /// <summary>
     /// Launches <c>llama serve --port 2276</c> as a background process and polls
     /// the port until it responds (or times out). Called automatically by
     /// <see cref="EnsureLlamaOrDownloadAsync"/> once a binary is available. No-op (returns
@@ -579,36 +649,13 @@ public sealed class LlamaManager
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
-            // `serve` is the unified subcommand (replaces the old llama-server).
-            // Router mode hosts the webui and serves requests even with no model
-            // loaded — models load on demand. --jinja enables chat templates.
-            psi.ArgumentList.Add("serve");
-            psi.ArgumentList.Add("--port");
-            psi.ArgumentList.Add(ServerPort.ToString());
-            psi.ArgumentList.Add("--jinja");
-
-            // Idle model unload. Done server-side because the server is the
-            // only place that sees ALL model traffic — the overlay's WebUI
-            // chats straight with it, invisible to the app, so an app-side
-            // idle timer could unload a model mid-conversation. The router
-            // propagates the flag to each per-model child server.
-            if (IdleUnloadSeconds > 0)
-            {
-                psi.ArgumentList.Add("--sleep-idle-seconds");
-                psi.ArgumentList.Add(IdleUnloadSeconds.ToString());
-            }
-
-            // Per-model context lengths. The router's /models/load ignores a
-            // ctx field in the request body (it reads only the model name), so
-            // the chosen sizes are rendered into a --models-preset INI that the
-            // router merges into each model's child args (--ctx-size N).
-            // Written fresh every launch from the current preferences.
+            // Per-model context lengths are merged into each model's child args
+            // via --models-preset (see BuildServeArguments). Written fresh every
+            // launch from the current preferences.
             var contextPresetPath = WriteContextPresetsIni();
-            if (contextPresetPath is not null)
-            {
-                psi.ArgumentList.Add("--models-preset");
-                psi.ArgumentList.Add(contextPresetPath);
-            }
+            foreach (var arg in BuildServeArguments(
+                         ServerPort, IdleUnloadSeconds, MaxLoadedModels, contextPresetPath))
+                psi.ArgumentList.Add(arg);
 
             // Point the HF cache at the user-configured directory so the server
             // resolves downloaded models from the same place the app scans.
@@ -627,7 +674,8 @@ public sealed class LlamaManager
             }
 
             Log.Info($"starting llama server: {BinaryPath} serve --port {ServerPort} --jinja" +
-                (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : ""));
+                (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : "") +
+                (MaxLoadedModels > 0 ? $" --models-max {MaxLoadedModels}" : ""));
 
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             proc.Exited += (_, _) =>
