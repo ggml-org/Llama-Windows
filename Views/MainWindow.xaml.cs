@@ -1636,6 +1636,8 @@ namespace LlamaApp.Views
 
         int IModelItemDetailsHost.ServerPort => LlamaManager.Shared.ServerPort;
 
+        string IModelItemDetailsHost.ServerAddress => LlamaManager.Shared.ConnectAddress;
+
         /// <summary>The play-glyph path, reused unchanged by the details Chat action.</summary>
         Task IModelItemDetailsHost.LoadModelAsync(ModelItem model)
         {
@@ -1801,7 +1803,7 @@ namespace LlamaApp.Views
             var serverModelId = ((IModel)item).ServerModelId;
             Log.Info("open clicked for " + serverModelId);
             
-            var url = $"http://localhost:{LlamaManager.Shared.ServerPort}?model={Uri.EscapeDataString(serverModelId)}";
+            var url = $"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}?model={Uri.EscapeDataString(serverModelId)}";
             await Windows.System.Launcher.LaunchUriAsync(new Uri(url));
         }
 
@@ -2603,7 +2605,7 @@ namespace LlamaApp.Views
         {
             // Open the running llama server's WebUI in the system browser.
             await Windows.System.Launcher.LaunchUriAsync(
-                new System.Uri($"http://localhost:{LlamaManager.Shared.ServerPort}"));
+                new System.Uri($"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}"));
         }
 
         /// Opens llama.app in the default browser when the brand logo is

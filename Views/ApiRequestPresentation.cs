@@ -15,11 +15,11 @@ public static class ApiRequestPresentation
     /// for <paramref name="serverModelId"/> (the canonical <c>repo:quant</c>
     /// id — the <c>model</c> field the server requires).
     /// </summary>
-    public static string BuildCurlCommand(int serverPort, string serverModelId)
+    public static string BuildCurlCommand(string serverAddress, int serverPort, string serverModelId)
     {
         var body = "{\"model\":\"" + serverModelId + "\"," +
             "\"messages\":[{\"role\":\"user\",\"content\":\"Hello, how are you?\"}]}";
-        return $"curl http://localhost:{serverPort}/v1/chat/completions " +
+        return $"curl http://{serverAddress}:{serverPort}/v1/chat/completions " +
                $"-H \"Content-Type: application/json\" " +
                $"-d \"{body.Replace("\"", "\\\"")}\"";
     }
@@ -29,6 +29,6 @@ public static class ApiRequestPresentation
     /// (<c>?model=&lt;id&gt;</c> makes the server auto-load it) — the same URL
     /// the Available row's open glyph launches.
     /// </summary>
-    public static string BuildWebUiUrl(int serverPort, string serverModelId)
-        => $"http://localhost:{serverPort}?model={Uri.EscapeDataString(serverModelId)}";
+    public static string BuildWebUiUrl(string serverAddress, int serverPort, string serverModelId)
+        => $"http://{serverAddress}:{serverPort}?model={Uri.EscapeDataString(serverModelId)}";
 }

@@ -29,6 +29,13 @@ public interface IModelItemDetailsHost
     /// <summary>The port the local llama server listens on (for URLs).</summary>
     int ServerPort { get; }
 
+    /// <summary>
+    /// The address user-facing URLs should target — the server's connect
+    /// address, which follows the Settings listen choice (loopback when the
+    /// server binds all interfaces).
+    /// </summary>
+    string ServerAddress { get; }
+
     /// <summary>Starts the shell's normal load workflow for the model (the play-glyph path).</summary>
     Task LoadModelAsync(ModelItem model);
 
@@ -581,7 +588,7 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     /// </summary>
     public void BuildApiRequest()
     {
-        _host.CopyText(ApiRequestPresentation.BuildCurlCommand(_host.ServerPort, ServerModelId));
+        _host.CopyText(ApiRequestPresentation.BuildCurlCommand(_host.ServerAddress, _host.ServerPort, ServerModelId));
         FlashCopied(isModelId: false);
     }
 
@@ -610,7 +617,7 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     }
 
     private void OpenChat()
-        => _host.OpenUri(ApiRequestPresentation.BuildWebUiUrl(_host.ServerPort, ServerModelId));
+        => _host.OpenUri(ApiRequestPresentation.BuildWebUiUrl(_host.ServerAddress, _host.ServerPort, ServerModelId));
 
     /// <summary>
     /// Re-derives action state when the shared ModelItem changes (the poller
