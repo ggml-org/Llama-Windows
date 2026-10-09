@@ -626,7 +626,7 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
 
     private void OpenChat()
         => _host.OpenUri(ApiRequestPresentation.BuildWebUiUrl(
-            _host.ServerAddress, _host.ServerPort, ServerModelId, _host.ApiKey));
+            _host.ServerAddress, _host.ServerPort, ServerModelId));
 
     /// <summary>
     /// Re-derives action state when the shared ModelItem changes (the poller

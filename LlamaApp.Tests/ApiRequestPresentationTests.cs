@@ -80,21 +80,16 @@ public sealed class ApiRequestPresentationTests
     // ---- API-key threading (non-loopback binds) ----
 
     [Fact]
-    public void BuildWebUiUrl_WithoutKey_Unchanged()
+    public void BuildWebUiUrl_NeverCarriesTheApiKey()
     {
+        // llama.cpp's WebUI reads its key from a typed dialog (no query form);
+        // a ?api_key= would be ignored by the page and leak into browser
+        // history, caches and server logs. The key must never be in a URL.
         var url = ApiRequestPresentation.BuildWebUiUrl(
-            "127.0.0.1", 9931, "a/b:Q4_K_M", apiKey: null);
+            "192.168.1.42", 9931, "a/b:Q4_K_M");
 
-        Assert.Equal("http://127.0.0.1:9931?model=a%2Fb%3AQ4_K_M", url);
-    }
-
-    [Fact]
-    public void BuildWebUiUrl_WithKey_AppendsApiKey()
-    {
-        var url = ApiRequestPresentation.BuildWebUiUrl(
-            "192.168.1.42", 9931, "a/b:Q4_K_M", apiKey: "cafe1234");
-
-        Assert.Equal("http://192.168.1.42:9931?model=a%2Fb%3AQ4_K_M&api_key=cafe1234", url);
+        Assert.Equal("http://192.168.1.42:9931?model=a%2Fb%3AQ4_K_M", url);
+        Assert.DoesNotContain("api_key", url);
     }
 
     [Fact]

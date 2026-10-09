@@ -1805,10 +1805,13 @@ namespace LlamaApp.Views
             var serverModelId = ((IModel)item).ServerModelId;
             Log.Info("open clicked for " + serverModelId);
 
+            // No api_key in the URL: it would leak into browser history and
+            // the llama.cpp WebUI reads its key from a dialog anyway. The key
+            // lives in Settings (copyable) if the WebUI asks for it.
             await Windows.System.Launcher.LaunchUriAsync(new Uri(
                 ApiRequestPresentation.BuildWebUiUrl(
                     LlamaManager.Shared.ConnectAddress, LlamaManager.Shared.ServerPort,
-                    serverModelId, LlamaManager.Shared.ApiKey)));
+                    serverModelId)));
         }
 
         /// <summary>
@@ -2621,10 +2624,10 @@ namespace LlamaApp.Views
         private async void ServerLink_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             // Open the running llama server's WebUI in the system browser.
-            var url = $"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}";
-            if (LlamaManager.Shared.ApiKey is { } key)
-                url += $"?api_key={Uri.EscapeDataString(key)}";
-            await Windows.System.Launcher.LaunchUriAsync(new System.Uri(url));
+            // No api_key in the URL (browser history leak; the WebUI reads its
+            // key from a typed dialog — copyable from Settings).
+            await Windows.System.Launcher.LaunchUriAsync(
+                new System.Uri($"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}"));
         }
 
         /// Opens llama.app in the default browser when the brand logo is

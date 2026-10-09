@@ -51,12 +51,6 @@ public static class ApiRequestPresentation
     /// (<c>?model=&lt;id&gt;</c> makes the server auto-load it) — the same URL
     /// the Available row's open glyph launches.
     /// </summary>
-    public static string BuildWebUiUrl(
-        string serverAddress, int serverPort, string serverModelId, string? apiKey = null)
-    {
-        var url = $"http://{serverAddress}:{serverPort}?model={Uri.EscapeDataString(serverModelId)}";
-        if (!string.IsNullOrEmpty(apiKey))
-            url += $"&api_key={Uri.EscapeDataString(apiKey)}";
-        return url;
-    }
+    public static string BuildWebUiUrl(string serverAddress, int serverPort, string serverModelId)
+        => $"http://{serverAddress}:{serverPort}?model={Uri.EscapeDataString(serverModelId)}";
 }

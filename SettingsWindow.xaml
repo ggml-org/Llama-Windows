@@ -518,11 +518,40 @@
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
-                                    <ComboBox x:Name="ListenAddressBox"
-                                              Grid.Row="2"
-                                              VerticalAlignment="Bottom"
-                                              HorizontalAlignment="Stretch"
-                                              ToolTipService.ToolTip="Address the llama server listens on" />
+                                    <StackPanel Grid.Row="2"
+                                                Spacing="10"
+                                                VerticalAlignment="Bottom">
+                                        <ComboBox x:Name="ListenAddressBox"
+                                                  HorizontalAlignment="Stretch"
+                                                  ToolTipService.ToolTip="Address the llama server listens on" />
+                                        <!-- API key for a non-loopback bind: llama.cpp's WebUI
+                                             reads its key from a typed dialog (no URL form),
+                                             so the user needs to see and copy it. -->
+                                        <StackPanel x:Name="ApiKeyPanel"
+                                                    Spacing="6"
+                                                    Visibility="Collapsed">
+                                            <TextBlock Text="API key — the llama WebUI may ask for it once; copy it if it does. The chat overlay and Llama itself connect automatically."
+                                                       FontSize="12"
+                                                       Opacity="0.6"
+                                                       TextWrapping="Wrap" />
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBox x:Name="ApiKeyBox"
+                                                         IsReadOnly="True"
+                                                         FontFamily="Consolas"
+                                                         PlaceholderText="Generated when you save"
+                                                         ToolTipService.ToolTip="The app-generated server API key" />
+                                                <Button x:Name="CopyApiKeyButton"
+                                                        Grid.Column="1"
+                                                        Content="Copy"
+                                                        Click="CopyApiKey_Click"
+                                                        ToolTipService.ToolTip="Copy the API key to the clipboard" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </StackPanel>
                                 </Grid>
                             </Border>
 

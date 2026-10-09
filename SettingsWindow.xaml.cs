@@ -103,6 +103,7 @@ namespace LlamaApp
             PortBox.Value = s.ServerPort;
             PopulateListenAddressBox();
             SelectComboBoxTag(ListenAddressBox, s.ListenAddress, Common.ListenAddresses.Localhost);
+            UpdateApiKeyPanel();
             // Select the idle-unload choice matching the saved seconds; an
             // unrecognized value (hand-edited settings.json) falls back to
             // Never, the safe default.
@@ -148,6 +149,49 @@ namespace LlamaApp
                     Tag = entry.Address,
                 });
             }
+            // Idempotent subscription — LoadCurrent may run more than once
+            // over the window's lifetime.
+            ListenAddressBox.SelectionChanged -= ListenAddressBox_SelectionChanged;
+            ListenAddressBox.SelectionChanged += ListenAddressBox_SelectionChanged;
+        }
+
+        /// <summary>
+        /// Shows the app-generated server API key when the selected (or saved)
+        /// listen address exposes the server beyond this machine. llama.cpp's
+        /// WebUI reads its key from a typed dialog — there is no URL form — so
+        /// the user must be able to see and copy it; Llama's own client and the
+        /// chat overlay connect with it automatically.
+        /// </summary>
+        private void UpdateApiKeyPanel()
+        {
+            var selected = (ListenAddressBox.SelectedItem as ComboBoxItem)?.Tag as string;
+            var needsKey = Common.ServerAuth.RequiresApiKey(selected);
+
+            ApiKeyPanel.Visibility = needsKey
+                ? Microsoft.UI.Xaml.Visibility.Visible
+                : Microsoft.UI.Xaml.Visibility.Collapsed;
+            if (!needsKey) return;
+
+            // The key is generated at save/startup; before that the placeholder
+            // says so.
+            var key = Settings.Current.ServerApiKey;
+            ApiKeyBox.Text = string.IsNullOrWhiteSpace(key) ? "" : key;
+            CopyApiKeyButton.IsEnabled = !string.IsNullOrWhiteSpace(key);
+        }
+
+        private void ListenAddressBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+            => UpdateApiKeyPanel();
+
+        /// <summary>Copies the server API key to the clipboard.</summary>
+        private void CopyApiKey_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            var key = ApiKeyBox.Text;
+            if (string.IsNullOrWhiteSpace(key)) return;
+
+            var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            package.SetText(key);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+            Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
         }
 
         /// <summary>
@@ -418,17 +462,30 @@ namespace LlamaApp
             if (Common.ServerAuth.RequiresApiKey(selectedListen) &&
                 !string.Equals(selectedListen, s.ListenAddress, StringComparison.OrdinalIgnoreCase))
             {
-                var confirmed = await ConfirmAsync(
-                    "Expose the llama server?",
-                    "Devices on your network will be able to reach the llama server. " +
-                    "Llama protects it with an API key, but anyone who learns the key " +
-                    "can load, run and delete your models. Continue?");
+                bool confirmed;
+                try
+                {
+                    confirmed = await ConfirmAsync(
+                        "Expose the llama server?",
+                        "Devices on your network will be able to reach the llama server. " +
+                        "Llama protects it with an API key — shown in Settings so you can " +
+                        "copy it if the WebUI asks — but anyone who learns the key " +
+                        "can load, run and delete your models. Continue?");
+                }
+                catch (Exception ex)
+                {
+                    // A dialog can throw (e.g. another ContentDialog is open) —
+                    // treat that as a cancel rather than faulting the save.
+                    Common.Log.Warn(ex, "listen-address confirmation dialog failed");
+                    return;
+                }
                 if (!confirmed) return;
             }
 
             s.ListenAddress = selectedListen;
             // Ensure an app-generated key exists for a non-loopback bind; it is
-            // handed to the server as --api-key at the next launch.
+            // handed to the server via --api-key-file at the next launch and
+            // surfaced in the Listen On card for copy.
             if (Common.ServerAuth.RequiresApiKey(selectedListen) && string.IsNullOrWhiteSpace(s.ServerApiKey))
             {
                 s.ServerApiKey = Common.ServerAuth.GenerateApiKey();
