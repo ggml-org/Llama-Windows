@@ -132,4 +132,25 @@ public sealed class LlamaManagerPathResolutionTests : IDisposable
     {
         Assert.False(LlamaManager.IsManagedPath(Path.Combine(_root, "llama.exe")));
     }
+
+    // ---- Interpreter path (install script) ----
+
+    [Fact]
+    public void PowerShellExePath_IsAbsoluteAndUnderSystemDirectory()
+    {
+        var path = LlamaManager.PowerShellExePath;
+
+        // A bare "powershell.exe" would resolve through the CreateProcess
+        // search order (app dir/CWD before %SystemRoot%) — the interpreter
+        // must be pinned to the OS copy.
+        Assert.True(Path.IsPathRooted(path));
+        Assert.StartsWith(
+            Environment.SystemDirectory,
+            path,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.EndsWith(
+            Path.Combine("WindowsPowerShell", "v1.0", "powershell.exe"),
+            path,
+            StringComparison.OrdinalIgnoreCase);
+    }
 }

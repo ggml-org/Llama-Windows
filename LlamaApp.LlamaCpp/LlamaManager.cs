@@ -2637,6 +2637,15 @@ public sealed class LlamaManager
     // ---- Install ----
 
     /// <summary>
+    /// Absolute path of Windows PowerShell 5.1 — the interpreter the install
+    /// script runs under. Internal so tests can pin the invariant. (Deliberate
+    /// duplicate of the pin on security/at-rest-and-webview-hardening so this
+    /// branch is safe to merge alone; resolve to one definition when merging.)
+    /// </summary>
+    internal static string PowerShellExePath =>
+        Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
+
+    /// <summary>
     /// Downloads <see cref="InstallScriptUrl"/> and runs it with PowerShell
     /// (<c>-ExecutionPolicy Bypass -File</c>). The download is pinned to the
     /// exact HTTPS URL and bounded in size (see <see cref="InstallScriptIntegrity"/>);
@@ -2665,8 +2674,15 @@ public sealed class LlamaManager
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
                 client.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
+
+                // One 30s budget across headers AND body: with
+                // ResponseHeadersRead, the HttpClient timeout only covers the
+                // headers, and a hostile trickling endpoint could otherwise
+                // stretch the body read indefinitely (bytes are capped, time
+                // wasn't).
+                using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
                 using var resp = await client.GetAsync(
-                    InstallScriptUrl, HttpCompletionOption.ResponseHeadersRead, cancel);
+                    InstallScriptUrl, HttpCompletionOption.ResponseHeadersRead, budget.Token);
 
                 var responseVerdict = InstallScriptIntegrity.ValidateResponse(
                     (int)resp.StatusCode, resp.RequestMessage?.RequestUri, resp.Content.Headers.ContentLength);
@@ -2674,8 +2690,8 @@ public sealed class LlamaManager
                     throw new IOException(
                         $"Refusing to run install.ps1: {InstallScriptIntegrity.Describe(responseVerdict)}.");
 
-                await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
-                scriptBytes = await InstallScriptIntegrity.ReadBoundedAsync(stream, cancel: cancel);
+                await using var stream = await resp.Content.ReadAsStreamAsync(budget.Token);
+                scriptBytes = await InstallScriptIntegrity.ReadBoundedAsync(stream, cancel: budget.Token);
             }
 
             var sha256 = InstallScriptIntegrity.Sha256Hex(scriptBytes);
@@ -2695,7 +2711,13 @@ public sealed class LlamaManager
 
             var psi = new ProcessStartInfo
             {
-                FileName = "powershell.exe",
+                // Absolute path: with UseShellExecute=false a bare
+                // "powershell.exe" resolves through the CreateProcess search
+                // order (the app's directory and the CWD before %SystemRoot%),
+                // so a planted executable in either would run the install
+                // script regardless of every hash/URL/size check above.
+                FileName = PowerShellExePath,
+                WorkingDirectory = Path.GetTempPath(),
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
