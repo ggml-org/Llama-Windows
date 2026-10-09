@@ -261,11 +261,12 @@ public sealed class RuntimeUpdateScheduler
             Log.Info($"llama.cpp runtime update available: installed b{installed}, latest b{latest} — installing");
             try
             {
-                // InstallAsync surfaces failure via its own log + InstallState;
-                // either way the weekly check is done — a failure is not
-                // retried hourly (it would hammer install.ps1 for a
-                // systematic problem).
-                var installedOk = await manager.InstallAsync(CancellationToken.None);
+                // Unattended: require a pinned script hash. While
+                // InstallScriptIntegrity.PinnedSha256 is null the install is
+                // refused (logged by InstallAsync) rather than executing an
+                // unverified remote script on a weekly timer.
+                var installedOk = await manager.InstallAsync(
+                    CancellationToken.None, allowUnpinnedInstall: false);
                 if (installedOk)
                     RuntimeUpdated?.Invoke(latest.Value);
                 return installedOk ? CheckOutcome.Installed : CheckOutcome.InstallFailed;

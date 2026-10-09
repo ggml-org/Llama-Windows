@@ -73,7 +73,7 @@ public sealed class LlamaManager
     }
 
     /// <summary>URL of the official Windows install script.</summary>
-    private static readonly Uri InstallScriptUrl = new("https://llama.app/install.ps1");
+    private static readonly Uri InstallScriptUrl = new(InstallScriptIntegrity.ExpectedScriptUrl);
 
     /// <summary>
     /// The install dir <c>install.ps1</c> targets — on the user PATH by default,
@@ -586,12 +586,12 @@ public sealed class LlamaManager
     /// (Re)installs the app-managed binary by downloading and executing
     /// <see cref="InstallScriptUrl"/>. Also, the retry entry point.
     /// </summary>
-    public async Task<bool> InstallAsync(CancellationToken cancel = default)
+    public async Task<bool> InstallAsync(CancellationToken cancel = default, bool allowUnpinnedInstall = true)
     {
         State = InstallState.Installing;
         try
         {
-            await DownloadAndRunInstallerAsync(cancel);
+            await DownloadAndRunInstallerAsync(allowUnpinnedInstall, cancel);
             // Exit code 0 = success (DownloadAndRunInstallerAsync throws
             // otherwise): llama is now on PATH. Resolve its absolute path
             // dynamically ("which") instead of assuming a fixed location —
@@ -2637,30 +2637,61 @@ public sealed class LlamaManager
     // ---- Install ----
 
     /// <summary>
-    /// Downloads <see cref="InstallScriptUrl"/> to a temp file and runs it with
-    /// PowerShell (<c>-ExecutionPolicy Bypass -File</c>), inheriting the app's
-    /// stdout/stderr for logging. Throws on a non-zero exit code or download
-    /// failure. Mirrors what running <c>iex (iwr llama.app/install.ps1)</c> does
-    /// but as an explicit downloaded file so the script source is auditable.
+    /// Downloads <see cref="InstallScriptUrl"/> and runs it with PowerShell
+    /// (<c>-ExecutionPolicy Bypass -File</c>). The download is pinned to the
+    /// exact HTTPS URL and bounded in size (see <see cref="InstallScriptIntegrity"/>);
+    /// redirects are refused rather than followed, and the body's SHA-256 is
+    /// logged so an install is auditable after the fact. When
+    /// <paramref name="allowUnpinned"/> is false (the unattended weekly
+    /// update) the script must also match
+    /// <see cref="InstallScriptIntegrity.PinnedSha256"/> — otherwise it is
+    /// refused rather than executed unverified. Throws on any integrity
+    /// failure, a non-zero exit code, or a download failure.
     /// </summary>
-    private static async Task DownloadAndRunInstallerAsync(CancellationToken cancel)
+    private static async Task DownloadAndRunInstallerAsync(bool allowUnpinned, CancellationToken cancel)
     {
         var scriptPath = Path.Combine(Path.GetTempPath(), $"llama-install-{Guid.NewGuid():N}.ps1");
         try
         {
+            byte[] scriptBytes;
+
             // Deliberately NOT the shared _http: this is an internet download
             // (llama.app), not a loopback call — the system proxy is welcome
-            // here, and the BaseAddress wouldn't apply.
-            using (var client = new HttpClient())
+            // here, and the BaseAddress wouldn't apply. Auto-redirect is off
+            // so a 30x is surfaced (and refused) instead of silently followed
+            // to another host.
+            using (var handler = new SocketsHttpHandler { AllowAutoRedirect = false })
+            using (var client = new HttpClient(handler))
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
                 client.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
-                using var resp = await client.GetAsync(InstallScriptUrl, cancel);
-                
-                resp.EnsureSuccessStatusCode();
-                await using var fs = File.Create(scriptPath);
-                await resp.Content.CopyToAsync(fs, cancel);
+                using var resp = await client.GetAsync(
+                    InstallScriptUrl, HttpCompletionOption.ResponseHeadersRead, cancel);
+
+                var responseVerdict = InstallScriptIntegrity.ValidateResponse(
+                    (int)resp.StatusCode, resp.RequestMessage?.RequestUri, resp.Content.Headers.ContentLength);
+                if (!InstallScriptIntegrity.IsOk(responseVerdict))
+                    throw new IOException(
+                        $"Refusing to run install.ps1: {InstallScriptIntegrity.Describe(responseVerdict)}.");
+
+                await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
+                scriptBytes = await InstallScriptIntegrity.ReadBoundedAsync(stream, cancel: cancel);
             }
+
+            var sha256 = InstallScriptIntegrity.Sha256Hex(scriptBytes);
+            // Logged so a failed install can be correlated with exactly what
+            // ran — the script file itself is deleted on the way out.
+            Log.Info($"install.ps1 downloaded from {InstallScriptUrl}: {scriptBytes.Length} bytes, sha256={sha256}");
+
+            var hashVerdict = InstallScriptIntegrity.ValidateHash(sha256);
+            if (hashVerdict == InstallScriptVerdict.HashMismatch ||
+                (hashVerdict == InstallScriptVerdict.Unpinned && !allowUnpinned))
+            {
+                throw new IOException(
+                    $"Refusing to run install.ps1: {InstallScriptIntegrity.Describe(hashVerdict)}.");
+            }
+
+            await File.WriteAllBytesAsync(scriptPath, scriptBytes, cancel);
 
             var psi = new ProcessStartInfo
             {
