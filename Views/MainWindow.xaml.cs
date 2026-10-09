@@ -2028,6 +2028,19 @@ namespace LlamaApp.Views
             VersionText.Text = LlamaRunner.Version is { } v
                 ? $"{appVer} - {v}"
                 : appVer;
+            DevBuildBadge.Visibility = IsPackaged()
+                ? Microsoft.UI.Xaml.Visibility.Collapsed
+                : Microsoft.UI.Xaml.Visibility.Visible;
+        }
+
+        /// <summary>
+        /// True when running from the MSIX package (every official release);
+        /// false for a loose-files dev build, which gets the footer's "dev" label.
+        /// </summary>
+        private static bool IsPackaged()
+        {
+            uint length = 0;
+            return GetCurrentPackageFullName(ref length, null) != APPMODEL_ERROR_NO_PACKAGE;
         }
 
         /// <summary>
@@ -3307,6 +3320,11 @@ namespace LlamaApp.Views
         private static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);
 
         private const int MDT_EFFECTIVE_DPI = 0;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern int GetCurrentPackageFullName(ref uint packageFullNameLength, char[]? packageFullName);
+
+        private const int APPMODEL_ERROR_NO_PACKAGE = 15700;
 
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         [return: MarshalAs(UnmanagedType.Bool)]

@@ -1217,6 +1217,15 @@
                        FontSize="11"
                        FontWeight="SemiBold"
                        Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+            <!-- Dev-build badge: shown only when the app runs unpackaged
+                 (a local `dotnet publish`), never in the MSIX release, so a
+                 dev build can't be mistaken for the installed one. -->
+            <TextBlock x:Name="DevBuildBadge"
+                       Text="dev"
+                       FontSize="11"
+                       Visibility="Collapsed"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                       ToolTipService.ToolTip="Development build (unpackaged)" />
             <!-- Device indicator: the GPU card glyph (accent color) when the
                  llama binary's device probe (llama - -list-devices) reports
                  accelerator devices (CUDA / Vulkan) — the tooltip names them
