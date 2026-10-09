@@ -24,6 +24,7 @@ public sealed class ModelItemDetailsViewModelTests
     {
         public int ServerPort => 9931;
         public string ServerAddress => "localhost";
+        public string? ApiKey => null;
         public List<string> CopiedTexts { get; } = [];
         public List<string> OpenedUris { get; } = [];
         public List<ModelItem> Loads { get; } = [];

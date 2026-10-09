@@ -67,6 +67,44 @@ public sealed partial class OverlayWindow : Window
         InitializeComponent();
         ConfigureAsOverlay();
         Activated += OverlayWindow_Activated;
+        AttachWebUiAuthHeader();
+    }
+
+    /// <summary>
+    /// Makes the embedded WebUI work against an authenticated (non-loopback)
+    /// server without putting the API key in a URL. llama.cpp's WebUI reads
+    /// its key from a typed dialog — there is no query-parameter form — so a
+    /// <c>?api_key=</c> would be ignored by the page and still leak into
+    /// WebView caches, browser history and server logs. Instead, once the
+    /// WebView2's CoreWebView2 comes up (CoreWebView2Initialized fires for
+    /// the implicit initialization triggered by the first Source assignment),
+    /// register a resource filter for the server origin and add the
+    /// <c>Authorization</c> header to every request the WebUI makes — the
+    /// splash never appears and the key never leaves the process's memory as
+    /// a URL.
+    /// </summary>
+    private void AttachWebUiAuthHeader()
+    {
+        ModelWebUi.CoreWebView2Initialized += (sender, e) =>
+        {
+            if (e.Exception is not null)
+            {
+                Common.Log.Warn(e.Exception, "overlay webview: initialization failed");
+                return;
+            }
+
+            var key = LlamaManager.Shared.ApiKey;
+            var core = ModelWebUi.CoreWebView2;
+            if (key is null || core is null) return; // loopback bind — no auth
+
+            var origin =
+                $"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}/*";
+            core.AddWebResourceRequestedFilter(
+                origin, Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext.All);
+            core.WebResourceRequested += (s, args) =>
+                args.Request.Headers.SetHeader("Authorization", $"Bearer {key}");
+            Common.Log.Info("overlay webview: API-key header attached for the authenticated WebUI");
+        };
     }
 
     /// <summary>Style as a borderless, taskbar-less spotlight popup centered on screen.</summary>
@@ -142,6 +180,8 @@ public sealed partial class OverlayWindow : Window
     {
         var baseUrl = $"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}";
         var id = LlamaManager.Shared.LoadedModelId;
+        // No api_key in the URL: the WebUI reads its key from a dialog (see
+        // AttachWebUiAuthHeader — the header is injected per request instead).
         return id is null
             ? new Uri(baseUrl)
             : new Uri($"{baseUrl}?model={Uri.EscapeDataString(id)}");

@@ -103,6 +103,7 @@ namespace LlamaApp
             PortBox.Value = s.ServerPort;
             PopulateListenAddressBox();
             SelectComboBoxTag(ListenAddressBox, s.ListenAddress, Common.ListenAddresses.Localhost);
+            UpdateApiKeyPanel();
             // Select the idle-unload choice matching the saved seconds; an
             // unrecognized value (hand-edited settings.json) falls back to
             // Never, the safe default.
@@ -148,6 +149,49 @@ namespace LlamaApp
                     Tag = entry.Address,
                 });
             }
+            // Idempotent subscription — LoadCurrent may run more than once
+            // over the window's lifetime.
+            ListenAddressBox.SelectionChanged -= ListenAddressBox_SelectionChanged;
+            ListenAddressBox.SelectionChanged += ListenAddressBox_SelectionChanged;
+        }
+
+        /// <summary>
+        /// Shows the app-generated server API key when the selected (or saved)
+        /// listen address exposes the server beyond this machine. llama.cpp's
+        /// WebUI reads its key from a typed dialog — there is no URL form — so
+        /// the user must be able to see and copy it; Llama's own client and the
+        /// chat overlay connect with it automatically.
+        /// </summary>
+        private void UpdateApiKeyPanel()
+        {
+            var selected = (ListenAddressBox.SelectedItem as ComboBoxItem)?.Tag as string;
+            var needsKey = Common.ServerAuth.RequiresApiKey(selected);
+
+            ApiKeyPanel.Visibility = needsKey
+                ? Microsoft.UI.Xaml.Visibility.Visible
+                : Microsoft.UI.Xaml.Visibility.Collapsed;
+            if (!needsKey) return;
+
+            // The key is generated at save/startup; before that the placeholder
+            // says so.
+            var key = Settings.Current.ServerApiKey;
+            ApiKeyBox.Text = string.IsNullOrWhiteSpace(key) ? "" : key;
+            CopyApiKeyButton.IsEnabled = !string.IsNullOrWhiteSpace(key);
+        }
+
+        private void ListenAddressBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+            => UpdateApiKeyPanel();
+
+        /// <summary>Copies the server API key to the clipboard.</summary>
+        private void CopyApiKey_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            var key = ApiKeyBox.Text;
+            if (string.IsNullOrWhiteSpace(key)) return;
+
+            var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            package.SetText(key);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+            Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
         }
 
         /// <summary>
@@ -351,6 +395,25 @@ namespace LlamaApp
             await d.ShowAsync();
         }
 
+        /// <summary>
+        /// A yes/no confirmation. True only when the primary button is picked;
+        /// closing the dialog (Esc / light-dismiss) is a cancel.
+        /// </summary>
+        private async Task<bool> ConfirmAsync(string title, string message)
+        {
+            var d = new Microsoft.UI.Xaml.Controls.ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = title,
+                Content = message,
+                PrimaryButtonText = "Continue",
+                CloseButtonText = "Cancel",
+                DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Primary,
+            };
+            var result = await d.ShowAsync();
+            return result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary;
+        }
+
         private async void Browse_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             // FolderPicker requires an owner HWND in unpackaged WinUI 3 apps.
@@ -372,7 +435,7 @@ namespace LlamaApp
             }
         }
 
-        private void Save_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        private async void Save_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             var s = Settings.Current;
             s.HuggingFaceToken = TokenBox.Password;
@@ -389,8 +452,45 @@ namespace LlamaApp
             // The ComboBox items carry the IPv4 address in their Tag. Applied
             // the next time the app starts (the manager's bind address and REST
             // client are fixed at construction).
-            s.ListenAddress = (ListenAddressBox.SelectedItem as ComboBoxItem)?.Tag as string
+            var selectedListen = (ListenAddressBox.SelectedItem as ComboBoxItem)?.Tag as string
                 ?? Common.ListenAddresses.Localhost;
+
+            // Anything beyond loopback publishes the server to the network.
+            // Make that an explicit, informed choice: confirm when the
+            // selection moves off localhost (the app then protects the server
+            // with an API key — see below).
+            if (Common.ServerAuth.RequiresApiKey(selectedListen) &&
+                !string.Equals(selectedListen, s.ListenAddress, StringComparison.OrdinalIgnoreCase))
+            {
+                bool confirmed;
+                try
+                {
+                    confirmed = await ConfirmAsync(
+                        "Expose the llama server?",
+                        "Devices on your network will be able to reach the llama server. " +
+                        "Llama protects it with an API key — shown in Settings so you can " +
+                        "copy it if the WebUI asks — but anyone who learns the key " +
+                        "can load, run and delete your models. Continue?");
+                }
+                catch (Exception ex)
+                {
+                    // A dialog can throw (e.g. another ContentDialog is open) —
+                    // treat that as a cancel rather than faulting the save.
+                    Common.Log.Warn(ex, "listen-address confirmation dialog failed");
+                    return;
+                }
+                if (!confirmed) return;
+            }
+
+            s.ListenAddress = selectedListen;
+            // Ensure an app-generated key exists for a non-loopback bind; it is
+            // handed to the server via --api-key-file at the next launch and
+            // surfaced in the Listen On card for copy.
+            if (Common.ServerAuth.RequiresApiKey(selectedListen) && string.IsNullOrWhiteSpace(s.ServerApiKey))
+            {
+                s.ServerApiKey = Common.ServerAuth.GenerateApiKey();
+                Common.Log.Info("generated an API key for the non-loopback listen address");
+            }
 
             // The ComboBox items carry the seconds in their Tag. Applied the
             // next time the server starts (it's a launch argument), so no
@@ -412,11 +512,14 @@ namespace LlamaApp
             s.CacheTypeV = (KvCacheVBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "f16";
 
             // Validate the free-form serve arguments before saving: an open
-            // quote would otherwise only surface as a launch failure after the
-            // user has already closed the window.
+            // quote or a reserved flag (managed by the app — e.g. --host,
+            // --port, --api-key) would otherwise only surface as a launch
+            // failure after the user has already closed the window.
             try
             {
-                _ = Common.ArgumentTokenizer.Tokenize(CustomArgsBox.Text);
+                var tokens = Common.ArgumentTokenizer.Tokenize(CustomArgsBox.Text);
+                if (Common.ServeArgumentPolicy.Validate(tokens) is { } reservedError)
+                    throw new FormatException(reservedError);
                 CustomArgsErrorText.Text = "";
                 CustomArgsErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
             }

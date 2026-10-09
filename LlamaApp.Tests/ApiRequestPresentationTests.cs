@@ -76,4 +76,39 @@ public sealed class ApiRequestPresentationTests
         var start = cmd.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
         return cmd[start..cmd.LastIndexOf('\'')];
     }
+
+    // ---- API-key threading (non-loopback binds) ----
+
+    [Fact]
+    public void BuildWebUiUrl_NeverCarriesTheApiKey()
+    {
+        // llama.cpp's WebUI reads its key from a typed dialog (no query form);
+        // a ?api_key= would be ignored by the page and leak into browser
+        // history, caches and server logs. The key must never be in a URL.
+        var url = ApiRequestPresentation.BuildWebUiUrl(
+            "192.168.1.42", 9931, "a/b:Q4_K_M");
+
+        Assert.Equal("http://192.168.1.42:9931?model=a%2Fb%3AQ4_K_M", url);
+        Assert.DoesNotContain("api_key", url);
+    }
+
+    [Fact]
+    public void BuildCurlCommand_WithKey_IncludesBearerHeader()
+    {
+        var cmd = ApiRequestPresentation.BuildCurlCommand(
+            "192.168.1.42", 9931, "a/b:Q4_K_M", apiKey: "cafe1234");
+
+        Assert.Contains("-H \"Authorization: Bearer cafe1234\"", cmd);
+        // The header sits before the payload so the request is well-formed.
+        Assert.True(cmd.IndexOf("Authorization") < cmd.IndexOf("-d "));
+    }
+
+    [Fact]
+    public void BuildCurlCommand_WithoutKey_HasNoBearerHeader()
+    {
+        var cmd = ApiRequestPresentation.BuildCurlCommand(
+            "127.0.0.1", 9931, "a/b:Q4_K_M", apiKey: null);
+
+        Assert.DoesNotContain("Authorization", cmd);
+    }
 }

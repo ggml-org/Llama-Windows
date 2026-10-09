@@ -1638,6 +1638,8 @@ namespace LlamaApp.Views
 
         string IModelItemDetailsHost.ServerAddress => LlamaManager.Shared.ConnectAddress;
 
+        string? IModelItemDetailsHost.ApiKey => LlamaManager.Shared.ApiKey;
+
         /// <summary>The play-glyph path, reused unchanged by the details Chat action.</summary>
         Task IModelItemDetailsHost.LoadModelAsync(ModelItem model)
         {
@@ -1802,9 +1804,14 @@ namespace LlamaApp.Views
 
             var serverModelId = ((IModel)item).ServerModelId;
             Log.Info("open clicked for " + serverModelId);
-            
-            var url = $"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}?model={Uri.EscapeDataString(serverModelId)}";
-            await Windows.System.Launcher.LaunchUriAsync(new Uri(url));
+
+            // No api_key in the URL: it would leak into browser history and
+            // the llama.cpp WebUI reads its key from a dialog anyway. The key
+            // lives in Settings (copyable) if the WebUI asks for it.
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(
+                ApiRequestPresentation.BuildWebUiUrl(
+                    LlamaManager.Shared.ConnectAddress, LlamaManager.Shared.ServerPort,
+                    serverModelId)));
         }
 
         /// <summary>
@@ -2617,6 +2624,8 @@ namespace LlamaApp.Views
         private async void ServerLink_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             // Open the running llama server's WebUI in the system browser.
+            // No api_key in the URL (browser history leak; the WebUI reads its
+            // key from a typed dialog — copyable from Settings).
             await Windows.System.Launcher.LaunchUriAsync(
                 new System.Uri($"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}"));
         }

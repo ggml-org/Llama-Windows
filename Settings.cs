@@ -70,6 +70,15 @@ public sealed class Settings
     public string ListenAddress { get; set; } = LlamaApp.Common.ListenAddresses.Localhost;
 
     /// <summary>
+    /// Key the app generates and hands to the llama server via <c>--api-key-file</c>
+    /// when <see cref="ListenAddress"/> is not loopback, so a network-exposed
+    /// server isn't an open control API. Reused across restarts (and across the
+    /// switch back to a non-loopback bind) so an adopted server stays
+    /// reachable. Empty for the default loopback bind, which needs no key.
+    /// </summary>
+    public string ServerApiKey { get; set; } = "";
+
+    /// <summary>
     /// Seconds of idleness after which the llama server unloads the model from
     /// memory: 300 (5 min), 900 (15 min), 3600 (1 hour), or -1 (never, the
     /// default). Handed to the server as <c>--sleep-idle-seconds</c> at launch

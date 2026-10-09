@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Linq;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -56,9 +57,12 @@ public sealed class LlamaManager
     /// <see cref="Shared"/> access: both are baked in at construction and
     /// every health probe / launch argument / REST URL derives from them, so
     /// changed settings only take effect on the next app launch. A null,
-    /// blank, or unparseable address falls back to loopback.
+    /// blank, or unparseable address falls back to loopback. When
+    /// <paramref name="apiKey"/> is non-empty it is sent as a Bearer token on
+    /// every request and passed to the server via a per-user key file
+    /// (<c>--api-key-file</c>).
     /// </summary>
-    public static LlamaManager Initialize(int serverPort, string? listenAddress = null)
+    public static LlamaManager Initialize(int serverPort, string? listenAddress = null, string? apiKey = null)
     {
         if (_shared is not null)
             throw new InvalidOperationException("LlamaManager is already initialized.");
@@ -68,7 +72,7 @@ public sealed class LlamaManager
             listenAddress = Common.ListenAddresses.Localhost;
         else if (parsed.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
             listenAddress = Common.ListenAddresses.Localhost; // IPv4 only — matches the server's bind.
-        _shared = new LlamaManager(serverPort, listenAddress);
+        _shared = new LlamaManager(serverPort, listenAddress, apiKey);
         return _shared;
     }
 
@@ -176,6 +180,19 @@ public sealed class LlamaManager
     /// bind flag and the client never disagree.
     /// </summary>
     public string ConnectAddress { get; }
+
+    /// <summary>
+    /// API key the app generated for a non-loopback bind, or null for the
+    /// default loopback server (which needs none). Sent as a Bearer token on
+    /// every REST request and handed to the server via a per-user key file
+    /// (<c>--api-key-file</c> — never an argv flag, which any local user could
+    /// read via WMI), so a network-exposed server isn't an open control API.
+    /// It must never appear in URLs (browser/WebView history, caches, server
+    /// logs): the overlay injects it as a request header, the sample curl uses
+    /// the Authorization header, and Settings shows it for copy if the
+    /// server's WebUI ever asks for it.
+    /// </summary>
+    public string? ApiKey { get; }
 
     /// <summary>
     /// The address the app's REST client connects to for a given bind address:
@@ -398,7 +415,7 @@ public sealed class LlamaManager
     /// </summary>
     public event EventHandler<IReadOnlyList<ServerModel>>? ModelsChanged;
 
-    private LlamaManager(int serverPort, string listenAddress)
+    private LlamaManager(int serverPort, string listenAddress, string? apiKey)
     {
         ServerPort = serverPort;
         ListenAddress = listenAddress;
@@ -407,6 +424,7 @@ public sealed class LlamaManager
         // client, pick loopback, the one address that is always among them.
         var connectAddress = ConnectAddressFor(listenAddress);
         ConnectAddress = connectAddress;
+        ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
         _http = new HttpClient(new SocketsHttpHandler { UseProxy = false })
         {
             BaseAddress = new Uri($"http://{connectAddress}:{serverPort}"),
@@ -415,6 +433,10 @@ public sealed class LlamaManager
         // Same User-Agent as the internet-facing clients — the loopback
         // server logs then identify the caller consistently.
         _http.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
+        // A non-loopback server requires an API key; set it once here so every
+        // probe, poll, SSE stream and chat request carries it.
+        if (ApiKey is not null)
+            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
 
         // The supervisor is the ONLY source of truth for server status: it
         // polls the HTTP API for the app's whole lifetime and derives
@@ -630,9 +652,14 @@ public sealed class LlamaManager
     /// <c>--models-max</c>; supported non-empty
     /// <paramref name="cacheTypeK"/>/<paramref name="cacheTypeV"/> values add
     /// <c>--cache-type-k</c>/<c>--cache-type-v</c>; a non-null
-    /// <paramref name="contextPresetPath"/> adds <c>--models-preset</c>;
-    /// <paramref name="customArguments"/> tokens are appended LAST so they can
-    /// override the built-in flags (llama.cpp honors the last occurrence).
+    /// <paramref name="contextPresetPath"/> adds <c>--models-preset</c>; a
+    /// non-empty <paramref name="apiKeyFilePath"/> adds
+    /// <c>--api-key-file</c> (only set for a non-loopback bind — the key
+    /// itself is NEVER a process argument, which any local user can read via
+    /// WMI); <paramref name="customArguments"/> tokens are
+    /// appended LAST so they can override the built-in flags (llama.cpp honors
+    /// the last occurrence) — except the reserved bind/auth flags, which
+    /// <see cref="ServeArgumentPolicy"/> refuses before this is reached.
     /// </summary>
     internal static List<string> BuildServeArguments(
         int serverPort,
@@ -642,7 +669,8 @@ public sealed class LlamaManager
         string? cacheTypeK,
         string? cacheTypeV,
         string? contextPresetPath,
-        IReadOnlyList<string>? customArguments)
+        IReadOnlyList<string>? customArguments,
+        string? apiKeyFilePath = null)
     {
         // `serve` is the unified subcommand (replaces the old llama-server).
         // Router mode hosts the webui and serves requests even with no model
@@ -657,6 +685,18 @@ public sealed class LlamaManager
             serverPort.ToString(),
             "--jinja",
         };
+
+        // Non-loopback binds get an app-generated key so the server isn't an
+        // open control API on the network. Handed over as a per-user key FILE
+        // (llama.cpp reads the first line) rather than a --api-key argument —
+        // the process command line is readable by any local user via WMI.
+        // App-owned, so it is never overridable from custom arguments
+        // (ServeArgumentPolicy reserves --api-key and --api-key-file).
+        if (!string.IsNullOrWhiteSpace(apiKeyFilePath))
+        {
+            args.Add("--api-key-file");
+            args.Add(apiKeyFilePath);
+        }
 
         // Idle model unload. Done server-side because the server is the only
         // place that sees ALL model traffic — the overlay's WebUI chats
@@ -809,6 +849,17 @@ public sealed class LlamaManager
             return false;
         }
 
+        // Defense in depth: the Settings window also validates reserved flags,
+        // but a hand-edited settings.json must not be able to silently override
+        // --host/--port (exposing the server) or --api-key (disabling auth).
+        if (Common.ServeArgumentPolicy.Validate(customArguments) is { } reservedError)
+        {
+            Log.Error($"custom serve arguments rejected: {reservedError}");
+            FailureMessage = reservedError;
+            ServerStatus = ServerState.Failed;
+            return false;
+        }
+
         // A fresh attempt invalidates whatever the previous launch failed
         // with; a new reason is set below if this one fails too.
         FailureMessage = null;
@@ -828,9 +879,22 @@ public sealed class LlamaManager
             // via --models-preset (see BuildServeArguments). Written fresh every
             // launch from the current preferences.
             var contextPresetPath = WriteContextPresetsIni();
+            // Materialize the app-generated key (non-loopback binds) into a
+            // per-user file right before launch: the server reads it via
+            // --api-key-file, so the key never appears in argv, process
+            // listings, or WMI queries. Rewritten every launch; the value is
+            // stable (persisted in settings.json) so an adopted server keeps
+            // accepting it across app restarts.
+            string? apiKeyFilePath = null;
+            if (ApiKey is not null)
+            {
+                apiKeyFilePath = Path.Combine(Common.AppData.Root, ".llama.apikey");
+                Directory.CreateDirectory(Path.GetDirectoryName(apiKeyFilePath)!);
+                File.WriteAllText(apiKeyFilePath, ApiKey);
+            }
             foreach (var arg in BuildServeArguments(
                          ServerPort, ListenAddress, IdleUnloadSeconds, MaxLoadedModels,
-                         CacheTypeK, CacheTypeV, contextPresetPath, customArguments))
+                         CacheTypeK, CacheTypeV, contextPresetPath, customArguments, apiKeyFilePath))
                 psi.ArgumentList.Add(arg);
 
             // Point the HF cache at the user-configured directory so the server
@@ -851,8 +915,9 @@ public sealed class LlamaManager
 
             var customArgsText = customArguments.Count == 0
                 ? ""
-                : " " + string.Join(' ', customArguments);
+                : " " + Common.ServeArgumentPolicy.RedactForLog(customArguments);
             Log.Info($"starting llama server: {BinaryPath} serve --host {ListenAddress} --port {ServerPort} --jinja" +
+                (ApiKey is not null ? $" --api-key-file {apiKeyFilePath}" : "") +
                 (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : "") +
                 (MaxLoadedModels > 0 ? $" --models-max {MaxLoadedModels}" : "") +
                 (!string.IsNullOrWhiteSpace(CacheTypeK) ? $" --cache-type-k {CacheTypeK}" : "") +

@@ -514,15 +514,44 @@
                                                    VerticalAlignment="Center" />
                                     </Grid>
                                     <TextBlock Grid.Row="1"
-                                               Text="Network address the llama server binds to — localhost (127.0.0.1, this machine only), a specific interface's IP, or all interfaces (0.0.0.0, reachable from other devices on your network). Takes effect the next time the app starts."
+                                               Text="Network address the llama server binds to — localhost (127.0.0.1, this machine only), a specific interface's IP, or all interfaces (0.0.0.0). Beyond localhost the server is reachable from other devices on your network; Llama then requires an API key it generates for you. Takes effect the next time the app starts."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
-                                    <ComboBox x:Name="ListenAddressBox"
-                                              Grid.Row="2"
-                                              VerticalAlignment="Bottom"
-                                              HorizontalAlignment="Stretch"
-                                              ToolTipService.ToolTip="Address the llama server listens on" />
+                                    <StackPanel Grid.Row="2"
+                                                Spacing="10"
+                                                VerticalAlignment="Bottom">
+                                        <ComboBox x:Name="ListenAddressBox"
+                                                  HorizontalAlignment="Stretch"
+                                                  ToolTipService.ToolTip="Address the llama server listens on" />
+                                        <!-- API key for a non-loopback bind: llama.cpp's WebUI
+                                             reads its key from a typed dialog (no URL form),
+                                             so the user needs to see and copy it. -->
+                                        <StackPanel x:Name="ApiKeyPanel"
+                                                    Spacing="6"
+                                                    Visibility="Collapsed">
+                                            <TextBlock Text="API key — the llama WebUI may ask for it once; copy it if it does. The chat overlay and Llama itself connect automatically."
+                                                       FontSize="12"
+                                                       Opacity="0.6"
+                                                       TextWrapping="Wrap" />
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBox x:Name="ApiKeyBox"
+                                                         IsReadOnly="True"
+                                                         FontFamily="Consolas"
+                                                         PlaceholderText="Generated when you save"
+                                                         ToolTipService.ToolTip="The app-generated server API key" />
+                                                <Button x:Name="CopyApiKeyButton"
+                                                        Grid.Column="1"
+                                                        Content="Copy"
+                                                        Click="CopyApiKey_Click"
+                                                        ToolTipService.ToolTip="Copy the API key to the clipboard" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </StackPanel>
                                 </Grid>
                             </Border>
 
@@ -745,7 +774,7 @@
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock Text="Extra arguments appended after the built-in ones, so they can override them. Use the same syntax as the llama.cpp command line — quote values that contain spaces. Applies the next time the llama server starts; if the server rejects a flag, the failure reason appears on the status dot."
+                                    <TextBlock Text="Extra arguments appended after the built-in ones, so they can override them. Use the same syntax as the llama.cpp command line — quote values that contain spaces. The server's bind flags (--host, --port), --api-key and --models-preset are managed by Llama and can't be used here. Applies the next time the llama server starts; if the server rejects a flag, the failure reason appears on the status dot."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />

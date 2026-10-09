@@ -15,9 +15,12 @@ public static class ApiRequestPresentation
     /// <summary>
     /// A ready-to-run curl command against the local server's chat endpoint
     /// for <paramref name="serverModelId"/> (the canonical <c>repo:quant</c>
-    /// id — the <c>model</c> field the server requires).
+    /// id — the <c>model</c> field the server requires). When
+    /// <paramref name="apiKey"/> is set (non-loopback bind) an
+    /// <c>Authorization: Bearer</c> header is included.
     /// </summary>
-    public static string BuildCurlCommand(string serverAddress, int serverPort, string serverModelId)
+    public static string BuildCurlCommand(
+        string serverAddress, int serverPort, string serverModelId, string? apiKey = null)
     {
         // Serialize, never interpolate: the id can come from the llama.app
         // catalog, Hub search, or an adopted server, and a quote/backslash/
@@ -33,8 +36,13 @@ public static class ApiRequestPresentation
         // embedded single quote is escaped the POSIX way ('\'').
         var quotedBody = "'" + body.Replace("'", "'\\''") + "'";
 
+        // An authenticated (non-loopback) server needs the key as a header.
+        var auth = string.IsNullOrEmpty(apiKey)
+            ? ""
+            : $"-H \"Authorization: Bearer {apiKey}\" ";
         return $"curl http://{serverAddress}:{serverPort}/v1/chat/completions " +
                "-H \"Content-Type: application/json\" " +
+               auth +
                $"-d {quotedBody}";
     }
 
