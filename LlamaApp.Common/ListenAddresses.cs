@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 
@@ -25,6 +26,40 @@ public static class ListenAddresses
 
     /// <summary>Loopback address; the server is reachable only from this machine.</summary>
     public const string Localhost = "127.0.0.1";
+
+    /// <summary>
+    /// A configured listen address resolved against the interfaces that are
+    /// actually present. <see cref="FellBack"/> is true when the stored value
+    /// could not be used (unparseable, IPv6, or a specific address no longer
+    /// assigned to this machine) and <see cref="Address"/> is the safe
+    /// loopback fallback instead.
+    /// </summary>
+    public sealed record ResolvedAddress(string Address, bool FellBack);
+
+    /// <summary>
+    /// Validates a persisted listen address at startup. The binding is baked
+    /// in for the app's lifetime, so a value that is no longer local (a DHCP
+    /// lease moved to another device, a laptop that changed networks, or a
+    /// hand-edited settings.json) would otherwise send every request and every
+    /// <c>?model=</c> URL to a foreign host — or make the app adopt whatever
+    /// answers that address. <c>0.0.0.0</c> and any loopback address are always
+    /// valid; a specific interface must appear in <paramref name="available"/>.
+    /// </summary>
+    public static ResolvedAddress Resolve(string? configured, IReadOnlyList<ListenAddress> available)
+    {
+        if (string.IsNullOrWhiteSpace(configured)) return new(Localhost, true);
+
+        if (!IPAddress.TryParse(configured, out var parsed) ||
+            parsed.AddressFamily != AddressFamily.InterNetwork)
+            return new(Localhost, true);
+
+        var normalized = parsed.ToString();
+        if (normalized == AllInterfaces || IPAddress.IsLoopback(parsed)) return new(normalized, false);
+
+        var present = available.Any(e =>
+            string.Equals(e.Address, normalized, StringComparison.OrdinalIgnoreCase));
+        return present ? new(normalized, false) : new(Localhost, true);
+    }
 
     /// <summary>
     /// The addresses to show in Settings, live from the OS. Best-effort: a

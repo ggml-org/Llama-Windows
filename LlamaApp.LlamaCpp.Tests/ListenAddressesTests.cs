@@ -102,4 +102,71 @@ public sealed class ListenAddressesTests
                 ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork,
                 $"not IPv4: {e.Address}"));
     }
+
+    // ---- Resolve: startup validation of a persisted address ----
+
+    [Fact]
+    public void Resolve_Blank_FallsBackToLoopback()
+    {
+        var r = ListenAddresses.Resolve(null, []);
+        Assert.Equal(ListenAddresses.Localhost, r.Address);
+        Assert.True(r.FellBack);
+    }
+
+    [Theory]
+    [InlineData("0.0.0.0")]
+    [InlineData("127.0.0.1")]
+    [InlineData("127.0.0.5")]   // any loopback address is always local
+    [InlineData("127.0.0.1:9931")] // not an IP literal -> handled below
+    public void Resolve_PseudoAndLoopback_AreAlwaysValid(string configured)
+    {
+        var r = ListenAddresses.Resolve(configured, []);
+        if (configured.Contains(':'))
+        {
+            // Not a parseable IPv4 literal: conservative fallback.
+            Assert.True(r.FellBack);
+            Assert.Equal(ListenAddresses.Localhost, r.Address);
+        }
+        else
+        {
+            Assert.False(r.FellBack);
+            Assert.Equal(configured, r.Address);
+        }
+    }
+
+    [Fact]
+    public void Resolve_AssignedInterface_IsKept()
+    {
+        var available = ListenAddresses.BuildList(new[] { new ListenAddress("Wi-Fi", "192.168.1.42") });
+
+        var r = ListenAddresses.Resolve("192.168.1.42", available);
+
+        Assert.False(r.FellBack);
+        Assert.Equal("192.168.1.42", r.Address);
+    }
+
+    [Fact]
+    public void Resolve_UnassignedInterface_FallsBackToLoopback()
+    {
+        // The classic DHCP-change / different-network case: the address is a
+        // valid IPv4 literal but no longer belongs to this machine.
+        var available = ListenAddresses.BuildList(new[] { new ListenAddress("Wi-Fi", "192.168.1.10") });
+
+        var r = ListenAddresses.Resolve("192.168.1.42", available);
+
+        Assert.True(r.FellBack);
+        Assert.Equal(ListenAddresses.Localhost, r.Address);
+    }
+
+    [Theory]
+    [InlineData("::1")]
+    [InlineData("not-an-ip")]
+    [InlineData("999.1.1.1")]
+    [InlineData("192.168.1.42 ")]
+    public void Resolve_InvalidValues_FallBackToLoopback(string configured)
+    {
+        var r = ListenAddresses.Resolve(configured, []);
+        Assert.True(r.FellBack);
+        Assert.Equal(ListenAddresses.Localhost, r.Address);
+    }
 }
