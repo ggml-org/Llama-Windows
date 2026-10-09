@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using LlamaApp.Common;
 
@@ -299,10 +300,9 @@ public sealed class RuntimeUpdateScheduler
             }
 
             var json = await resp.Content.ReadAsStringAsync(cancel);
-            var release = JsonSerializer.Deserialize<LatestReleaseDto>(json);
-            var build = ParseReleaseBuild(release?.TagName);
+            var build = ParseLatestReleaseBuild(json);
             if (build is null)
-                Log.Warn($"llama.cpp release tag '{release?.TagName}' is not a b<build> tag; skipping");
+                Log.Warn("llama.cpp release response carried no recognizable b<build> tag; skipping");
             return build;
         }
         catch (Exception ex) when (ex is HttpRequestException
@@ -321,6 +321,20 @@ public sealed class RuntimeUpdateScheduler
     /// <summary>GitHub releases endpoint for the latest llama.cpp release.</summary>
     private static readonly Uri LatestReleaseUrl =
         new("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest");
+
+    /// <summary>
+    /// Parses the <c>releases/latest</c> JSON body into the release build
+    /// number. Returns null on malformed JSON or a tag that isn't
+    /// <c>b&lt;build&gt;</c> — the check stays due and is retried later.
+    /// Pure and internal so the JSON binding (the field is the snake_case
+    /// <c>tag_name</c>) is unit-tested without a network round-trip.
+    /// </summary>
+    internal static uint? ParseLatestReleaseBuild(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        var release = JsonSerializer.Deserialize<LatestReleaseDto>(json);
+        return ParseReleaseBuild(release?.TagName);
+    }
 
     /// <summary>
     /// True when a weekly check should run now: never checked, or the last
@@ -379,9 +393,9 @@ public sealed class RuntimeUpdateScheduler
     }
 
     /// <summary>releases/latest response — only the tag matters here.</summary>
-    private sealed class LatestReleaseDto
+    internal sealed class LatestReleaseDto
     {
-        public string? TagName { get; set; }
+        [JsonPropertyName("tag_name")] public string? TagName { get; set; }
     }
 }
 
