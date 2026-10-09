@@ -142,9 +142,12 @@ public sealed partial class OverlayWindow : Window
     {
         var baseUrl = $"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}";
         var id = LlamaManager.Shared.LoadedModelId;
-        return id is null
-            ? new Uri(baseUrl)
-            : new Uri($"{baseUrl}?model={Uri.EscapeDataString(id)}");
+        var url = id is null ? baseUrl : $"{baseUrl}?model={Uri.EscapeDataString(id)}";
+        // A non-loopback server requires the app-generated key; the WebUI
+        // accepts it as a query parameter so the overlay stays usable.
+        if (LlamaManager.Shared.ApiKey is { } key)
+            url += $"{(id is null ? "?" : "&")}api_key={Uri.EscapeDataString(key)}";
+        return new Uri(url);
     }
 
     /// <summary>

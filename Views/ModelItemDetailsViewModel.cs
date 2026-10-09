@@ -36,6 +36,13 @@ public interface IModelItemDetailsHost
     /// </summary>
     string ServerAddress { get; }
 
+    /// <summary>
+    /// The app-generated API key for a non-loopback bind, or null for the
+    /// default loopback server — carried in sample requests and WebUI URLs
+    /// so they keep working when the server requires authentication.
+    /// </summary>
+    string? ApiKey { get; }
+
     /// <summary>Starts the shell's normal load workflow for the model (the play-glyph path).</summary>
     Task LoadModelAsync(ModelItem model);
 
@@ -588,7 +595,8 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     /// </summary>
     public void BuildApiRequest()
     {
-        _host.CopyText(ApiRequestPresentation.BuildCurlCommand(_host.ServerAddress, _host.ServerPort, ServerModelId));
+        _host.CopyText(ApiRequestPresentation.BuildCurlCommand(
+            _host.ServerAddress, _host.ServerPort, ServerModelId, _host.ApiKey));
         FlashCopied(isModelId: false);
     }
 
@@ -617,7 +625,8 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     }
 
     private void OpenChat()
-        => _host.OpenUri(ApiRequestPresentation.BuildWebUiUrl(_host.ServerAddress, _host.ServerPort, ServerModelId));
+        => _host.OpenUri(ApiRequestPresentation.BuildWebUiUrl(
+            _host.ServerAddress, _host.ServerPort, ServerModelId, _host.ApiKey));
 
     /// <summary>
     /// Re-derives action state when the shared ModelItem changes (the poller

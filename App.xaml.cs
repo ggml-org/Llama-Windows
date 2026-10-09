@@ -98,7 +98,23 @@ namespace LlamaApp
             if (resolvedListen.FellBack)
                 Common.Log.Warn(
                     $"listen address '{Settings.Current.ListenAddress}' is not assigned to this machine; using {resolvedListen.Address}");
-            Llama.LlamaManager.Initialize(serverPort, resolvedListen.Address);
+
+            // Non-loopback binds get an app-generated API key so the server
+            // isn't an open control API on the network. Generated once and
+            // persisted, so an adopted server (and a later app start) agree.
+            string? apiKey = null;
+            if (Common.ServerAuth.RequiresApiKey(resolvedListen.Address))
+            {
+                if (string.IsNullOrWhiteSpace(Settings.Current.ServerApiKey))
+                {
+                    Settings.Current.ServerApiKey = Common.ServerAuth.GenerateApiKey();
+                    Settings.Current.Save();
+                }
+                apiKey = Settings.Current.ServerApiKey;
+            }
+            Common.Log.Info(
+                $"listen address: {resolvedListen.Address}{(apiKey is null ? "" : " (API key required)")}");
+            Llama.LlamaManager.Initialize(serverPort, resolvedListen.Address, apiKey);
 
             // The app is tray-only: the main window is created but never shown
             // on launch. It is revealed on demand as a flyout anchored to the

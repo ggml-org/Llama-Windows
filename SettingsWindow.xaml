@@ -514,7 +514,7 @@
                                                    VerticalAlignment="Center" />
                                     </Grid>
                                     <TextBlock Grid.Row="1"
-                                               Text="Network address the llama server binds to — localhost (127.0.0.1, this machine only), a specific interface's IP, or all interfaces (0.0.0.0, reachable from other devices on your network). Takes effect the next time the app starts."
+                                               Text="Network address the llama server binds to — localhost (127.0.0.1, this machine only), a specific interface's IP, or all interfaces (0.0.0.0). Beyond localhost the server is reachable from other devices on your network; Llama then requires an API key it generates for you. Takes effect the next time the app starts."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
@@ -745,7 +745,7 @@
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock Text="Extra arguments appended after the built-in ones, so they can override them. Use the same syntax as the llama.cpp command line — quote values that contain spaces. Applies the next time the llama server starts; if the server rejects a flag, the failure reason appears on the status dot."
+                                    <TextBlock Text="Extra arguments appended after the built-in ones, so they can override them. Use the same syntax as the llama.cpp command line — quote values that contain spaces. The server's bind flags (--host, --port), --api-key and --models-preset are managed by Llama and can't be used here. Applies the next time the llama server starts; if the server rejects a flag, the failure reason appears on the status dot."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />

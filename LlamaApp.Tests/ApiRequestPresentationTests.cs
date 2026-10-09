@@ -76,4 +76,44 @@ public sealed class ApiRequestPresentationTests
         var start = cmd.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
         return cmd[start..cmd.LastIndexOf('\'')];
     }
+
+    // ---- API-key threading (non-loopback binds) ----
+
+    [Fact]
+    public void BuildWebUiUrl_WithoutKey_Unchanged()
+    {
+        var url = ApiRequestPresentation.BuildWebUiUrl(
+            "127.0.0.1", 9931, "a/b:Q4_K_M", apiKey: null);
+
+        Assert.Equal("http://127.0.0.1:9931?model=a%2Fb%3AQ4_K_M", url);
+    }
+
+    [Fact]
+    public void BuildWebUiUrl_WithKey_AppendsApiKey()
+    {
+        var url = ApiRequestPresentation.BuildWebUiUrl(
+            "192.168.1.42", 9931, "a/b:Q4_K_M", apiKey: "cafe1234");
+
+        Assert.Equal("http://192.168.1.42:9931?model=a%2Fb%3AQ4_K_M&api_key=cafe1234", url);
+    }
+
+    [Fact]
+    public void BuildCurlCommand_WithKey_IncludesBearerHeader()
+    {
+        var cmd = ApiRequestPresentation.BuildCurlCommand(
+            "192.168.1.42", 9931, "a/b:Q4_K_M", apiKey: "cafe1234");
+
+        Assert.Contains("-H \"Authorization: Bearer cafe1234\"", cmd);
+        // The header sits before the payload so the request is well-formed.
+        Assert.True(cmd.IndexOf("Authorization") < cmd.IndexOf("-d "));
+    }
+
+    [Fact]
+    public void BuildCurlCommand_WithoutKey_HasNoBearerHeader()
+    {
+        var cmd = ApiRequestPresentation.BuildCurlCommand(
+            "127.0.0.1", 9931, "a/b:Q4_K_M", apiKey: null);
+
+        Assert.DoesNotContain("Authorization", cmd);
+    }
 }

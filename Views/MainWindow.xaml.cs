@@ -1638,6 +1638,8 @@ namespace LlamaApp.Views
 
         string IModelItemDetailsHost.ServerAddress => LlamaManager.Shared.ConnectAddress;
 
+        string? IModelItemDetailsHost.ApiKey => LlamaManager.Shared.ApiKey;
+
         /// <summary>The play-glyph path, reused unchanged by the details Chat action.</summary>
         Task IModelItemDetailsHost.LoadModelAsync(ModelItem model)
         {
@@ -1802,9 +1804,11 @@ namespace LlamaApp.Views
 
             var serverModelId = ((IModel)item).ServerModelId;
             Log.Info("open clicked for " + serverModelId);
-            
-            var url = $"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}?model={Uri.EscapeDataString(serverModelId)}";
-            await Windows.System.Launcher.LaunchUriAsync(new Uri(url));
+
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(
+                ApiRequestPresentation.BuildWebUiUrl(
+                    LlamaManager.Shared.ConnectAddress, LlamaManager.Shared.ServerPort,
+                    serverModelId, LlamaManager.Shared.ApiKey)));
         }
 
         /// <summary>
@@ -2617,8 +2621,10 @@ namespace LlamaApp.Views
         private async void ServerLink_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             // Open the running llama server's WebUI in the system browser.
-            await Windows.System.Launcher.LaunchUriAsync(
-                new System.Uri($"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}"));
+            var url = $"http://{LlamaManager.Shared.ConnectAddress}:{LlamaManager.Shared.ServerPort}";
+            if (LlamaManager.Shared.ApiKey is { } key)
+                url += $"?api_key={Uri.EscapeDataString(key)}";
+            await Windows.System.Launcher.LaunchUriAsync(new System.Uri(url));
         }
 
         /// Opens llama.app in the default browser when the brand logo is

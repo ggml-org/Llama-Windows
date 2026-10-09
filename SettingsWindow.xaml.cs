@@ -351,6 +351,25 @@ namespace LlamaApp
             await d.ShowAsync();
         }
 
+        /// <summary>
+        /// A yes/no confirmation. True only when the primary button is picked;
+        /// closing the dialog (Esc / light-dismiss) is a cancel.
+        /// </summary>
+        private async Task<bool> ConfirmAsync(string title, string message)
+        {
+            var d = new Microsoft.UI.Xaml.Controls.ContentDialog
+            {
+                XamlRoot = Content.XamlRoot,
+                Title = title,
+                Content = message,
+                PrimaryButtonText = "Continue",
+                CloseButtonText = "Cancel",
+                DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Primary,
+            };
+            var result = await d.ShowAsync();
+            return result == Microsoft.UI.Xaml.Controls.ContentDialogResult.Primary;
+        }
+
         private async void Browse_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             // FolderPicker requires an owner HWND in unpackaged WinUI 3 apps.
@@ -372,7 +391,7 @@ namespace LlamaApp
             }
         }
 
-        private void Save_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        private async void Save_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             var s = Settings.Current;
             s.HuggingFaceToken = TokenBox.Password;
@@ -389,8 +408,32 @@ namespace LlamaApp
             // The ComboBox items carry the IPv4 address in their Tag. Applied
             // the next time the app starts (the manager's bind address and REST
             // client are fixed at construction).
-            s.ListenAddress = (ListenAddressBox.SelectedItem as ComboBoxItem)?.Tag as string
+            var selectedListen = (ListenAddressBox.SelectedItem as ComboBoxItem)?.Tag as string
                 ?? Common.ListenAddresses.Localhost;
+
+            // Anything beyond loopback publishes the server to the network.
+            // Make that an explicit, informed choice: confirm when the
+            // selection moves off localhost (the app then protects the server
+            // with an API key — see below).
+            if (Common.ServerAuth.RequiresApiKey(selectedListen) &&
+                !string.Equals(selectedListen, s.ListenAddress, StringComparison.OrdinalIgnoreCase))
+            {
+                var confirmed = await ConfirmAsync(
+                    "Expose the llama server?",
+                    "Devices on your network will be able to reach the llama server. " +
+                    "Llama protects it with an API key, but anyone who learns the key " +
+                    "can load, run and delete your models. Continue?");
+                if (!confirmed) return;
+            }
+
+            s.ListenAddress = selectedListen;
+            // Ensure an app-generated key exists for a non-loopback bind; it is
+            // handed to the server as --api-key at the next launch.
+            if (Common.ServerAuth.RequiresApiKey(selectedListen) && string.IsNullOrWhiteSpace(s.ServerApiKey))
+            {
+                s.ServerApiKey = Common.ServerAuth.GenerateApiKey();
+                Common.Log.Info("generated an API key for the non-loopback listen address");
+            }
 
             // The ComboBox items carry the seconds in their Tag. Applied the
             // next time the server starts (it's a launch argument), so no
@@ -412,11 +455,14 @@ namespace LlamaApp
             s.CacheTypeV = (KvCacheVBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "f16";
 
             // Validate the free-form serve arguments before saving: an open
-            // quote would otherwise only surface as a launch failure after the
-            // user has already closed the window.
+            // quote or a reserved flag (managed by the app — e.g. --host,
+            // --port, --api-key) would otherwise only surface as a launch
+            // failure after the user has already closed the window.
             try
             {
-                _ = Common.ArgumentTokenizer.Tokenize(CustomArgsBox.Text);
+                var tokens = Common.ArgumentTokenizer.Tokenize(CustomArgsBox.Text);
+                if (Common.ServeArgumentPolicy.Validate(tokens) is { } reservedError)
+                    throw new FormatException(reservedError);
                 CustomArgsErrorText.Text = "";
                 CustomArgsErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
             }
