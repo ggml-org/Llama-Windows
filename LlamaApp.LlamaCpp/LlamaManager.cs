@@ -1607,7 +1607,7 @@ public sealed class LlamaManager
         using var sseCts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
 
         // POST the model name to /models — the server starts the download.
-        var payload = $$"""{"model":"{{modelName}}"}""";
+        var payload = BuildModelRequestBody(modelName);
         using var content = new StringContent(payload, Encoding.UTF8, "application/json");
         try
         {
@@ -1863,8 +1863,8 @@ public sealed class LlamaManager
             Log.Info($"loading model {modelId}" +
                 (contextLengthTokens is { } ctx ? $" (ctx_size={ctx})" : ""));
             var payload = contextLengthTokens is { } ctxSize
-                ? $$"""{"model":"{{modelId}}","ctx_size":{{ctxSize}}}"""
-                : $$"""{"model":"{{modelId}}"}""";
+                ? BuildModelRequestBody(modelId, ctxSize)
+                : BuildModelRequestBody(modelId);
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
             using var resp = await _http.PostAsync("/models/load", content, budget.Token);
@@ -1980,7 +1980,7 @@ public sealed class LlamaManager
         {
             Log.Info($"unloading model {model.ServerModelId}");
 
-            var payload = $$"""{"model":"{{model.ServerModelId}}"}""";
+            var payload = BuildModelRequestBody(model.ServerModelId);
             using var content = new StringContent(payload, Encoding.UTF8, "application/json");
             using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
             using var resp = await _http.PostAsync("/models/unload", content, budget.Token);
@@ -2151,7 +2151,7 @@ public sealed class LlamaManager
         var model = LoadedModelId
             ?? throw new InvalidOperationException("No model is loaded. Load one from the flyout first.");
 
-        var body = $$"""{"model":"{{model}}","stream":true, "return_progress": true, "messages":[{"role":"user","content":{{JsonString(userMessage)}}}]}""";
+        var body = $$"""{"model":{{JsonString(model)}},"stream":true, "return_progress": true, "messages":[{"role":"user","content":{{JsonString(userMessage)}}}]}""";
         // SendAsync with ResponseHeadersRead returns as soon as the response
         // headers arrive, so we can read the SSE body incrementally below.
         // PostAsync (the default ResponseContentRead) would buffer the entire
@@ -2222,6 +2222,19 @@ public sealed class LlamaManager
         // close with zero parsed chunks (this line).
         Log.Info($"chat completion stream ended without [DONE]: {yielded} chunk(s) yielded");
     }
+
+    /// <summary>
+    /// Builds a <c>{"model":…}</c> request body (optionally with
+    /// <c>ctx_size</c>), JSON-escaping the id. Model ids originate in remote
+    /// payloads (Hub search, the catalog, an adopted server's <c>/models</c>),
+    /// so they must never be piped raw into a hand-written JSON body — a quote
+    /// or backslash would corrupt the request and could inject fields. Pure so
+    /// the escaping is unit-testable.
+    /// </summary>
+    internal static string BuildModelRequestBody(string modelId, int? ctxSize = null)
+        => ctxSize is { } ctx
+            ? $$"""{"model":{{JsonString(modelId)}},"ctx_size":{{ctx}}}"""
+            : $$"""{"model":{{JsonString(modelId)}}}""";
 
     /// <summary>Minimal JSON string escaper for embedding user text in a raw body.</summary>
     private static string JsonString(string s)
@@ -2536,7 +2549,7 @@ public sealed class LlamaManager
         {
             try
             {
-                var payload = $$"""{"model":"{{id}}"}""";
+                var payload = BuildModelRequestBody(id);
                 using var content = new StringContent(payload, Encoding.UTF8, "application/json");
                 using var budget = WithTimeout(TimeSpan.FromSeconds(10), CancellationToken.None);
                 using var resp = await _http.PostAsync("/models/unload", content, budget.Token);
