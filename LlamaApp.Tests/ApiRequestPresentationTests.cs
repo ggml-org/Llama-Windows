@@ -1,3 +1,4 @@
+using System.Text.Json;
 using LlamaApp.Views;
 using Xunit;
 
@@ -40,5 +41,39 @@ public sealed class ApiRequestPresentationTests
             "127.0.0.1", 9931, "a/b:Q4_K_M");
 
         Assert.Equal("http://127.0.0.1:9931?model=a%2Fb%3AQ4_K_M", url);
+    }
+
+    // ---- Injection resistance: model ids are remote data ----
+
+    [Fact]
+    public void BuildCurlCommand_JsonEscapesTheModelId()
+    {
+        // A raw-interpolated body would let this append extra JSON fields.
+        var id = "evil\",\"x\":1,\"y\":\"";
+        var cmd = ApiRequestPresentation.BuildCurlCommand("127.0.0.1", 9931, id);
+
+        var json = ExtractDataPayload(cmd);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(id, doc.RootElement.GetProperty("model").GetString());
+        Assert.False(doc.RootElement.TryGetProperty("x", out _));
+        Assert.False(doc.RootElement.TryGetProperty("y", out _));
+    }
+
+    [Fact]
+    public void BuildCurlCommand_SingleQuotesThePayload()
+    {
+        var cmd = ApiRequestPresentation.BuildCurlCommand("127.0.0.1", 9931, "a/b:Q4_K_M");
+
+        // POSIX single quotes stop $(...)/backtick expansion on paste.
+        Assert.Contains("-d '", cmd);
+        Assert.EndsWith("'", cmd);
+    }
+
+    /// <summary>Pulls the shell-quoted <c>-d</c> payload back out for parsing.</summary>
+    private static string ExtractDataPayload(string cmd)
+    {
+        const string marker = "-d '";
+        var start = cmd.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+        return cmd[start..cmd.LastIndexOf('\'')];
     }
 }
