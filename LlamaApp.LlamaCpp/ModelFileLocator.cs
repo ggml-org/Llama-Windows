@@ -40,6 +40,9 @@ public static class ModelFileLocator
     public static LocatedModel? TryFind(string serverModelId, IReadOnlyList<string> cacheRoots)
     {
         if (string.IsNullOrWhiteSpace(serverModelId)) return null;
+        // Ids come from remote payloads; reject anything that could turn a
+        // path segment into traversal/wildcards before touching the disk.
+        if (!IsSafeModelId(serverModelId)) return null;
 
         // The quant separator is the LAST colon after the repo slash — repo
         // ids themselves contain no colon, but a stray one in the owner part
@@ -59,14 +62,75 @@ public static class ModelFileLocator
 
             // Hub layout: models--owner--repo/snapshots/{sha}/*.gguf — one
             // snapshot is the live one; the first with a match wins.
-            var found = ProbeHubLayout(Path.Combine(root, hubDirName, "snapshots"), quant);
-            if (found is not null) return found;
+            var snapshotsDir = Path.Combine(root, hubDirName, "snapshots");
+            if (IsUnder(root, snapshotsDir))
+            {
+                var hubFound = ProbeHubLayout(snapshotsDir, quant);
+                if (hubFound is not null) return hubFound;
+            }
 
             // Flat layout: owner_repo_*.gguf directly under the root.
-            found = ProbeFiles(SafeEnumerate(root, flatPrefix + "*.gguf"), quant);
+            var flat = SafeEnumerate(root, flatPrefix + "*.gguf");
+            var found = ProbeFiles(flat, quant);
             if (found is not null) return found;
         }
         return null;
+    }
+
+    /// <summary>
+    /// True when a server model id is safe to turn into cache paths: an
+    /// optional <c>owner/</c> prefix, a repo, and an optional <c>:quant</c>
+    /// suffix, each segment drawn from <c>[A-Za-z0-9._-]</c> and never
+    /// <c>.</c>/<c>..</c>. A backslash, wildcard, or <c>..</c> segment (all
+    /// possible in an id from the catalog, Hub search, or an adopted server)
+    /// would otherwise escape the cache root through <see cref="Path.Combine"/>.
+    /// </summary>
+    internal static bool IsSafeModelId(string? serverModelId)
+    {
+        if (string.IsNullOrWhiteSpace(serverModelId)) return false;
+
+        var slash = serverModelId.IndexOf('/');
+        var colon = serverModelId.LastIndexOf(':');
+        var repo = colon > slash ? serverModelId[..colon] : serverModelId;
+        var quant = colon > slash ? serverModelId[(colon + 1)..] : null;
+
+        var parts = repo.Split('/');
+        if (parts.Length is 0 or > 2) return false;
+        foreach (var part in parts)
+            if (!IsSafeSegment(part)) return false;
+
+        return quant is null || IsSafeSegment(quant);
+    }
+
+    private static bool IsSafeSegment(string s)
+    {
+        if (s.Length == 0 || s is "." or "..") return false;
+        foreach (var c in s)
+            if (!(char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Defensive containment check: <paramref name="candidate"/> must resolve
+    /// to <paramref name="root"/> itself or a path beneath it. Used as
+    /// belt-and-braces on top of <see cref="IsSafeModelId"/>.
+    /// </summary>
+    internal static bool IsUnder(string root, string candidate)
+    {
+        try
+        {
+            var fullRoot = Path.GetFullPath(root);
+            var fullCandidate = Path.GetFullPath(candidate);
+            if (string.Equals(fullCandidate, fullRoot, StringComparison.OrdinalIgnoreCase)) return true;
+            return fullCandidate.StartsWith(
+                fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                    + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>
