@@ -456,14 +456,25 @@ namespace LlamaApp.Views
         {
             var (repo, quant) = SplitServerId(sm.Id);
             byRepo.TryGetValue(repo, out var matched);
+            var external = sm.Id.StartsWith("local/", StringComparison.Ordinal);
+            ulong localBytes = 0;
+            if (external && sm.Path is not null)
+            {
+                try { localBytes = (ulong)new FileInfo(sm.Path!).Length; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
             return new ModelItem
             {
-                Name = DeriveDisplayName(repo, quant, byRepo),
+                Name = external && sm.Path is not null ? Path.GetFileNameWithoutExtension(sm.Path)
+                    : DeriveDisplayName(repo, quant, byRepo),
                 RepoName = repo,
                 Quant = quant,
+                IsExternalLocal = external,
+                LocalFilePath = external ? sm.Path : null,
                 Description = matched?.Description ?? "",
                 Parameters = matched?.Parameters ?? "",
-                Size = matched?.Size ?? "",
+                Size = external && localBytes > 0 ? MemoryFit.FormatBytes(localBytes) : matched?.Size ?? "",
+                SizeBytes = localBytes,
                 License = matched?.License ?? "",
                 Vision = sm.SupportsImage, // authoritative — from the server
                 Downloadable = false,
@@ -1566,6 +1577,20 @@ namespace LlamaApp.Views
                     // load spawns the child with the new --ctx-size.
                     _ = LlamaManager.Shared.ReloadModelPresetsAsync();
                 },
+                loadPromptProfile: id =>
+                    Settings.Current.ModelPromptProfiles.TryGetValue(id, out var profile) ? profile : null,
+                savePromptProfile: (id, profile) =>
+                {
+                    if (profile is null) Settings.Current.ModelPromptProfiles.Remove(id);
+                    else Settings.Current.ModelPromptProfiles[id] = profile;
+                    Settings.Current.Save();
+                    _ = LlamaManager.Shared.ReloadModelPresetsAsync();
+                },
+                globalBatchSize: Settings.Current.BatchSize,
+                globalMicroBatchSize: Settings.Current.MicroBatchSize,
+                experienceMode: Settings.Current.ExperienceMode,
+                globalCacheTypeK: Settings.Current.CacheTypeK,
+                globalCacheTypeV: Settings.Current.CacheTypeV,
                 // The fit-params refinement awaits CLI processes; its verdicts
                 // can land on a thread-pool thread — flip bound properties on
                 // the UI thread.
@@ -2137,9 +2162,11 @@ namespace LlamaApp.Views
         private async Task UpdateGpuIndicatorAsync()
         {
             DeviceProbe probe;
+            IReadOnlyList<LlamaDevice> selectedDevices;
             try
             {
                 probe = await LlamaManager.Shared.ProbeDevicesAsync();
+                selectedDevices = await LlamaManager.Shared.ListDevicesAsync();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -2147,7 +2174,10 @@ namespace LlamaApp.Views
                 return;
             }
 
-            var d = DeviceStatusPresentation.Describe(probe.Succeeded, probe.Devices);
+            var activeDeviceId = LlamaManager.Shared.ServerStatus == LlamaManager.ServerState.Running
+                ? LlamaManager.Shared.ActiveDeviceId : null;
+            var d = DeviceStatusPresentation.Describe(probe.Succeeded, selectedDevices,
+                activeDeviceId, LlamaManager.Shared.RuntimeFallbackReason);
 
             // The probe awaits a child process; the continuation can land on
             // a thread-pool thread, and dependency-object writes must happen

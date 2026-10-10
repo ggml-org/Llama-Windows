@@ -40,6 +40,12 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// </summary>
     public string? RepoName { get; set; }
 
+    /// <summary>True for a model in the user's additional folder. The app never deletes it.</summary>
+    public bool IsExternalLocal { get; set; }
+
+    /// <summary>Original path for a model discovered in an added folder.</summary>
+    public string? LocalFilePath { get; set; }
+
     // ---- IModel (explicit Name so IModel.Name returns the repo id) ----
 
     string IModel.Name => RepoName ?? Name;
@@ -124,6 +130,8 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             var head = string.IsNullOrWhiteSpace(Description)
                 ? Name
                 : $"{Name}\n{Description}";
+            if (IsExternalLocal && !string.IsNullOrWhiteSpace(LocalFilePath))
+                head += $"\n{LocalFilePath}";
             return string.IsNullOrWhiteSpace(FitNote)
                 ? head
                 : $"{head}\n{FitNote}";
@@ -226,6 +234,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isDownloading = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(ProgressRingVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
@@ -298,6 +307,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _downloadPaused = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(ResumeDownloadVisible));
             OnPropertyChanged(nameof(CancelDownloadVisible));
             OnPropertyChanged(nameof(PausedPercentTextVisible));
@@ -388,6 +398,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             // The subtitle (headline vs. size) and the warning-dot tooltip both
             // depend on this flag.
             OnPropertyChanged(nameof(SubtitleText));
@@ -441,6 +452,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             NotifyAccessibleNameChanged();
         }
     }
@@ -468,6 +480,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isLoading = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
             OnPropertyChanged(nameof(IsIndeterminateLoad));
@@ -513,6 +526,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isLoaded = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
             NotifyAccessibleNameChanged();
@@ -533,6 +547,8 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// failed load shows the same affordance so the rejection isn't silent.
     /// </summary>
     public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed && !LoadFailed && !DownloadPaused;
+
+    public bool DeleteGlyphVisible => !IsExternalLocal && PlayGlyphVisible;
 
     /// <summary>True when the download progress ring should be visible.</summary>
     public bool ProgressRingVisible => IsDownloading;

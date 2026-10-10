@@ -63,6 +63,10 @@ jobs:
           -r ${{ matrix.rid }}
           --self-contained ${{ inputs.self-contained }}
           -p:Platform=${{ matrix.platform }}
+          -p:WindowsPackageType=None
+          -p:WindowsAppSDKSelfContained=true
+          -p:WindowsAppSdkDeploymentManagerInitialize=false
+          -p:PublishTrimmed=false
           -p:PublishReadyToRun=false
           -p:PublishSingleFile=false
           -o publish/${{ matrix.rid }}

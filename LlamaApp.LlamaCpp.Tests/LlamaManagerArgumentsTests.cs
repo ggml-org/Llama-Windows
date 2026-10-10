@@ -114,6 +114,18 @@ public sealed class LlamaManagerArgumentsTests
     }
 
     [Fact]
+    public void BuildServeArguments_ComposesApiKeyFileWithGpuSelection()
+    {
+        var args = LlamaManager.BuildServeArguments(
+            9931, "0.0.0.0", -1, 0, null, null, null, null,
+            deviceId: "Vulkan1", gpuLayers: "42", apiKeyFilePath: @"C:\temp\.llama.apikey");
+
+        Assert.Equal(@"C:\temp\.llama.apikey", args[args.IndexOf("--api-key-file") + 1]);
+        Assert.Equal("Vulkan1", args[args.IndexOf("--device") + 1]);
+        Assert.Equal("42", args[args.IndexOf("--n-gpu-layers") + 1]);
+    }
+
+    [Fact]
     public void BuildServeArguments_AddsCacheTypeKAndV_WhenConfigured()
     {
         var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, "q8_0", "q4_0", null, null);
@@ -165,6 +177,24 @@ public sealed class LlamaManagerArgumentsTests
         var withEmpty = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, null, null, null, Array.Empty<string>());
 
         Assert.Equal(without, withEmpty);
+    }
+
+    [Fact]
+    public void BuildServeArguments_SelectsGpuAndCustomOffload()
+    {
+        var args = LlamaManager.BuildServeArguments(
+            9931, "127.0.0.1", -1, 0, null, null, null, null, "Vulkan1", "42");
+        Assert.Equal("Vulkan1", args[args.IndexOf("--device") + 1]);
+        Assert.Equal("42", args[args.IndexOf("--n-gpu-layers") + 1]);
+    }
+
+    [Fact]
+    public void BuildServeArguments_CpuFallbackDisablesOffload()
+    {
+        var args = LlamaManager.BuildServeArguments(
+            9931, "127.0.0.1", -1, 0, null, null, null, null, "none", "all");
+        Assert.Equal("none", args[args.IndexOf("--device") + 1]);
+        Assert.Equal("0", args[args.IndexOf("--n-gpu-layers") + 1]);
     }
 
     // ----- Listen-address forwarding -----------------------------------------

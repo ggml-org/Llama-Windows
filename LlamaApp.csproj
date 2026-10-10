@@ -67,7 +67,9 @@
              single-project MSIX packs them and they land next to the exe for
              AppContext.BaseDirectory lookups (see TrayIconManager). A glob, so
              a newly added asset can't be forgotten from the package. -->
-        <Content Include="Assets\**" />
+        <Content Include="Assets\**"
+                 CopyToOutputDirectory="PreserveNewest"
+                 CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
 
     <ItemGroup>

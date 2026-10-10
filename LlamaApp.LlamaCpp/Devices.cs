@@ -17,6 +17,8 @@ public enum DeviceKind
     Cuda,
     /// <summary>Cross-vendor Vulkan.</summary>
     Vulkan,
+    /// <summary>AMD ROCm/HIP.</summary>
+    Rocm,
     /// <summary>Apple Metal (never on Windows, but the parser stays generic).</summary>
     Metal,
     /// <summary>The CPU "device" (system RAM).</summary>
@@ -101,6 +103,10 @@ public static partial class DeviceQuery
     public static async Task<DeviceProbe> ListDevicesAsync(
         string binaryPath, CancellationToken cancel = default)
     {
+        // The UI can probe devices before the server startup path runs. A ROCm
+        // llama binary needs hipblas.dll during process loading, before its CLI
+        // can print an error; prepare PATH before spawning any probe process.
+        HipSdkEnvironment.EnsureOnProcessPath();
         foreach (var args in ArgumentCandidates)
         {
             string? output;
@@ -248,6 +254,7 @@ public static partial class DeviceQuery
     {
         if (id.StartsWith("CUDA", StringComparison.OrdinalIgnoreCase)) return DeviceKind.Cuda;
         if (id.StartsWith("Vulkan", StringComparison.OrdinalIgnoreCase)) return DeviceKind.Vulkan;
+        if (id.StartsWith("ROCm", StringComparison.OrdinalIgnoreCase)) return DeviceKind.Rocm;
         if (id.StartsWith("Metal", StringComparison.OrdinalIgnoreCase)) return DeviceKind.Metal;
         if (id.StartsWith("CPU", StringComparison.OrdinalIgnoreCase)) return DeviceKind.Cpu;
         return DeviceKind.Unknown;

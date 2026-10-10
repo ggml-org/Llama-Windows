@@ -214,6 +214,12 @@ public sealed class LlamaManager
     /// </summary>
     public string? CacheDirectory { get; set; }
 
+    /// <summary>Optional recursive sources of existing GGUF files, separate from the HF cache.</summary>
+    public IReadOnlyList<string>? AdditionalModelDirectories { get; set; }
+
+    private IReadOnlyDictionary<string, string> _additionalModels =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
     /// <summary>
     /// Hugging Face access token passed to the server via <c>HF_TOKEN</c> so
     /// it can pull private/gated models on the user's behalf (llama.cpp reads
@@ -287,6 +293,65 @@ public sealed class LlamaManager
     /// </summary>
     public string? CustomServeArguments { get; set; }
 
+    /// <summary>Preferred app-managed llama.cpp backend; automatic preserves the installer default.</summary>
+    public string RuntimeBackend { get; set; } = InferenceRuntime.Automatic;
+
+    /// <summary>Saved GPU choice from Settings, or empty for automatic device selection.</summary>
+    public string? GpuDeviceName { get; set; }
+
+    /// <summary>"auto", "all", or a numeric maximum for GPU layer offload.</summary>
+    public string? GpuLayers { get; set; } = "auto";
+
+    /// <summary>Optional logical prompt batch size; 0 keeps the server default.</summary>
+    public int BatchSize { get; set; }
+
+    /// <summary>Optional physical prompt microbatch size; 0 keeps the server default.</summary>
+    public int MicroBatchSize { get; set; }
+
+    /// <summary>Flash Attention mode: auto, on, or off.</summary>
+    public string? FlashAttention { get; set; } = "auto";
+
+    /// <summary>Additional advanced defaults applied to model child processes.</summary>
+    public ModelPromptProcessingProfile AdvancedInferenceProfile { get; set; } = new();
+
+    private DeviceProbe _lastDeviceProbe = new(false, []);
+
+    private ModelPromptProcessingProfile BuildGlobalInferenceProfile() =>
+        (AdvancedInferenceProfile ?? new()) with
+        {
+            BatchSize = BatchSize,
+            MicroBatchSize = MicroBatchSize,
+            FlashAttention = FlashAttention ?? "auto",
+            GpuDeviceName = "",
+            GpuLayers = GpuLayers is null or "auto" ? "" : GpuLayers,
+            CacheTypeK = CacheTypeK == "f16" ? "" : CacheTypeK ?? "",
+            CacheTypeV = CacheTypeV == "f16" ? "" : CacheTypeV ?? "",
+        };
+
+    /// <summary>Resolved device passed to the managed server, if explicitly selected.</summary>
+    public string? ActiveDeviceId { get; private set; }
+
+    /// <summary>Why a selected accelerator fell back to CPU, if applicable.</summary>
+    public string? RuntimeFallbackReason { get; private set; }
+
+    private static string AppliedRuntimePath => Path.Combine(AppData.Root, "runtime-backend.txt");
+
+    private static string ReadAppliedRuntime()
+    {
+        try { return File.ReadAllText(AppliedRuntimePath).Trim(); }
+        catch { return InferenceRuntime.Automatic; } // Older installs used automatic selection.
+    }
+
+    private static void WriteAppliedRuntime(string backend)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppData.Root);
+            File.WriteAllText(AppliedRuntimePath, InferenceRuntime.Normalize(backend));
+        }
+        catch (Exception ex) { Log.Warn(ex, "could not record installed llama backend"); }
+    }
+
     /// <summary>
     /// Per-model context-length preferences (keyed by server model id,
     /// <c>repo:quant</c>), rendered into a llama.cpp <c>--models-preset</c> INI
@@ -302,6 +367,9 @@ public sealed class LlamaManager
     /// was started with.
     /// </summary>
     public IReadOnlyDictionary<string, int>? ModelContextLengths { get; set; }
+
+    /// <summary>Per-model prompt-processing overrides rendered into --models-preset.</summary>
+    public IReadOnlyDictionary<string, ModelPromptProcessingProfile>? ModelPromptProfiles { get; set; }
 
     private Process? _serverProcess;
 
@@ -465,6 +533,9 @@ public sealed class LlamaManager
     /// </summary>
     public async Task<bool> EnsureLlamaOrDownloadAsync(CancellationToken cancel = default)
     {
+        // Automatic and external installations may also resolve to a ROCm
+        // binary. Its native imports must be reachable before any child starts.
+        HipSdkEnvironment.EnsureOnProcessPath();
         // Single-flight: a prior or concurrent caller may already be bringing
         // the server up (or about to). Waiting here means the second caller
         // finds Running after the first releases the gate — no duplicate spawn.
@@ -502,6 +573,23 @@ public sealed class LlamaManager
             switch (resolved.Kind)
             {
                 case ResolutionKind.Managed:
+                    var needsManagedInstall = InferenceRuntime.RequiresManagedInstall(
+                        RuntimeBackend, ReadAppliedRuntime());
+                    var requiredKind = RequiredDeviceKind(RuntimeBackend);
+                    if (!needsManagedInstall && requiredKind is { } kind)
+                    {
+                        var installedProbe = await DeviceQuery.ListDevicesAsync(resolved.Path!, cancel);
+                        needsManagedInstall = !installedProbe.Devices.Any(device =>
+                            device.Kind == kind);
+                        if (needsManagedInstall)
+                            Log.Warn($"the installed runtime has no {RuntimeBackend} device; reinstalling the requested backend");
+                    }
+                    if (needsManagedInstall)
+                    {
+                        Log.Info($"switching app-managed llama backend to {InferenceRuntime.Normalize(RuntimeBackend)}");
+                        if (!await InstallAsync(cancel)) return false;
+                        return await StartServerAsync(cancel);
+                    }
                     BinaryPath = resolved.Path;
                     CurrentOrigin = Origin.Managed;
                     Version = await ReadVersionAsync(resolved.Path!, cancel);
@@ -613,7 +701,7 @@ public sealed class LlamaManager
         State = InstallState.Installing;
         try
         {
-            await DownloadAndRunInstallerAsync(allowUnpinnedInstall, cancel);
+            await DownloadAndRunInstallerAsync(RuntimeBackend, allowUnpinnedInstall, cancel);
             // Exit code 0 = success (DownloadAndRunInstallerAsync throws
             // otherwise): llama is now on PATH. Resolve its absolute path
             // dynamically ("which") instead of assuming a fixed location —
@@ -624,6 +712,14 @@ public sealed class LlamaManager
                 ?? throw new IOException("Install script succeeded but 'llama' was not found on PATH.");
             CurrentOrigin = IsManagedPath(BinaryPath) ? Origin.Managed : Origin.External;
             Version = await ReadVersionAsync(BinaryPath, cancel);
+            if (RequiredDeviceKind(RuntimeBackend) is { } requiredKind)
+            {
+                var installedDevices = await DeviceQuery.ListDevicesAsync(BinaryPath, cancel);
+                if (!installedDevices.Devices.Any(device => device.Kind == requiredKind))
+                    throw new IOException($"The installer completed, but the installed llama binary did not detect a {RuntimeBackend} GPU. Check its driver and runtime installation, then restart Llama.");
+            }
+            WriteAppliedRuntime(RuntimeBackend);
+            _devicesCache = default; // A replacement binary may expose a different backend.
             State = InstallState.Idle;
             return true;
         }
@@ -639,6 +735,14 @@ public sealed class LlamaManager
             return false;
         }
     }
+
+    private static DeviceKind? RequiredDeviceKind(string? backend) =>
+        InferenceRuntime.Normalize(backend) switch
+        {
+            InferenceRuntime.Rocm => DeviceKind.Rocm,
+            InferenceRuntime.Vulkan => DeviceKind.Vulkan,
+            _ => null,
+        };
 
     // ---- Server ----
 
@@ -670,6 +774,11 @@ public sealed class LlamaManager
         string? cacheTypeV,
         string? contextPresetPath,
         IReadOnlyList<string>? customArguments,
+        string? deviceId = null,
+        string? gpuLayers = null,
+        int batchSize = 0,
+        int microBatchSize = 0,
+        string? flashAttention = "auto",
         string? apiKeyFilePath = null)
     {
         // `serve` is the unified subcommand (replaces the old llama-server).
@@ -746,6 +855,40 @@ public sealed class LlamaManager
             args.Add(contextPresetPath);
         }
 
+        if (!string.IsNullOrWhiteSpace(deviceId))
+        {
+            args.Add("--device");
+            args.Add(deviceId);
+        }
+        var layers = deviceId == "none" ? "0" : InferenceRuntime.GpuLayersArgument(gpuLayers);
+        if (layers is not null)
+        {
+            args.Add("--n-gpu-layers");
+            args.Add(layers);
+        }
+
+        // Leave all three defaults to llama.cpp. Hand-edited invalid settings
+        // are rejected before a managed launch; this guard also keeps the pure
+        // argument builder safe for any other caller.
+        if (InferenceTuning.Validate(batchSize, microBatchSize, flashAttention) is null)
+        {
+            if (batchSize > 0)
+            {
+                args.Add("--batch-size");
+                args.Add(batchSize.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            if (microBatchSize > 0)
+            {
+                args.Add("--ubatch-size");
+                args.Add(microBatchSize.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            if (flashAttention is "on" or "off")
+            {
+                args.Add("--flash-attn");
+                args.Add(flashAttention);
+            }
+        }
+
         // Custom arguments go last so they win when llama.cpp keeps the
         // final occurrence of a repeated flag — the user's typed text is the
         // most specific intent.
@@ -789,6 +932,7 @@ public sealed class LlamaManager
     /// </summary>
     public async Task<bool> StartServerAsync(CancellationToken cancel = default)
     {
+        HipSdkEnvironment.EnsureOnProcessPath();
         if (ServerStatus == ServerState.Running) return true;
         if (BinaryPath is null || !File.Exists(BinaryPath))
         {
@@ -860,6 +1004,63 @@ public sealed class LlamaManager
             return false;
         }
 
+        if (InferenceTuning.Validate(BatchSize, MicroBatchSize, FlashAttention) is { } tuningError)
+        {
+            FailureMessage = tuningError;
+            ServerStatus = ServerState.Failed;
+            return false;
+        }
+
+        var globalProfile = BuildGlobalInferenceProfile();
+        if (InferenceTuning.ValidateProfile(globalProfile) is { } globalError)
+        {
+            FailureMessage = globalError;
+            ServerStatus = ServerState.Failed;
+            return false;
+        }
+
+        if (ModelPromptProfiles is not null)
+        {
+            foreach (var (id, profile) in ModelPromptProfiles)
+            {
+                if (profile is null) continue;
+                if ((InferenceTuning.ValidateProfile(profile) ??
+                    InferenceTuning.ValidateEffective(BatchSize, MicroBatchSize,
+                        profile.BatchSize, profile.MicroBatchSize,
+                        profile.FlashAttention)) is not { } profileError) continue;
+                FailureMessage = $"Model {id}: {profileError}";
+                ServerStatus = ServerState.Failed;
+                return false;
+            }
+        }
+
+        if (!globalProfile.IsAutomatic ||
+            ModelPromptProfiles?.Values.Any(profile => profile is not null && !profile.IsAutomatic) == true)
+        {
+            var capabilities = await ServeCapabilities.ProbeAsync(BinaryPath, cancel);
+            if (InferenceTuning.UnsupportedProfileOption(globalProfile,
+                    capabilities) is { } unsupported)
+            {
+                FailureMessage = unsupported.StartsWith("--", StringComparison.Ordinal)
+                    ? $"The installed llama server does not support {unsupported}."
+                    : unsupported;
+                ServerStatus = ServerState.Failed;
+                return false;
+            }
+            if (ModelPromptProfiles is not null)
+            {
+                foreach (var (id, profile) in ModelPromptProfiles)
+                {
+                    if (profile is null || profile.IsAutomatic) continue;
+                    if (InferenceTuning.UnsupportedProfileOption(profile,
+                            capabilities) is not { } unsupportedProfile) continue;
+                    FailureMessage = $"Model {id}: installed llama server does not support {unsupportedProfile}.";
+                    ServerStatus = ServerState.Failed;
+                    return false;
+                }
+            }
+        }
+
         // A fresh attempt invalidates whatever the previous launch failed
         // with; a new reason is set below if this one fails too.
         FailureMessage = null;
@@ -867,6 +1068,19 @@ public sealed class LlamaManager
 
         try
         {
+            var needsDeviceProbe = InferenceRuntime.Normalize(RuntimeBackend) != InferenceRuntime.Automatic
+                || !string.IsNullOrWhiteSpace(GpuDeviceName)
+                || ModelPromptProfiles?.Values.Any(profile => profile is not null &&
+                    !string.IsNullOrEmpty(profile.GpuDeviceName) && profile.GpuDeviceName != "none") == true;
+            var probe = needsDeviceProbe
+                ? await ProbeDevicesAsync(cancel)
+                : new DeviceProbe(false, []);
+            var selection = InferenceRuntime.SelectDevice(RuntimeBackend, GpuDeviceName, probe);
+            _lastDeviceProbe = probe;
+            ActiveDeviceId = selection.DeviceArgument;
+            RuntimeFallbackReason = selection.FallbackReason;
+            if (RuntimeFallbackReason is not null) Log.Warn(RuntimeFallbackReason);
+
             var psi = new ProcessStartInfo
             {
                 FileName = BinaryPath,
@@ -882,7 +1096,7 @@ public sealed class LlamaManager
             // Per-model context lengths are merged into each model's child args
             // via --models-preset (see BuildServeArguments). Written fresh every
             // launch from the current preferences.
-            var contextPresetPath = WriteContextPresetsIni();
+            var contextPresetPath = WriteModelPresetsIni(selection.DeviceArgument, probe);
             // Materialize the app-generated key (non-loopback binds) into a
             // per-user file right before launch: the server reads it via
             // --api-key-file, so the key never appears in argv, process
@@ -898,7 +1112,8 @@ public sealed class LlamaManager
             }
             foreach (var arg in BuildServeArguments(
                          ServerPort, ListenAddress, IdleUnloadSeconds, MaxLoadedModels,
-                         CacheTypeK, CacheTypeV, contextPresetPath, customArguments, apiKeyFilePath))
+                         null, null, contextPresetPath, customArguments,
+                         apiKeyFilePath: apiKeyFilePath))
                 psi.ArgumentList.Add(arg);
 
             // Point the HF cache at the user-configured directory so the server
@@ -924,8 +1139,7 @@ public sealed class LlamaManager
                 (ApiKey is not null ? $" --api-key-file {apiKeyFilePath}" : "") +
                 (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : "") +
                 (MaxLoadedModels > 0 ? $" --models-max {MaxLoadedModels}" : "") +
-                (!string.IsNullOrWhiteSpace(CacheTypeK) ? $" --cache-type-k {CacheTypeK}" : "") +
-                (!string.IsNullOrWhiteSpace(CacheTypeV) ? $" --cache-type-v {CacheTypeV}" : "") +
+                (contextPresetPath is not null ? " --models-preset <local preset>" : "") +
                 customArgsText);
 
             var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
@@ -1081,8 +1295,8 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Path of the llama.cpp <c>--models-preset</c> INI the app generates from
-    /// <see cref="ModelContextLengths"/> — one <c>[repo:quant]</c> section with
-    /// <c>ctx-size = N</c> per model that has a custom context length. Rewritten
+    /// <see cref="ModelContextLengths"/> and <see cref="ModelPromptProfiles"/> —
+    /// one <c>[repo:quant]</c> section with the model's overrides. Rewritten
     /// on every server start and preference change.
     ///
     /// <para>Deliberately NOT under <see cref="AppData.Root"/>: the app is
@@ -1093,60 +1307,85 @@ public sealed class LlamaManager
     /// "preset file does not exist"). The user profile is not virtualized, so
     /// app and server see the same file there.</para>
     /// </summary>
-    private static string ContextPresetPath =>
+    private static string ModelPresetPath =>
         Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".llama", "model-context-presets.ini");
+            ".llama", "model-presets.ini");
 
     /// <summary>
-    /// Writes <see cref="ModelContextLengths"/> as a llama.cpp preset INI and
-    /// returns its path, or <c>null</c> when no model has a custom context
-    /// length (the server then launches without <c>--models-preset</c>).
-    /// Best-effort — a write failure just skips the flag.
+    /// Renders model-specific context and prompt-processing preferences as a
+    /// llama.cpp preset INI, or returns <c>null</c> when there are none.
     /// </summary>
-    private string? WriteContextPresetsIni()
+    private string? RenderModelPresets(string? globalDeviceId = null, DeviceProbe? probe = null)
     {
-        var presets = ModelContextLengths;
-        if (presets is null || presets.Count == 0) return null;
+        var devices = (probe ?? _lastDeviceProbe).Devices
+            .Where(device => device.Kind is not (DeviceKind.Cpu or DeviceKind.Unknown))
+            .ToArray();
+        var deviceIds = devices.ToDictionary(
+            device => GpuDeviceChoice.Key(device, devices), device => device.Id,
+            StringComparer.OrdinalIgnoreCase);
+        _additionalModels = LocalModelDirectory.Scan(AdditionalModelDirectories);
+        return ModelPresets.Render(ModelContextLengths, ModelPromptProfiles,
+            BuildGlobalInferenceProfile(), deviceIds, globalDeviceId, _additionalModels);
+    }
 
-        var sb = new StringBuilder();
-        foreach (var (id, ctx) in presets)
-        {
-            if (ctx <= 0 || string.IsNullOrWhiteSpace(id)) continue;
-            sb.Append('[').Append(id).Append(']').Append('\n');
-            sb.Append("ctx-size = ").Append(ctx).Append("\n\n");
-        }
-        if (sb.Length == 0) return null;
+    /// <summary>Preview saved router arguments and per-model preset values.</summary>
+    public string PreviewInferenceConfiguration()
+    {
+        IReadOnlyList<string> custom;
+        try { custom = Common.ArgumentTokenizer.Tokenize(CustomServeArguments); }
+        catch (FormatException ex) { return "Custom arguments are invalid: " + ex.Message; }
+        var preset = RenderModelPresets(ActiveDeviceId);
+        var args = BuildServeArguments(ServerPort, ListenAddress, IdleUnloadSeconds,
+            MaxLoadedModels, null, null, preset is null ? null : "<model-presets.ini>", custom);
+        static string Quote(string value) => value.Any(char.IsWhiteSpace)
+            ? "\"" + value.Replace("\"", "\\\"") + "\"" : value;
+        return "Router configuration loaded at app start:\nllama.exe " +
+            string.Join(' ', args.Select(Quote)) +
+            "\n\nModel presets (applied when each model loads):\n" +
+            (preset ?? "(none; llama.cpp defaults)");
+    }
+
+    /// <summary>
+    /// Keeps a preset file available even before preferences exist, so a running
+    /// router can reload preferences added later. A write failure fails launch.
+    /// </summary>
+    private string? WriteModelPresetsIni(string? globalDeviceId = null, DeviceProbe? probe = null)
+    {
+        var ini = RenderModelPresets(globalDeviceId, probe) ?? string.Empty;
 
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(ContextPresetPath)!);
-            File.WriteAllText(ContextPresetPath, sb.ToString());
-            return ContextPresetPath;
+            Directory.CreateDirectory(Path.GetDirectoryName(ModelPresetPath)!);
+            File.WriteAllText(ModelPresetPath, ini);
+            return ModelPresetPath;
         }
         catch (Exception ex)
         {
             Log.Warn(ex, "failed to write model context preset file");
-            return null;
+            throw new IOException("Could not write the model inference preset.", ex);
         }
     }
 
     /// <summary>
-    /// Re-renders the context-preset INI from <see cref="ModelContextLengths"/>
+    /// Re-renders the model-preset INI from context and prompt preferences
     /// and asks the running server to re-read its presets
     /// (<c>GET /models?reload=1</c> re-runs the router's preset load, which
     /// re-reads the <c>--models-preset</c> file). Called when the user changes a
-    /// model's context length so the next <c>/models/load</c> picks it up.
+    /// model's context or prompt profile so the next <c>/models/load</c> picks it up.
     /// Reloading does not disturb already-loaded models. Best-effort: a server
     /// the app didn't launch (no <c>--models-preset</c> flag) won't read the
     /// file — the preference then takes effect on the next app-launched start.
     /// </summary>
     public async Task ReloadModelPresetsAsync(CancellationToken cancel = default)
     {
-        WriteContextPresetsIni();
-        if (ServerStatus != ServerState.Running) return;
         try
         {
+            if (ModelPromptProfiles?.Values.Any(profile => profile is not null &&
+                !string.IsNullOrEmpty(profile.GpuDeviceName) && profile.GpuDeviceName != "none") == true)
+                _lastDeviceProbe = await ProbeDevicesAsync(cancel);
+            WriteModelPresetsIni(ActiveDeviceId, _lastDeviceProbe);
+            if (ServerStatus != ServerState.Running) return;
             using var budget = WithTimeout(TimeSpan.FromSeconds(10), cancel);
             using var resp = await _http.GetAsync("/models?reload=1", budget.Token);
             Log.Info($"model context presets reloaded (HTTP {(int)resp.StatusCode})");
@@ -1468,7 +1707,14 @@ public sealed class LlamaManager
     /// must never throw or block (fail-open convention).
     /// </summary>
     public async Task<IReadOnlyList<LlamaDevice>> ListDevicesAsync(CancellationToken cancel = default)
-        => (await ProbeDevicesAsync(cancel)).Devices;
+    {
+        var probe = await ProbeDevicesAsync(cancel);
+        var selection = InferenceRuntime.SelectDevice(RuntimeBackend, GpuDeviceName, probe);
+        if (selection.DeviceArgument is null) return probe.Devices;
+        if (selection.DeviceArgument == "none") return [];
+        var selected = selection.DeviceArgument.Split(',');
+        return probe.Devices.Where(device => selected.Contains(device.Id, StringComparer.OrdinalIgnoreCase)).ToArray();
+    }
 
     /// <summary>
     /// The full probe result, including whether the probe succeeded — see
@@ -1535,7 +1781,8 @@ public sealed class LlamaManager
     /// Cached fit-params probe results + timestamps, keyed by (model path,
     /// context tokens) — see <see cref="QueryFitParamsAsync"/>.
     /// </summary>
-    private readonly Dictionary<(string Path, int Ctx), (DateTime At, FitParamsEstimate? Estimate)> _fitParamsCache = new();
+    private readonly Dictionary<(string Path, int Ctx, string CacheK, string CacheV),
+        (DateTime At, FitParamsEstimate? Estimate)> _fitParamsCache = new();
 
     /// <summary>
     /// Asks the CLI's <c>fit-params</c> tool for llama.cpp's own memory
@@ -1550,11 +1797,12 @@ public sealed class LlamaManager
     /// (unlike free VRAM) doesn't change between them.
     /// </summary>
     public async Task<FitParamsEstimate?> QueryFitParamsAsync(
-        string modelPath, int contextTokens, CancellationToken cancel = default)
+        string modelPath, int contextTokens, CancellationToken cancel = default,
+        string cacheTypeK = "f16", string cacheTypeV = "f16")
     {
         const double CacheTtlSeconds = 60;
 
-        var key = (modelPath, contextTokens);
+        var key = (modelPath, contextTokens, cacheTypeK, cacheTypeV);
         lock (_fitParamsCache)
         {
             if (_fitParamsCache.TryGetValue(key, out var cached) &&
@@ -1571,7 +1819,8 @@ public sealed class LlamaManager
             return null;
         }
 
-        var estimate = await FitParamsQuery.QueryAsync(binary, modelPath, contextTokens, cancel);
+        var estimate = await FitParamsQuery.QueryAsync(binary, modelPath, contextTokens,
+            cancel, cacheTypeK, cacheTypeV);
         lock (_fitParamsCache)
         {
             _fitParamsCache[key] = (DateTime.UtcNow, estimate);
@@ -2083,6 +2332,9 @@ public sealed class LlamaManager
     /// <returns><c>true</c> if the server accepted the delete request.</returns>
     public async Task<bool> DeleteModelAsync(IModel model, CancellationToken cancel = default)
     {
+        // The extra folder belongs to the user; this app must never delete its files.
+        if (model.ServerModelId.StartsWith("local/", StringComparison.Ordinal) ||
+            _additionalModels.ContainsKey(model.ServerModelId)) return false;
         if (ServerStatus != ServerState.Running)
             return false;
 
@@ -2163,7 +2415,13 @@ public sealed class LlamaManager
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
             var dto = await JsonSerializer.DeserializeAsync<ModelsResponseDto>(stream, cancellationToken: cancel);
-            return dto?.Data?.Select(Map).ToList() ?? [];
+            return dto?.Data?.Select(d =>
+            {
+                var model = Map(d);
+                return _additionalModels.TryGetValue(model.Id, out var path)
+                    ? model with { Path = path, Source = "local", CanRemove = false }
+                    : model;
+            }).ToList() ?? [];
         }
         catch
         {
@@ -2724,7 +2982,7 @@ public sealed class LlamaManager
     /// refused rather than executed unverified. Throws on any integrity
     /// failure, a non-zero exit code, or a download failure.
     /// </summary>
-    private static async Task DownloadAndRunInstallerAsync(bool allowUnpinned, CancellationToken cancel)
+    private static async Task DownloadAndRunInstallerAsync(string backend, bool allowUnpinned, CancellationToken cancel)
     {
         var scriptPath = Path.Combine(Path.GetTempPath(), $"llama-install-{Guid.NewGuid():N}.ps1");
         try
@@ -2799,8 +3057,16 @@ public sealed class LlamaManager
             psi.ArgumentList.Add("Bypass");
             psi.ArgumentList.Add("-File");
             psi.ArgumentList.Add(scriptPath);
+            if (InferenceRuntime.Normalize(backend) != InferenceRuntime.Automatic)
+            {
+                // A process-level SKIP_* value must not override an explicit choice.
+                foreach (var name in new[] { "SKIP_CUDA", "SKIP_ROCM", "SKIP_VULKAN" })
+                    psi.EnvironmentVariables.Remove(name);
+            }
+            foreach (var (name, value) in InferenceRuntime.InstallerEnvironment(backend))
+                psi.EnvironmentVariables[name] = value;
 
-            Log.Info($"running install.ps1 from {InstallScriptUrl}");
+            Log.Info($"running install.ps1 from {InstallScriptUrl} (backend: {InferenceRuntime.Normalize(backend)})");
             using var proc = new Process();
             proc.StartInfo = psi;
             if (!proc.Start())

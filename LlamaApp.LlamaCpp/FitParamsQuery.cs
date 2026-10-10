@@ -94,14 +94,27 @@ public static partial class FitParamsQuery
     /// when its output contains the estimate section.
     /// </summary>
     public static async Task<FitParamsEstimate?> QueryAsync(
-        string binaryPath, string modelPath, int contextTokens, CancellationToken cancel = default)
+        string binaryPath, string modelPath, int contextTokens, CancellationToken cancel = default,
+        string cacheTypeK = "f16", string cacheTypeV = "f16")
     {
-        var tail = new[]
+        var tail = new List<string>
         {
             "-m", modelPath,
             "-c", contextTokens.ToString(CultureInfo.InvariantCulture),
             "--fit-print", "on",
         };
+        if (cacheTypeK != "f16" &&
+            LlamaManager.SupportedKvCacheTypes.Contains(cacheTypeK, StringComparer.Ordinal))
+        {
+            tail.Add("--cache-type-k");
+            tail.Add(cacheTypeK);
+        }
+        if (cacheTypeV != "f16" &&
+            LlamaManager.SupportedKvCacheTypes.Contains(cacheTypeV, StringComparer.Ordinal))
+        {
+            tail.Add("--cache-type-v");
+            tail.Add(cacheTypeV);
+        }
 
         foreach (var prefix in ArgumentPrefixes)
         {

@@ -9,6 +9,20 @@ namespace LlamaApp.Tests;
 /// </summary>
 public sealed class ModelItemDisplayNameTests
 {
+    [Fact]
+    public void AddedFolderModelShowsItsPathAndHasNoDeleteAction()
+    {
+        var item = new ModelItem
+        {
+            Name = "Model Q4",
+            IsExternalLocal = true,
+            LocalFilePath = @"C:\Models\Publisher\Model Q4.gguf",
+        };
+
+        Assert.Contains(item.LocalFilePath, item.RowToolTip);
+        Assert.False(item.DeleteGlyphVisible);
+    }
+
     [Theory]
     // The catalog shape: "Pretty Name (QUANT)" — both parts stripped.
     [InlineData("Gemma 3 1B (Q4_0)", "Q4_0", "1B", "Gemma 3")]

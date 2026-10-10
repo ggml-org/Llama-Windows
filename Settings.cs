@@ -62,6 +62,37 @@ public sealed class Settings
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".cache", "huggingface", "hub");
 
+    /// <summary>Additional folders scanned recursively for existing GGUF models.</summary>
+    public List<string> AdditionalModelDirectories { get; set; } = [];
+
+    /// <summary>Older single-folder setting, read only to migrate existing users.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AdditionalModelsDirectory { get; set; }
+
+    internal static List<string> NormalizeAdditionalModelDirectories(IEnumerable<string>? paths)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>();
+        if (paths is null) return result;
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            var value = path.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (value.Length == 2 && value[1] == ':') value += Path.DirectorySeparatorChar;
+            if (seen.Add(value)) result.Add(value);
+        }
+        return result;
+    }
+
+    internal void MigrateAdditionalModelDirectories()
+    {
+        AdditionalModelDirectories ??= [];
+        if (!string.IsNullOrWhiteSpace(AdditionalModelsDirectory))
+            AdditionalModelDirectories.Insert(0, AdditionalModelsDirectory);
+        AdditionalModelDirectories = NormalizeAdditionalModelDirectories(AdditionalModelDirectories);
+        AdditionalModelsDirectory = null;
+    }
+
     /// <summary>
     /// Port the local llama server listens on (default 9931). Read once at
     /// startup when the <see cref="Llama.LlamaManager"/> singleton is created
@@ -141,6 +172,30 @@ public sealed class Settings
     /// </summary>
     public string CustomServeArguments { get; set; } = "";
 
+    /// <summary>Managed llama.cpp backend: auto, rocm, vulkan, or cpu.</summary>
+    public string RuntimeBackend { get; set; } = Llama.InferenceRuntime.Automatic;
+
+    /// <summary>GPU name, or backend id plus name for identical cards; blank uses automatic selection.</summary>
+    public string GpuDeviceName { get; set; } = "";
+
+    /// <summary>Maximum GPU layers: auto, all, or a non-negative count.</summary>
+    public string GpuLayers { get; set; } = "auto";
+
+    /// <summary>Logical prompt batch size; 0 leaves llama.cpp's default unchanged.</summary>
+    public int BatchSize { get; set; }
+
+    /// <summary>Physical prompt microbatch size; 0 leaves llama.cpp's default unchanged.</summary>
+    public int MicroBatchSize { get; set; }
+
+    /// <summary>Flash Attention mode: auto, on, or off.</summary>
+    public string FlashAttention { get; set; } = "auto";
+
+    /// <summary>How much inference configuration is shown in the UI.</summary>
+    public string ExperienceMode { get; set; } = SettingsModes.Simple;
+
+    /// <summary>Optional server-wide advanced inference defaults.</summary>
+    public Llama.ModelPromptProcessingProfile AdvancedInferenceProfile { get; set; } = new();
+
     /// <summary>
     /// Whether Llama should launch automatically when the user signs in to
     /// Windows. The authoritative state is the presence of the startup
@@ -166,6 +221,13 @@ public sealed class Settings
     /// </summary>
     public Dictionary<string, int> ModelContextLengths { get; set; } = new();
 
+    /// <summary>
+    /// Optional prompt-processing overrides keyed by the same server model id
+    /// as <see cref="ModelContextLengths"/>. The router applies these to the
+    /// next server start through its model preset INI.
+    /// </summary>
+    public Dictionary<string, Llama.ModelPromptProcessingProfile> ModelPromptProfiles { get; set; } = new();
+
     private static Settings Load()
     {
         try
@@ -177,6 +239,9 @@ public sealed class Settings
                 if (s != null)
                 {
                     RestoreSecrets(s, json);
+                    s.MigrateAdditionalModelDirectories();
+                    s.ModelPromptProfiles ??= new();
+                    s.AdvancedInferenceProfile ??= new();
                     return s;
                 }
             }

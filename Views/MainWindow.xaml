@@ -182,6 +182,17 @@
                                            VerticalAlignment="Center"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </Border>
+                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="4,0"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind Model.IsExternalLocal}">
+                                <TextBlock Text="Added folder"
+                                           FontSize="10"
+                                           VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Border>
                             <!-- Vision marker: shown when the server reports
                                  image input (architecture.input_modalities).
                                  A small “view” (eye) glyph, dimmed so it reads
@@ -300,7 +311,7 @@
                              unloaded (PlayGlyphVisible) so a loaded/loading
                              row isn't accidentally deleted mid-use. Opens a
                              confirmation flyout — deleting re-downloads GBs. -->
-                        <Button Visibility="{x:Bind Model.PlayGlyphVisible, Mode=OneWay}"
+                        <Button Visibility="{x:Bind Model.DeleteGlyphVisible, Mode=OneWay}"
                                 Click="LocalModelDelete_Click"
                                 Tag="{x:Bind Model}"
                                 Padding="6"
@@ -998,7 +1009,7 @@
                     <StackPanel Grid.Row="0"
                                 Orientation="Horizontal" Spacing="8"
                                 Margin="0,0,-2,4">
-                        <TextBlock Text="Models"
+                        <TextBlock Text="Models on this PC"
                                    FontSize="13"
                                    FontWeight="SemiBold"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />

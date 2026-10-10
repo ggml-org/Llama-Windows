@@ -274,6 +274,20 @@
                                 </StackPanel>
                             </Border>
 
+                            <Border CornerRadius="8" Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="Additional model folders" FontSize="14" FontWeight="SemiBold" />
+                                    <TextBlock Text="GGUF models in these folders and their subfolders appear first in Models, marked Added folder. Downloaded models stay available too. Save to refresh the list."
+                                               FontSize="12" Opacity="0.6" TextWrapping="WrapWholeWords" />
+                                    <StackPanel x:Name="AdditionalModelsFoldersPanel" Spacing="8" />
+                                    <Button Content="+ Add folder" Click="AddModelsFolder_Click"
+                                            HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Border>
+
                             <!-- Logs (informational — where the app writes its
                                  daily log files; the same "Open Folder" button
                                  pattern as the Installation Folder card). -->
@@ -406,9 +420,11 @@
                               ColumnSpacing="12">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" /> <!-- Page header -->
+                                <RowDefinition Height="Auto" /> <!-- Inference runtime and GPU -->
                                 <RowDefinition Height="Auto" /> <!-- Port + listen address -->
                                 <RowDefinition Height="Auto" /> <!-- Idle unload + max loaded models -->
                                 <RowDefinition Height="Auto" /> <!-- Key/Value cache -->
+                                <RowDefinition Height="Auto" /> <!-- Prompt processing -->
                                 <RowDefinition Height="Auto" /> <!-- Custom serve arguments -->
                                 <RowDefinition Height="Auto" /> <!-- Installation folder -->
                                 <RowDefinition Height="Auto" /> <!-- llama.cpp runtime -->
@@ -418,14 +434,76 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Grid.Row="0"
-                                       Grid.ColumnSpan="2"
-                                       Text="Llama"
-                                       Style="{ThemeResource SubtitleTextBlockStyle}"
-                                       Margin="4,4,0,0" />
+                            <Grid Grid.Row="0" Grid.ColumnSpan="2" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Spacing="2">
+                                    <TextBlock Text="Llama" Style="{ThemeResource SubtitleTextBlockStyle}"
+                                               Margin="4,4,0,0" VerticalAlignment="Center" />
+                                    <TextBlock x:Name="AdvancedSettingsNotice"
+                                               Text="Advanced settings are saved and still active. Switch modes to review them."
+                                               FontSize="11" Opacity="0.7" TextWrapping="Wrap"
+                                               Visibility="Collapsed" />
+                                </StackPanel>
+                                <ComboBox x:Name="ExperienceModeBox" Grid.Column="1"
+                                          Header="Settings mode" Width="180"
+                                          SelectionChanged="ExperienceMode_SelectionChanged">
+                                    <ComboBoxItem Content="Simple" Tag="simple" />
+                                    <ComboBoxItem Content="Advanced" Tag="advanced" />
+                                    <ComboBoxItem Content="Expert" Tag="expert" />
+                                </ComboBox>
+                            </Grid>
+
+                            <!-- Inference runtime and device -->
+                            <Border x:Name="InferenceHardwareCard" Grid.Row="1" Grid.ColumnSpan="2"
+                                    Padding="16,14" CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="Inference Hardware" FontSize="14" FontWeight="SemiBold" />
+                                    <TextBlock Text="Automatic keeps the current llama.cpp behavior. A backend change for an app-managed installation takes effect on next launch. If a selected GPU is unavailable, models run on the CPU. External llama installations are left alone."
+                                               FontSize="12" Opacity="0.6" TextWrapping="WrapWholeWords" />
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Spacing="6">
+                                            <TextBlock Text="Runtime" FontSize="12" />
+                                            <ComboBox x:Name="RuntimeBackendBox" HorizontalAlignment="Stretch">
+                                                <ComboBoxItem Content="Automatic" Tag="auto" />
+                                                <ComboBoxItem Content="AMD ROCm / HIP" Tag="rocm" />
+                                                <ComboBoxItem Content="Vulkan" Tag="vulkan" />
+                                                <ComboBoxItem Content="CPU" Tag="cpu" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="6">
+                                            <TextBlock Text="GPU" FontSize="12" />
+                                            <ComboBox x:Name="GpuDeviceBox" HorizontalAlignment="Stretch" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="6">
+                                            <TextBlock Text="GPU layers" FontSize="12" />
+                                            <ComboBox x:Name="GpuLayersBox" HorizontalAlignment="Stretch">
+                                                <ComboBoxItem Content="Automatic" Tag="auto" />
+                                                <ComboBoxItem Content="All" Tag="all" />
+                                                <ComboBoxItem Content="Custom" Tag="custom" />
+                                            </ComboBox>
+                                            <NumberBox x:Name="GpuLayersCountBox" Minimum="0" Maximum="1000"
+                                                       SmallChange="1" SpinButtonPlacementMode="Hidden"
+                                                       PlaceholderText="Layer count" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBlock x:Name="GpuMemoryStatusText" FontSize="11" Opacity="0.6"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
 
                             <!-- Llama server port -->
-                            <Border Grid.Row="1"
+                            <Border x:Name="ServerPortCard" Grid.Row="2"
                                     Grid.Column="0"
                                     Padding="16,14"
                                     CornerRadius="8"
@@ -479,7 +557,7 @@
                             </Border>
 
                             <!-- Listen address (all interfaces / localhost / per-interface IPs) -->
-                            <Border Grid.Row="1"
+                            <Border x:Name="ListenAddressCard" Grid.Row="2"
                                     Grid.Column="1"
                                     Padding="16,14"
                                     CornerRadius="8"
@@ -558,7 +636,7 @@
                             </Border>
 
                             <!-- Unload model when idle (5m / 15m / 1h / Never) -->
-                            <Border Grid.Row="2"
+                            <Border x:Name="IdleUnloadCard" Grid.Row="3"
                                     Grid.Column="0"
                                     Padding="16,14"
                                     CornerRadius="8"
@@ -613,7 +691,7 @@
                             </Border>
 
                             <!-- Max models loaded in parallel (0 = unlimited) -->
-                            <Border Grid.Row="2"
+                            <Border x:Name="MaxModelsCard" Grid.Row="3"
                                     Grid.Column="1"
                                     Padding="16,14"
                                     CornerRadius="8"
@@ -666,7 +744,7 @@
                             </Border>
 
                             <!-- Key/Value cache quantization (K and V) -->
-                            <Border Grid.Row="3"
+                            <Border x:Name="KvCacheCard" Grid.Row="4"
                                     Grid.ColumnSpan="2"
                                     Padding="16,14"
                                     CornerRadius="8"
@@ -745,8 +823,104 @@
                                 </StackPanel>
                             </Border>
 
+                            <!-- Prompt processing (automatic leaves llama.cpp defaults intact) -->
+                            <Border x:Name="PromptProcessingCard" Grid.Row="5" Grid.ColumnSpan="2"
+                                    Padding="16,14" CornerRadius="8"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="Prompt Processing" FontSize="14" FontWeight="SemiBold" />
+                                    <TextBlock Text="Batch and microbatch sizes affect prompt processing and memory use. Zero keeps llama.cpp's defaults. Flash Attention support is checked against the installed binary when the server starts. Changes apply on the next app launch."
+                                               FontSize="12" Opacity="0.6" TextWrapping="WrapWholeWords" />
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Spacing="6">
+                                            <TextBlock Text="Batch size (0 = Automatic)" FontSize="12" />
+                                            <NumberBox x:Name="BatchSizeBox" Minimum="0" Maximum="8192"
+                                                       SmallChange="1" SpinButtonPlacementMode="Hidden" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="6">
+                                            <TextBlock Text="Microbatch size (0 = Automatic)" FontSize="12" />
+                                            <NumberBox x:Name="MicroBatchSizeBox" Minimum="0" Maximum="8192"
+                                                       SmallChange="1" SpinButtonPlacementMode="Hidden" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="6">
+                                            <TextBlock Text="Flash Attention" FontSize="12" />
+                                            <ComboBox x:Name="FlashAttentionBox" HorizontalAlignment="Stretch">
+                                                <ComboBoxItem Content="Automatic" Tag="auto" />
+                                                <ComboBoxItem Content="On" Tag="on" />
+                                                <ComboBoxItem Content="Off" Tag="off" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+                                    <Expander Header="CPU and concurrent requests">
+                                        <Grid ColumnSpacing="12" Padding="0,8,0,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <NumberBox x:Name="ThreadsBox" Grid.Column="0" Header="Generation threads"
+                                                       Minimum="0" Maximum="1024" PlaceholderText="Automatic" />
+                                            <NumberBox x:Name="ThreadsBatchBox" Grid.Column="1" Header="Prompt threads"
+                                                       Minimum="0" Maximum="1024" PlaceholderText="Automatic" />
+                                            <NumberBox x:Name="ParallelBox" Grid.Column="2" Header="Parallel slots"
+                                                       Minimum="0" Maximum="256" PlaceholderText="Automatic" />
+                                        </Grid>
+                                    </Expander>
+                                    <Expander Header="Generation defaults">
+                                        <StackPanel Spacing="8" Padding="0,8,0,4">
+                                            <TextBlock Text="API clients can override these defaults per request, including the built-in chat UI."
+                                                       FontSize="11" Opacity="0.6" TextWrapping="Wrap" />
+                                            <Grid ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <NumberBox x:Name="TemperatureBox" Grid.Column="0" Header="Temperature"
+                                                           Minimum="0" Maximum="5" SmallChange="0.1" PlaceholderText="Runtime default" />
+                                                <NumberBox x:Name="TopKBox" Grid.Column="1" Header="Top K"
+                                                           Minimum="0" Maximum="10000" PlaceholderText="Runtime default" />
+                                                <NumberBox x:Name="TopPBox" Grid.Column="2" Header="Top P"
+                                                           Minimum="0" Maximum="1" SmallChange="0.05" PlaceholderText="Runtime default" />
+                                                <NumberBox x:Name="RepeatPenaltyBox" Grid.Column="3" Header="Repeat penalty"
+                                                           Minimum="0" Maximum="5" SmallChange="0.05" PlaceholderText="Runtime default" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </Expander>
+                                    <Expander x:Name="MultiGpuExpander" Header="Multiple GPUs">
+                                        <StackPanel Spacing="8" Padding="0,8,0,4">
+                                            <TextBlock Text="Expert: splitting can be slower across an external GPU connection. Leave both fields automatic unless benchmarking shows a benefit."
+                                                       FontSize="11" Opacity="0.6" TextWrapping="Wrap" />
+                                            <ComboBox x:Name="SplitModeBox" Header="Split mode" HorizontalAlignment="Stretch">
+                                                <ComboBoxItem Content="Automatic" Tag="" />
+                                                <ComboBoxItem Content="None" Tag="none" />
+                                                <ComboBoxItem Content="Layer" Tag="layer" />
+                                                <ComboBoxItem Content="Row" Tag="row" />
+                                                <ComboBoxItem Content="Tensor" Tag="tensor" />
+                                            </ComboBox>
+                                            <TextBox x:Name="TensorSplitBox" Header="Tensor split weights"
+                                                     PlaceholderText="Automatic, or e.g. 3,1" />
+                                        </StackPanel>
+                                    </Expander>
+                                    <TextBlock x:Name="InferenceTuningErrorText"
+                                               Foreground="#F85149" FontSize="12"
+                                               TextWrapping="Wrap" Visibility="Collapsed" />
+                                    <TextBlock x:Name="InferenceCapabilitiesText"
+                                               FontSize="11" Opacity="0.65"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+
                             <!-- Custom serve arguments (free-form, appended last) -->
-                            <Border Grid.Row="4"
+                            <Border x:Name="CustomArgumentsCard" Grid.Row="6"
                                     Grid.ColumnSpan="2"
                                     Padding="16,14"
                                     CornerRadius="8"
@@ -793,12 +967,21 @@
                                                Foreground="#F85149"
                                                TextWrapping="Wrap"
                                                Visibility="Collapsed" />
+                                    <TextBlock Text="Effective saved configuration" FontSize="13"
+                                               FontWeight="SemiBold" />
+                                    <TextBlock Text="Shows configuration loaded when this app started. Restart the app after saving changes to refresh it. A running or externally managed server may differ."
+                                               FontSize="11" Opacity="0.6" TextWrapping="Wrap" />
+                                    <Button Content="Refresh preview" Click="RefreshConfiguration_Click"
+                                            HorizontalAlignment="Left" />
+                                    <TextBox x:Name="EffectiveConfigurationBox" IsReadOnly="True"
+                                             AcceptsReturn="True" TextWrapping="NoWrap"
+                                             MinHeight="100" MaxHeight="180" />
                                 </StackPanel>
                             </Border>
 
                             <!-- Installation folder (read-only — informational,
                                  not a setting) -->
-                            <Border Grid.Row="5"
+                            <Border Grid.Row="7"
                                     Grid.ColumnSpan="2"
                                     Padding="16,14"
                                     CornerRadius="8"
@@ -855,7 +1038,7 @@
                             <!-- llama.cpp runtime updater: the weekly auto-update
                                  (RuntimeUpdateScheduler) made visible — installed
                                  version, last check, and a manual trigger. -->
-                            <Border Grid.Row="6"
+                            <Border Grid.Row="8"
                                     Grid.ColumnSpan="2"
                                     Padding="16,14"
                                     CornerRadius="8"
@@ -922,6 +1105,11 @@
                         Spacing="8"
                         Padding="24,12,24,16"
                         HorizontalAlignment="Right">
+                <TextBlock x:Name="SaveErrorText"
+                           Visibility="Collapsed"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"
+                           MaxWidth="480" />
                 <Button Content="Cancel"
                         Padding="24,10"
                         Click="Cancel_Click"

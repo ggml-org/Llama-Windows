@@ -18,6 +18,42 @@ namespace LlamaApp.Tests;
 /// </summary>
 public sealed class ModelItemDetailsViewModelTests
 {
+    [Fact]
+    public void PromptProfile_SavesValidChoicesAndResetRemovesTheOverride()
+    {
+        var saved = new Dictionary<string, ModelPromptProcessingProfile>();
+        var item = InstalledItem();
+        using var vm = new ModelItemDetailsViewModel(item, new FakeHost(),
+            _ => null, (_, _) => { },
+            loadPromptProfile: id => saved.TryGetValue(id, out var p) ? p : null,
+            savePromptProfile: (id, profile) =>
+            {
+                if (profile is null) saved.Remove(id);
+                else saved[id] = profile;
+            });
+
+        Assert.Null(vm.SavePromptProfile(1024, 256, "on"));
+        Assert.Equal(1024, saved[vm.ServerModelId].BatchSize);
+        Assert.NotNull(vm.SavePromptProfile(128, 256, "on"));
+        Assert.Equal(1024, saved[vm.ServerModelId].BatchSize);
+        vm.ResetPromptProfile();
+        Assert.Empty(saved);
+        Assert.True(vm.PromptProfile.IsAutomatic);
+    }
+
+    [Fact]
+    public void PromptProfile_RejectsMicrobatchLargerThanInheritedGlobalBatch()
+    {
+        var saved = false;
+        using var vm = new ModelItemDetailsViewModel(InstalledItem(), new FakeHost(),
+            _ => null, (_, _) => { },
+            savePromptProfile: (_, _) => saved = true,
+            globalBatchSize: 128);
+
+        Assert.NotNull(vm.SavePromptProfile(0, 256, "auto"));
+        Assert.False(saved);
+    }
+
     // ---- Fakes ----
 
     private sealed class FakeHost : IModelItemDetailsHost

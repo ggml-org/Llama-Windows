@@ -68,6 +68,28 @@ public class DeviceQueryTests
     }
 
     [Fact]
+    public void Parse_Two_Radeons_From_Windows_Vulkan_Build()
+    {
+        var output = """
+            Available devices:
+              Vulkan0: AMD Radeon(TM) 8060S Graphics (114507 MiB, 108782 MiB free)
+              Vulkan1: AMD Radeon RX 9060 XT (16304 MiB, 15443 MiB free)
+            """;
+        var devices = DeviceQuery.Parse(output);
+        Assert.Equal(2, devices.Count);
+        Assert.Equal("AMD Radeon(TM) 8060S Graphics", devices[0].Name);
+        Assert.Equal("AMD Radeon RX 9060 XT", devices[1].Name);
+        Assert.NotEqual(devices[0].Id, devices[1].Id);
+    }
+
+    [Fact]
+    public void Parse_Rocm_Device_Is_Classified()
+    {
+        var devices = DeviceQuery.Parse("Available devices:\n  ROCm0: AMD Radeon RX 9060 XT (16304 MiB, 15443 MiB free)");
+        Assert.Equal(DeviceKind.Rocm, Assert.Single(devices).Kind);
+    }
+
+    [Fact]
     public void Parse_Section_Ends_At_First_Non_Indented_Line()
     {
         var output = """
@@ -132,6 +154,7 @@ public class DeviceQueryTests
     [Theory]
     [InlineData("CUDA0", DeviceKind.Cuda)]
     [InlineData("Vulkan1", DeviceKind.Vulkan)]
+    [InlineData("ROCm0", DeviceKind.Rocm)]
     [InlineData("Metal0", DeviceKind.Metal)]
     [InlineData("CPU", DeviceKind.Cpu)]
     [InlineData("SYCL0", DeviceKind.Unknown)]

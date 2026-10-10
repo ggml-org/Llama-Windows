@@ -112,4 +112,23 @@ public class DeviceStatusPresentationTests
     {
         Assert.Equal("", DeviceStatusPresentation.DescribeDeviceList([]));
     }
+
+    [Fact]
+    public void SelectedGpuTooltipNamesOnlyTheChosenRadeon()
+    {
+        var selected = Gpu("AMD Radeon RX 9060 XT", 15UL << 30, "Vulkan1");
+        var d = DeviceStatusPresentation.Describe(true, [selected], "Vulkan1");
+        Assert.Equal(DeviceStatusPresentation.IndicatorKind.Gpu, d.Kind);
+        Assert.Contains("Inference GPU", d.ToolTip);
+        Assert.Contains("RX 9060 XT", d.ToolTip);
+    }
+
+    [Fact]
+    public void CpuFallbackTooltipExplainsMissingGpu()
+    {
+        var d = DeviceStatusPresentation.Describe(true, [], "none",
+            "AMD Radeon RX 9060 XT is unavailable; using the CPU.");
+        Assert.Equal(DeviceStatusPresentation.IndicatorKind.Cpu, d.Kind);
+        Assert.Contains("9060 XT is unavailable", d.ToolTip);
+    }
 }
