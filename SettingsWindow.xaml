@@ -476,6 +476,7 @@
                                             <TextBlock Text="Runtime" FontSize="12" />
                                             <ComboBox x:Name="RuntimeBackendBox" HorizontalAlignment="Stretch">
                                                 <ComboBoxItem Content="Automatic" Tag="auto" />
+                                                <ComboBoxItem Content="NVIDIA CUDA" Tag="cuda" />
                                                 <ComboBoxItem Content="AMD ROCm / HIP" Tag="rocm" />
                                                 <ComboBoxItem Content="Vulkan" Tag="vulkan" />
                                                 <ComboBoxItem Content="CPU" Tag="cpu" />

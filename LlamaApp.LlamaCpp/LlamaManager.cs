@@ -739,6 +739,7 @@ public sealed class LlamaManager
     private static DeviceKind? RequiredDeviceKind(string? backend) =>
         InferenceRuntime.Normalize(backend) switch
         {
+            InferenceRuntime.Cuda => DeviceKind.Cuda,
             InferenceRuntime.Rocm => DeviceKind.Rocm,
             InferenceRuntime.Vulkan => DeviceKind.Vulkan,
             _ => null,

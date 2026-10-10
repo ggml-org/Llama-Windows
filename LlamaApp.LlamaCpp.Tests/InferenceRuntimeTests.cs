@@ -8,6 +8,7 @@ public sealed class InferenceRuntimeTests
     [Theory]
     [InlineData(null, 0)]
     [InlineData("auto", 0)]
+    [InlineData("cuda", 2)]
     [InlineData("rocm", 2)]
     [InlineData("vulkan", 2)]
     [InlineData("cpu", 3)]
@@ -15,6 +16,12 @@ public sealed class InferenceRuntimeTests
     {
         var skips = InferenceRuntime.InstallerEnvironment(backend);
         Assert.Equal(count, skips.Count);
+        if (backend == "cuda")
+        {
+            Assert.False(skips.ContainsKey("SKIP_CUDA"));
+            Assert.True(skips.ContainsKey("SKIP_ROCM"));
+            Assert.True(skips.ContainsKey("SKIP_VULKAN"));
+        }
         if (backend == "rocm")
         {
             Assert.True(skips.ContainsKey("SKIP_CUDA"));
@@ -34,7 +41,9 @@ public sealed class InferenceRuntimeTests
     {
         Assert.False(InferenceRuntime.RequiresManagedInstall("auto", null));
         Assert.False(InferenceRuntime.RequiresManagedInstall("ROCM", "rocm"));
+        Assert.False(InferenceRuntime.RequiresManagedInstall("CUDA", "cuda"));
         Assert.True(InferenceRuntime.RequiresManagedInstall("rocm", "auto"));
+        Assert.True(InferenceRuntime.RequiresManagedInstall("cuda", "vulkan"));
         Assert.True(InferenceRuntime.RequiresManagedInstall("auto", "vulkan"));
     }
 
@@ -87,6 +96,22 @@ public sealed class InferenceRuntimeTests
             InferenceRuntime.SelectDevice("vulkan", "", devices).DeviceArgument);
         Assert.Equal("Vulkan2",
             InferenceRuntime.SelectDevice("vulkan", "NVIDIA GeForce", devices).DeviceArgument);
+    }
+
+    [Fact]
+    public void CudaSelectionUsesOnlyDetectedCudaDevicesRegardlessOfCardName()
+    {
+        var devices = new DeviceProbe(true,
+        [
+            new LlamaDevice { Id = "CUDA0", Name = "GPU Model A", Kind = DeviceKind.Cuda },
+            new LlamaDevice { Id = "CUDA1", Name = "GPU Model B", Kind = DeviceKind.Cuda },
+            new LlamaDevice { Id = "Vulkan0", Name = "GPU Model C", Kind = DeviceKind.Vulkan },
+        ]);
+
+        Assert.Equal("CUDA0,CUDA1",
+            InferenceRuntime.SelectDevice("cuda", "", devices).DeviceArgument);
+        Assert.Equal("CUDA1",
+            InferenceRuntime.SelectDevice("cuda", "GPU Model B", devices).DeviceArgument);
     }
 
     [Fact]

@@ -4,12 +4,14 @@ namespace LlamaApp.Llama;
 public static class InferenceRuntime
 {
     public const string Automatic = "auto";
+    public const string Cuda = "cuda";
     public const string Rocm = "rocm";
     public const string Vulkan = "vulkan";
     public const string Cpu = "cpu";
 
     public static string Normalize(string? value) => value?.ToLowerInvariant() switch
     {
+        Cuda => Cuda,
         Rocm => Rocm,
         Vulkan => Vulkan,
         Cpu => Cpu,
@@ -25,6 +27,10 @@ public static class InferenceRuntime
         var skips = new Dictionary<string, string>();
         switch (Normalize(backend))
         {
+            case Cuda:
+                skips["SKIP_ROCM"] = "1";
+                skips["SKIP_VULKAN"] = "1";
+                break;
             case Rocm:
                 skips["SKIP_CUDA"] = "1";
                 skips["SKIP_VULKAN"] = "1";
@@ -58,6 +64,7 @@ public static class InferenceRuntime
 
         var candidates = probe.Devices.Where(device => requested switch
         {
+            Cuda => device.Kind == DeviceKind.Cuda,
             Rocm => device.Kind == DeviceKind.Rocm,
             Vulkan => device.Kind == DeviceKind.Vulkan,
             _ => device.Kind != DeviceKind.Cpu && device.Kind != DeviceKind.Unknown,
