@@ -2128,6 +2128,8 @@ namespace LlamaApp.Views
             }
         }
 
+        private string? _lastModelProfileWarning;
+
         /// <summary>
         /// Re-renders the footer's server-status dot and relaunch button from
         /// <see cref="LlamaManager.ServerStatus"/> (mapping rules live in
@@ -2141,7 +2143,14 @@ namespace LlamaApp.Views
                 LlamaManager.Shared.ServerStatus, LlamaManager.Shared.State,
                 LlamaManager.Shared.FailureMessage);
             ServerStatusDot.Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(d.Dot);
-            Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(ServerStatusDot, d.ToolTip);
+            var warning = LlamaManager.Shared.ModelProfileWarning;
+            Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(ServerStatusDot,
+                warning is null ? d.ToolTip : d.ToolTip + "\n\n" + warning);
+            if (warning != _lastModelProfileWarning)
+            {
+                _lastModelProfileWarning = warning;
+                if (warning is not null) Notifications.Show("Model overrides not applied", warning);
+            }
             ServerRestartButton.Visibility = d.CanRelaunch
                 ? Microsoft.UI.Xaml.Visibility.Visible
                 : Microsoft.UI.Xaml.Visibility.Collapsed;

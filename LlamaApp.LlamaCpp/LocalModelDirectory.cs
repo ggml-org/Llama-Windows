@@ -40,9 +40,45 @@ internal static class LocalModelDirectory
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
-                // One unavailable folder must not hide models in the other folders.
+                LlamaApp.Common.Log.Warn(ex, $"could not scan local model folder: {directory}");
             }
+
         }
         return models;
+    }
+}
+
+/// <summary>Publishes complete background scans; preset rendering only reads the snapshot.</summary>
+internal sealed class LocalModelDirectoryCache
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly Func<IReadOnlyList<string>, IReadOnlyDictionary<string, string>> _scan;
+    private string[]? _directories;
+    private IReadOnlyDictionary<string, string> _snapshot =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    internal LocalModelDirectoryCache(
+        Func<IReadOnlyList<string>, IReadOnlyDictionary<string, string>>? scan = null)
+    {
+        _scan = scan ?? (directories => LocalModelDirectory.Scan(directories));
+    }
+
+    internal IReadOnlyDictionary<string, string> Snapshot => Volatile.Read(ref _snapshot);
+
+    internal async Task RefreshAsync(IEnumerable<string>? directories,
+        CancellationToken cancel = default, bool force = false)
+    {
+        var roots = directories?.ToArray() ?? [];
+        await _gate.WaitAsync(cancel).ConfigureAwait(false);
+        try
+        {
+            if (!force && _directories is not null &&
+                _directories.SequenceEqual(roots, StringComparer.OrdinalIgnoreCase)) return;
+            var snapshot = await Task.Run(() => _scan(roots), cancel).ConfigureAwait(false);
+            cancel.ThrowIfCancellationRequested();
+            Volatile.Write(ref _snapshot, snapshot);
+            _directories = roots;
+        }
+        finally { _gate.Release(); }
     }
 }

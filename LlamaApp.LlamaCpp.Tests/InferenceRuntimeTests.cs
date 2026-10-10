@@ -47,6 +47,21 @@ public sealed class InferenceRuntimeTests
         Assert.True(InferenceRuntime.RequiresManagedInstall("auto", "vulkan"));
     }
 
+    [Theory]
+    [InlineData("cuda", true)]
+    [InlineData("rocm", true)]
+    [InlineData("vulkan", true)]
+    [InlineData("cuda", false)]
+    [InlineData("rocm", false)]
+    [InlineData("vulkan", false)]
+    public void AppliedRuntimeWithUnavailableHardwareDoesNotNeedReinstall(string backend, bool probeSucceeded)
+    {
+        Assert.False(InferenceRuntime.RequiresManagedInstall(backend, backend));
+        var selection = InferenceRuntime.SelectDevice(backend, "", new DeviceProbe(probeSucceeded, []));
+        Assert.Equal("none", selection.DeviceArgument);
+        Assert.NotNull(selection.FallbackReason);
+    }
+
     private static readonly DeviceProbe TwoRadeons = new(true,
     [
         new LlamaDevice { Id = "Vulkan0", Name = "AMD Radeon(TM) 8060S Graphics", Kind = DeviceKind.Vulkan },

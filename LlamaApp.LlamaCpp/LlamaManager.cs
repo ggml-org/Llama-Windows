@@ -217,8 +217,7 @@ public sealed class LlamaManager
     /// <summary>Optional recursive sources of existing GGUF files, separate from the HF cache.</summary>
     public IReadOnlyList<string>? AdditionalModelDirectories { get; set; }
 
-    private IReadOnlyDictionary<string, string> _additionalModels =
-        new Dictionary<string, string>(StringComparer.Ordinal);
+    private readonly LocalModelDirectoryCache _additionalModels = new();
 
     /// <summary>
     /// Hugging Face access token passed to the server via <c>HF_TOKEN</c> so
@@ -315,6 +314,7 @@ public sealed class LlamaManager
     public ModelPromptProcessingProfile AdvancedInferenceProfile { get; set; } = new();
 
     private DeviceProbe _lastDeviceProbe = new(false, []);
+    private ServeCapabilities _serveCapabilities = new(false, false, false, false);
 
     private ModelPromptProcessingProfile BuildGlobalInferenceProfile() =>
         (AdvancedInferenceProfile ?? new()) with
@@ -333,6 +333,18 @@ public sealed class LlamaManager
 
     /// <summary>Why a selected accelerator fell back to CPU, if applicable.</summary>
     public string? RuntimeFallbackReason { get; private set; }
+
+    /// <summary>Saved model overrides omitted because they cannot be used by this runtime.</summary>
+    public string? ModelProfileWarning
+    {
+        get;
+        private set
+        {
+            if (field == value) return;
+            field = value;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
 
     private static string AppliedRuntimePath => Path.Combine(AppData.Root, "runtime-backend.txt");
 
@@ -575,15 +587,6 @@ public sealed class LlamaManager
                 case ResolutionKind.Managed:
                     var needsManagedInstall = InferenceRuntime.RequiresManagedInstall(
                         RuntimeBackend, ReadAppliedRuntime());
-                    var requiredKind = RequiredDeviceKind(RuntimeBackend);
-                    if (!needsManagedInstall && requiredKind is { } kind)
-                    {
-                        var installedProbe = await DeviceQuery.ListDevicesAsync(resolved.Path!, cancel);
-                        needsManagedInstall = !installedProbe.Devices.Any(device =>
-                            device.Kind == kind);
-                        if (needsManagedInstall)
-                            Log.Warn($"the installed runtime has no {RuntimeBackend} device; reinstalling the requested backend");
-                    }
                     if (needsManagedInstall)
                     {
                         Log.Info($"switching app-managed llama backend to {InferenceRuntime.Normalize(RuntimeBackend)}");
@@ -712,14 +715,11 @@ public sealed class LlamaManager
                 ?? throw new IOException("Install script succeeded but 'llama' was not found on PATH.");
             CurrentOrigin = IsManagedPath(BinaryPath) ? Origin.Managed : Origin.External;
             Version = await ReadVersionAsync(BinaryPath, cancel);
-            if (RequiredDeviceKind(RuntimeBackend) is { } requiredKind)
-            {
-                var installedDevices = await DeviceQuery.ListDevicesAsync(BinaryPath, cancel);
-                if (!installedDevices.Devices.Any(device => device.Kind == requiredKind))
-                    throw new IOException($"The installer completed, but the installed llama binary did not detect a {RuntimeBackend} GPU. Check its driver and runtime installation, then restart Llama.");
-            }
+            // Record the installer choice even if it used its CPU fallback.
+            // Hardware availability is handled at launch, not by reinstalling.
             WriteAppliedRuntime(RuntimeBackend);
             _devicesCache = default; // A replacement binary may expose a different backend.
+            _serveCapabilities = new(false, false, false, false);
             State = InstallState.Idle;
             return true;
         }
@@ -735,15 +735,6 @@ public sealed class LlamaManager
             return false;
         }
     }
-
-    private static DeviceKind? RequiredDeviceKind(string? backend) =>
-        InferenceRuntime.Normalize(backend) switch
-        {
-            InferenceRuntime.Cuda => DeviceKind.Cuda,
-            InferenceRuntime.Rocm => DeviceKind.Rocm,
-            InferenceRuntime.Vulkan => DeviceKind.Vulkan,
-            _ => null,
-        };
 
     // ---- Server ----
 
@@ -1020,27 +1011,13 @@ public sealed class LlamaManager
             return false;
         }
 
-        if (ModelPromptProfiles is not null)
-        {
-            foreach (var (id, profile) in ModelPromptProfiles)
-            {
-                if (profile is null) continue;
-                if ((InferenceTuning.ValidateProfile(profile) ??
-                    InferenceTuning.ValidateEffective(BatchSize, MicroBatchSize,
-                        profile.BatchSize, profile.MicroBatchSize,
-                        profile.FlashAttention)) is not { } profileError) continue;
-                FailureMessage = $"Model {id}: {profileError}";
-                ServerStatus = ServerState.Failed;
-                return false;
-            }
-        }
-
+        _serveCapabilities = new(false, false, false, false);
         if (!globalProfile.IsAutomatic ||
             ModelPromptProfiles?.Values.Any(profile => profile is not null && !profile.IsAutomatic) == true)
         {
-            var capabilities = await ServeCapabilities.ProbeAsync(BinaryPath, cancel);
-            if (InferenceTuning.UnsupportedProfileOption(globalProfile,
-                    capabilities) is { } unsupported)
+            _serveCapabilities = await ServeCapabilities.ProbeAsync(BinaryPath, cancel);
+            if (!globalProfile.IsAutomatic && InferenceTuning.UnsupportedProfileOption(globalProfile,
+                    _serveCapabilities) is { } unsupported)
             {
                 FailureMessage = unsupported.StartsWith("--", StringComparison.Ordinal)
                     ? $"The installed llama server does not support {unsupported}."
@@ -1048,19 +1025,8 @@ public sealed class LlamaManager
                 ServerStatus = ServerState.Failed;
                 return false;
             }
-            if (ModelPromptProfiles is not null)
-            {
-                foreach (var (id, profile) in ModelPromptProfiles)
-                {
-                    if (profile is null || profile.IsAutomatic) continue;
-                    if (InferenceTuning.UnsupportedProfileOption(profile,
-                            capabilities) is not { } unsupportedProfile) continue;
-                    FailureMessage = $"Model {id}: installed llama server does not support {unsupportedProfile}.";
-                    ServerStatus = ServerState.Failed;
-                    return false;
-                }
-            }
         }
+        UpdateModelProfileWarning();
 
         // A fresh attempt invalidates whatever the previous launch failed
         // with; a new reason is set below if this one fails too.
@@ -1069,6 +1035,7 @@ public sealed class LlamaManager
 
         try
         {
+            await _additionalModels.RefreshAsync(AdditionalModelDirectories, cancel, force: true);
             var needsDeviceProbe = InferenceRuntime.Normalize(RuntimeBackend) != InferenceRuntime.Automatic
                 || !string.IsNullOrWhiteSpace(GpuDeviceName)
                 || ModelPromptProfiles?.Values.Any(profile => profile is not null &&
@@ -1325,9 +1292,21 @@ public sealed class LlamaManager
         var deviceIds = devices.ToDictionary(
             device => GpuDeviceChoice.Key(device, devices), device => device.Id,
             StringComparer.OrdinalIgnoreCase);
-        _additionalModels = LocalModelDirectory.Scan(AdditionalModelDirectories);
-        return ModelPresets.Render(ModelContextLengths, ModelPromptProfiles,
-            BuildGlobalInferenceProfile(), deviceIds, globalDeviceId, _additionalModels);
+        var profiles = InferenceTuning.CompatibleModelProfiles(ModelPromptProfiles,
+            BatchSize, MicroBatchSize, _serveCapabilities, out _);
+        return ModelPresets.Render(ModelContextLengths, profiles,
+            BuildGlobalInferenceProfile(), deviceIds, globalDeviceId, _additionalModels.Snapshot);
+    }
+
+    private void UpdateModelProfileWarning()
+    {
+        InferenceTuning.CompatibleModelProfiles(ModelPromptProfiles,
+            BatchSize, MicroBatchSize, _serveCapabilities, out var warnings);
+        var warning = warnings.Count == 0 ? null :
+            "Some saved model overrides were not applied. Open the model's details to edit or Reset them.\n" +
+            string.Join('\n', warnings);
+        if (warning is not null && warning != ModelProfileWarning) Log.Warn(warning);
+        ModelProfileWarning = warning;
     }
 
     /// <summary>Preview saved router arguments and per-model preset values.</summary>
@@ -1344,7 +1323,8 @@ public sealed class LlamaManager
         return "Router configuration loaded at app start:\nllama.exe " +
             string.Join(' ', args.Select(Quote)) +
             "\n\nModel presets (applied when each model loads):\n" +
-            (preset ?? "(none; llama.cpp defaults)");
+            (preset ?? "(none; llama.cpp defaults)") +
+            (ModelProfileWarning is null ? "" : "\n\n" + ModelProfileWarning);
     }
 
     /// <summary>
@@ -1382,6 +1362,11 @@ public sealed class LlamaManager
     {
         try
         {
+            await _additionalModels.RefreshAsync(AdditionalModelDirectories, cancel);
+            if (!_serveCapabilities.Succeeded && BinaryPath is not null &&
+                ModelPromptProfiles?.Values.Any(profile => profile is not null && !profile.IsAutomatic) == true)
+                _serveCapabilities = await ServeCapabilities.ProbeAsync(BinaryPath, cancel);
+            UpdateModelProfileWarning();
             if (ModelPromptProfiles?.Values.Any(profile => profile is not null &&
                 !string.IsNullOrEmpty(profile.GpuDeviceName) && profile.GpuDeviceName != "none") == true)
                 _lastDeviceProbe = await ProbeDevicesAsync(cancel);
@@ -2335,7 +2320,7 @@ public sealed class LlamaManager
     {
         // The extra folder belongs to the user; this app must never delete its files.
         if (model.ServerModelId.StartsWith("local/", StringComparison.Ordinal) ||
-            _additionalModels.ContainsKey(model.ServerModelId)) return false;
+            _additionalModels.Snapshot.ContainsKey(model.ServerModelId)) return false;
         if (ServerStatus != ServerState.Running)
             return false;
 
@@ -2419,7 +2404,7 @@ public sealed class LlamaManager
             return dto?.Data?.Select(d =>
             {
                 var model = Map(d);
-                return _additionalModels.TryGetValue(model.Id, out var path)
+                return _additionalModels.Snapshot.TryGetValue(model.Id, out var path)
                     ? model with { Path = path, Source = "local", CanRemove = false }
                     : model;
             }).ToList() ?? [];

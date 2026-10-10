@@ -80,4 +80,86 @@ public sealed class InferenceTuningTests
         Assert.Equal("--threads", InferenceTuning.UnsupportedProfileOption(
             new() { Threads = 4 }, capabilities));
     }
+
+    [Fact]
+    public void UnsupportedModelProfileIsOmittedWithoutLosingModelContextOrPath()
+    {
+        var profiles = new Dictionary<string, ModelPromptProcessingProfile>
+        {
+            ["local/unsupported"] = new() { FlashAttention = "on", Threads = 8 },
+            ["supported"] = new() { Threads = 4 },
+        };
+        var capabilities = ServeCapabilities.Parse("--help\n--port N\n--threads N\n");
+
+        var compatible = InferenceTuning.CompatibleModelProfiles(profiles, 0, 0,
+            capabilities, out var warnings);
+        Assert.Single(compatible);
+        Assert.Equal(profiles["supported"], compatible["supported"]);
+        Assert.Contains("--flash-attn", Assert.Single(warnings));
+        Assert.Contains("local/unsupported", warnings[0]);
+
+        var ini = ModelPresets.Render(
+            new Dictionary<string, int> { ["local/unsupported"] = 4096 }, compatible,
+            localModelPaths: new Dictionary<string, string>
+                { ["local/unsupported"] = @"C:\Models\weights.gguf" });
+        Assert.Contains("[local/unsupported]", ini);
+        Assert.Contains("ctx-size = 4096", ini);
+        Assert.Contains(@"model = C:\Models\weights.gguf", ini);
+        Assert.DoesNotContain("flash-attn", ini);
+        Assert.DoesNotContain("threads = 8", ini);
+        Assert.Contains("threads = 4", ini);
+        Assert.Equal(2, profiles.Count);
+        Assert.Equal("on", profiles["local/unsupported"].FlashAttention);
+    }
+
+    [Fact]
+    public void FailedCapabilityProbeDoesNotBlockAutomaticModelProfiles()
+    {
+        var profiles = new Dictionary<string, ModelPromptProcessingProfile>
+        {
+            ["automatic"] = new(),
+            ["advanced"] = new() { Threads = 4 },
+        };
+        var compatible = InferenceTuning.CompatibleModelProfiles(profiles, 0, 0,
+            ServeCapabilities.Parse(null), out var warnings);
+        Assert.Single(compatible);
+        Assert.Contains("automatic", compatible.Keys);
+        Assert.Contains("Could not check", Assert.Single(warnings));
+    }
+
+    [Fact]
+    public void InvalidAndInheritedIncompatibleProfilesAreOmittedIndividually()
+    {
+        var profiles = new Dictionary<string, ModelPromptProcessingProfile>
+        {
+            ["invalid"] = new() { Temperature = double.NaN },
+            ["inherited"] = new() { MicroBatchSize = 256 },
+            ["valid"] = new() { Threads = 4 },
+        };
+        var capabilities = ServeCapabilities.Parse("--help\n--port N\n--threads N\n--ubatch-size N\n");
+        var compatible = InferenceTuning.CompatibleModelProfiles(profiles, 128, 0,
+            capabilities, out var warnings);
+        Assert.Equal(2, warnings.Count);
+        Assert.Equal("valid", Assert.Single(compatible).Key);
+    }
+
+    [Fact]
+    public void ProfileCanBeRestoredAfterRuntimeUpgradeOrClearedWithReset()
+    {
+        var profiles = new Dictionary<string, ModelPromptProcessingProfile>
+        {
+            ["model"] = new() { FlashAttention = "on" },
+        };
+        Assert.Empty(InferenceTuning.CompatibleModelProfiles(profiles, 0, 0,
+            ServeCapabilities.Parse("--help\n--port N\n"), out _));
+        var compatible = InferenceTuning.CompatibleModelProfiles(profiles, 0, 0,
+            ServeCapabilities.Parse("--help\n--port N\n--flash-attn MODE\n"), out var warnings);
+        Assert.Single(compatible);
+        Assert.Empty(warnings);
+
+        profiles.Clear();
+        Assert.Empty(InferenceTuning.CompatibleModelProfiles(profiles, 0, 0,
+            ServeCapabilities.Parse(null), out warnings));
+        Assert.Empty(warnings);
+    }
 }

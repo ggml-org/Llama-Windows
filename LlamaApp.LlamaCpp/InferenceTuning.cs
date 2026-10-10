@@ -72,6 +72,37 @@ public static class InferenceTuning
             ?? Check(!string.IsNullOrEmpty(profile.TensorSplit), "--tensor-split");
     }
 
+    internal static IReadOnlyDictionary<string, ModelPromptProcessingProfile> CompatibleModelProfiles(
+        IReadOnlyDictionary<string, ModelPromptProcessingProfile>? profiles,
+        int globalBatchSize, int globalMicroBatchSize, ServeCapabilities capabilities,
+        out IReadOnlyList<string> warnings)
+    {
+        var compatible = new Dictionary<string, ModelPromptProcessingProfile>(StringComparer.Ordinal);
+        var omitted = new List<string>();
+        if (profiles is not null)
+        {
+            foreach (var (id, profile) in profiles)
+            {
+                if (profile is null) continue;
+                var error = ValidateProfile(profile) ??
+                    ValidateEffective(globalBatchSize, globalMicroBatchSize,
+                        profile.BatchSize, profile.MicroBatchSize, profile.FlashAttention);
+                if (error is null && !profile.IsAutomatic)
+                {
+                    var unsupported = UnsupportedProfileOption(profile, capabilities);
+                    if (unsupported is not null)
+                        error = unsupported.StartsWith("--", StringComparison.Ordinal)
+                            ? $"The installed llama server does not support {unsupported}."
+                            : unsupported;
+                }
+                if (error is null) compatible[id] = profile;
+                else omitted.Add($"Model {id}: {error}");
+            }
+        }
+        warnings = omitted;
+        return compatible;
+    }
+
     public static string? Validate(int batchSize, int microBatchSize, string? flashAttention)
     {
         if (batchSize < 0 || batchSize > MaxBatchSize)
