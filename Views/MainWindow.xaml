@@ -182,17 +182,13 @@
                                            VerticalAlignment="Center"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </Border>
-                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
-                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
-                                    Padding="4,0"
-                                    Height="16"
-                                    VerticalAlignment="Center"
-                                    Visibility="{x:Bind Model.IsExternalLocal}">
-                                <TextBlock Text="Added folder"
-                                           FontSize="10"
-                                           VerticalAlignment="Center"
-                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            </Border>
+                            <FontIcon Glyph="&#xE8B7;"
+                                      FontSize="11"
+                                      Opacity="0.55"
+                                      VerticalAlignment="Center"
+                                      Visibility="{x:Bind Model.IsExternalLocal}"
+                                      AutomationProperties.Name="Model from an added folder"
+                                      ToolTipService.ToolTip="{x:Bind Model.LocalFilePath}" />
                             <!-- Vision marker: shown when the server reports
                                  image input (architecture.input_modalities).
                                  A small “view” (eye) glyph, dimmed so it reads
@@ -326,7 +322,7 @@
                                         <TextBlock Text="Delete this model?"
                                                    FontSize="13"
                                                    FontWeight="SemiBold" />
-                                        <TextBlock Text="The downloaded files are removed from disk. You can download the model again at any time."
+                                        <TextBlock Text="{x:Bind Model.DeleteConfirmationText}"
                                                    FontSize="12"
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                    TextWrapping="Wrap" />

@@ -33,6 +33,8 @@ namespace LlamaApp
 #endif
             );
             Common.Log.Info("Llama starting");
+            UnhandledException += (_, args) =>
+                Common.Log.Error(args.Exception, "unhandled UI exception: " + args.Message);
 
             _dispatcher = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()
                           ?? throw new InvalidOperationException("App must initialize on the UI thread.");

@@ -12,6 +12,23 @@ namespace LlamaApp.Tests;
 public class QuantizationPresentationTests
 {
     [Theory]
+    [InlineData(@"C:\Models\Gemma-3-Q4_K_M.gguf", "Q4_K_M")]
+    [InlineData(@"C:\Models\Qwen.q8_0.gguf", "Q8_0")]
+    [InlineData(@"C:\Models\Model-IQ2_XXS.gguf", "IQ2_XXS")]
+    [InlineData(@"C:\Models\Model-IQ4_NL.gguf", "IQ4_NL")]
+    [InlineData(@"C:\Models\Model-Q6_K-00001-of-00003.gguf", "Q6_K")]
+    [InlineData(@"C:\Models\Model-Q4_0_4_8.gguf", "Q4_0_4_8")]
+    [InlineData(@"C:\Models\gpt-oss-mxfp4.gguf", "MXFP4")]
+    [InlineData(@"C:\Models\Model (BF16).gguf", "BF16")]
+    [InlineData(@"C:\Models\Model-F16.gguf", "F16")]
+    [InlineData(@"C:\Q4_K_M\Model.gguf", null)]
+    [InlineData(@"C:\Models\Model-NotQ4_K_M.gguf", null)]
+    [InlineData(@"C:\Models\Model.gguf", null)]
+    [InlineData(null, null)]
+    public void FileNamesExposeOnlyStandaloneQuantLabels(string? path, string? expected)
+        => Assert.Equal(expected, QuantizationPresentation.FromFileName(path));
+
+    [Theory]
     [InlineData("Q2_K", "Compact")]
     [InlineData("Q3_K_M", "Compact")]
     [InlineData("IQ2_XXS", "Compact")]

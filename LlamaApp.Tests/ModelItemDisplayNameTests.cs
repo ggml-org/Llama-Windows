@@ -10,17 +10,52 @@ namespace LlamaApp.Tests;
 public sealed class ModelItemDisplayNameTests
 {
     [Fact]
-    public void AddedFolderModelShowsItsPathAndHasNoDeleteAction()
+    public void AddedFolderModelShowsItsPathQuantAndDeleteActionWithoutChangingServerId()
     {
         var item = new ModelItem
         {
-            Name = "Model Q4",
+            Name = "Model-Q4_K_M",
+            RepoName = "local/Model-Q4_K_M-123456789ABC",
             IsExternalLocal = true,
-            LocalFilePath = @"C:\Models\Publisher\Model Q4.gguf",
+            LocalFilePath = @"C:\Models\Publisher\Model-Q4_K_M.gguf",
         };
 
         Assert.Contains(item.LocalFilePath, item.RowToolTip);
+        Assert.True(item.DeleteGlyphVisible);
+        Assert.True(item.HasQuant);
+        Assert.Equal("Q4_K_M", item.Quant);
+        Assert.Equal(item.RepoName, ((LlamaApp.Common.IModel)item).ServerModelId);
+        Assert.Contains(item.LocalFilePath, item.DeleteConfirmationText);
+        Assert.Contains("permanently deleted", item.DeleteConfirmationText);
+    }
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    public void AddedFolderDeleteIsHiddenWhileInUse(bool loaded, bool loading, bool downloading)
+    {
+        var item = new ModelItem
+        {
+            IsExternalLocal = true,
+            IsLoaded = loaded,
+            IsLoading = loading,
+            IsDownloading = downloading,
+        };
         Assert.False(item.DeleteGlyphVisible);
+    }
+
+    [Fact]
+    public void AddedFolderWithExplicitQuantStillUsesItsPresetId()
+    {
+        var item = new ModelItem
+        {
+            IsExternalLocal = true,
+            RepoName = "local/model-123456789ABC",
+            Quant = "Q8_0",
+        };
+        Assert.Equal("local/model-123456789ABC", ((LlamaApp.Common.IModel)item).ServerModelId);
+        Assert.Equal("Q8_0", item.Quant);
     }
 
     [Theory]

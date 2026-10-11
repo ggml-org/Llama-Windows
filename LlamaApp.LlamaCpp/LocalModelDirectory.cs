@@ -6,6 +6,14 @@ namespace LlamaApp.Llama;
 /// <summary>Finds GGUF weights in user-selected folders without moving them.</summary>
 internal static class LocalModelDirectory
 {
+    internal static void Delete(string modelId, IEnumerable<string>? directories)
+    {
+        // Resolve again from configured roots, never from a UI/server-supplied path.
+        if (!Scan(directories).TryGetValue(modelId, out var path))
+            throw new IOException("The model is no longer in a configured added folder.");
+        File.Delete(path);
+    }
+
     internal static IReadOnlyDictionary<string, string> Scan(IEnumerable<string>? directories)
     {
         var models = new Dictionary<string, string>(StringComparer.Ordinal);

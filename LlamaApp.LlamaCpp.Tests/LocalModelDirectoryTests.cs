@@ -6,6 +6,72 @@ namespace LlamaApp.LlamaCpp.Tests;
 public sealed class LocalModelDirectoryTests
 {
     [Fact]
+    public async Task DeletingSelectedModelLeavesOtherFilesAndRefreshesTheSnapshot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "llama-local-delete-test-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            var selected = Path.Combine(root, "Model-Q4_K_M.gguf");
+            var other = Path.Combine(root, "Model-Q8_0.gguf");
+            var projector = Path.Combine(root, "mmproj-Model.gguf");
+            File.WriteAllText(selected, "GGUF");
+            File.WriteAllText(other, "GGUF");
+            File.WriteAllText(projector, "GGUF");
+            var cache = new LocalModelDirectoryCache();
+            await cache.RefreshAsync([root]);
+            var id = cache.Snapshot.Single(m => m.Value == selected).Key;
+
+            LocalModelDirectory.Delete(id, [root]);
+            await cache.RefreshAsync([root], force: true);
+
+            Assert.False(File.Exists(selected));
+            Assert.True(File.Exists(other));
+            Assert.True(File.Exists(projector));
+            Assert.True(Directory.Exists(root));
+            Assert.False(cache.Snapshot.ContainsKey(id));
+            Assert.Single(cache.Snapshot);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void DeletionRejectsAnIdFromARemovedFolderOrAnUntrustedPath()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "llama-local-delete-boundary-test-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            var file = Path.Combine(root, "Model.gguf");
+            File.WriteAllText(file, "GGUF");
+            var id = Assert.Single(LocalModelDirectory.Scan([root])).Key;
+
+            Assert.Throws<IOException>(() => LocalModelDirectory.Delete(id, []));
+            Assert.Throws<IOException>(() => LocalModelDirectory.Delete(file, [root]));
+            Assert.Throws<IOException>(() => LocalModelDirectory.Delete("local/../../Model", [root]));
+            Assert.True(File.Exists(file));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void LockedModelDeletionFailsWithoutRemovingTheFile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "llama-local-delete-locked-test-" + Guid.NewGuid());
+        Directory.CreateDirectory(root);
+        try
+        {
+            var file = Path.Combine(root, "Model.gguf");
+            File.WriteAllText(file, "GGUF");
+            var id = Assert.Single(LocalModelDirectory.Scan([root])).Key;
+            using var locked = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+            Assert.Throws<IOException>(() => LocalModelDirectory.Delete(id, [root]));
+            Assert.True(File.Exists(file));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public async Task BackgroundScanKeepsPreviousSnapshotReadableUntilComplete()
     {
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

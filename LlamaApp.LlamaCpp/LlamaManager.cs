@@ -2303,12 +2303,15 @@ public sealed class LlamaManager
     // ---- Model listing (GET /models) ----
 
     /// <summary>
-    /// Asks the running llama server to remove a model from its cache via
+    /// Removes a cached model through the running server via
     /// <c>DELETE /models?model={name}</c> (the model name is passed as a query
     /// param, not in the path — only cached, non-preset models can be deleted).
     /// The server deletes the on-disk GGUF and drops it from the model list;
     /// the <see cref="ModelsChanged"/> poller will surface the removal on its
     /// next tick (the server also emits a <c>model_remove</c> SSE event).
+    /// Added-folder models are presets, so their selected GGUF file is deleted
+    /// locally after checking the server reports it unloaded; presets are then
+    /// rebuilt and reloaded. Only files rediscovered in configured roots qualify.
     /// Returns <c>false</c> (without throwing) when the server isn't running or
     /// rejects the request.
     /// </summary>
@@ -2318,15 +2321,42 @@ public sealed class LlamaManager
     /// <returns><c>true</c> if the server accepted the delete request.</returns>
     public async Task<bool> DeleteModelAsync(IModel model, CancellationToken cancel = default)
     {
-        // The extra folder belongs to the user; this app must never delete its files.
-        if (model.ServerModelId.StartsWith("local/", StringComparison.Ordinal) ||
-            _additionalModels.Snapshot.ContainsKey(model.ServerModelId)) return false;
         if (ServerStatus != ServerState.Running)
+        {
+            Log.Warn("cannot delete model while the server is not running");
             return false;
+        }
 
         try
         {
             Log.Info($"deleting model {model.ServerModelId}");
+            if (model.ServerModelId.StartsWith("local/", StringComparison.Ordinal))
+            {
+                using var localBudget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
+                using var listing = await _http.GetAsync("/models", localBudget.Token);
+                listing.EnsureSuccessStatusCode();
+                await using var stream = await listing.Content.ReadAsStreamAsync(localBudget.Token);
+                var dto = await JsonSerializer.DeserializeAsync<ModelsResponseDto>(
+                    stream, cancellationToken: localBudget.Token);
+                var current = dto?.Data?.FirstOrDefault(d => d.Id == model.ServerModelId);
+                if (current is null ||
+                    !string.Equals(current.Status?.Value, "unloaded", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Only an unloaded added-folder model can be deleted.");
+
+                await Task.Run(() => LocalModelDirectory.Delete(
+                    model.ServerModelId, AdditionalModelDirectories), localBudget.Token);
+                // Preset models cannot be deleted through DELETE /models.
+                await _additionalModels.RefreshAsync(AdditionalModelDirectories, cancel, force: true);
+                WriteModelPresetsIni(ActiveDeviceId, _lastDeviceProbe);
+                using var reload = await _http.GetAsync("/models?reload=1", localBudget.Token);
+                reload.EnsureSuccessStatusCode();
+                await using var reloadedStream = await reload.Content.ReadAsStreamAsync(localBudget.Token);
+                var reloaded = await JsonSerializer.DeserializeAsync<ModelsResponseDto>(
+                    reloadedStream, cancellationToken: localBudget.Token);
+                if (reloaded?.Data is null || reloaded.Data.Any(d => d.Id == model.ServerModelId))
+                    throw new IOException("The file was deleted, but the server did not remove its preset. Restart Llama.");
+                return true;
+            }
             var url = $"/models?model={Uri.EscapeDataString(model.ServerModelId)}";
             using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
             using var resp = await _http.DeleteAsync(url, budget.Token);
@@ -2335,6 +2365,11 @@ public sealed class LlamaManager
                 Log.Warn($"server rejected model delete ({(int)resp.StatusCode})");
             }
             return resp.IsSuccessStatusCode;
+        }
+        catch (OperationCanceledException ex) when (!cancel.IsCancellationRequested)
+        {
+            Log.Warn(ex, "model delete request timed out");
+            return false;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -2396,6 +2431,8 @@ public sealed class LlamaManager
 
         try
         {
+            // Adoption skips managed launch; initialize folder paths for its rows too.
+            await _additionalModels.RefreshAsync(AdditionalModelDirectories, cancel);
             using var budget = WithTimeout(TimeSpan.FromSeconds(10), cancel);
             using var resp = await _http.GetAsync("/models", budget.Token);
             resp.EnsureSuccessStatusCode();
@@ -2405,7 +2442,7 @@ public sealed class LlamaManager
             {
                 var model = Map(d);
                 return _additionalModels.Snapshot.TryGetValue(model.Id, out var path)
-                    ? model with { Path = path, Source = "local", CanRemove = false }
+                    ? model with { Path = path, Source = "local", CanRemove = true }
                     : model;
             }).ToList() ?? [];
         }

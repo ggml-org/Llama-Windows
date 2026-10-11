@@ -47,6 +47,8 @@ If a saved model profile becomes invalid or unsupported after a runtime change, 
 
 Additional local GGUF folders are scanned in the background at managed server startup and when the folder list changes. Preset reloads and the configuration preview use the cached snapshot, so opening Settings does not recursively scan large or network-backed folders. Restart Llama to discover files added to an unchanged folder.
 
+Models from added folders show quantization badges when their filenames contain a quant label, with a small folder icon and the full file path in the tooltip. Like cached models, unloaded models can be deleted from the list or details view after confirmation. For an added-folder model, deletion permanently removes only the selected GGUF file from its original location; other files and the folder itself are left intact.
+
 ## Privacy
 
 Llama sends no telemetry — no events, no analytics, no install id. The only thing outbound HTTP requests (model downloads, release-update checks, and calls to the local llama-server) carry is the standard User-Agent header:
@@ -110,6 +112,12 @@ The installed release is a signed `.msix`, produced by the CI
 ([`.github/workflows/_build.yml`](.github/workflows/_build.yml)) with Visual
 Studio MSBuild and the `GenerateAppxPackage` target — `dotnet build` alone
 does not pack the Appx. `dotnet publish` above is sufficient for local use.
+
+When wrapping an unpackaged publish folder in a local MSIX, generate a
+`resources.pri` using MakePRI with the MSIX identity as its index name, merging
+the published `LlamaApp.pri`. Packing the publish folder without this
+package-specific index can install successfully but crash at startup because
+WinUI cannot resolve its compiled XAML.
 
 ---
 

@@ -40,7 +40,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// </summary>
     public string? RepoName { get; set; }
 
-    /// <summary>True for a model in the user's additional folder. The app never deletes it.</summary>
+    /// <summary>True for a model in a user-selected additional folder.</summary>
     public bool IsExternalLocal { get; set; }
 
     /// <summary>Original path for a model discovered in an added folder.</summary>
@@ -52,10 +52,11 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
 
     /// <summary>
     /// Server model id = <c>&lt;repo&gt;:&lt;quant&gt;</c> (or just <c>&lt;repo&gt;</c>
-    /// when <see cref="Quant"/> is empty) — the form the llama server's
+    /// when <see cref="Quant"/> is empty, or the unchanged local preset ID)
+    /// — the form the llama server's
     /// <c>/models/load</c> requires. See <see cref="IModel.ServerModelId"/>.
     /// </summary>
-    string IModel.ServerModelId => string.IsNullOrEmpty(Quant)
+    string IModel.ServerModelId => IsExternalLocal || string.IsNullOrEmpty(Quant)
         ? (RepoName ?? Name)
         : $"{RepoName ?? Name}:{Quant}";
 
@@ -149,8 +150,20 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public string License { get; set; } = "";
     public bool Vision { get; set; }
 
-    /// <summary>Quantization label, e.g. "Q4_0", "mxfp4" (used for ServerModelId).</summary>
-    public string? Quant { get; set; } = null;
+    private string? _quant;
+
+    /// <summary>Preset IDs stay unchanged; added-folder quants are display metadata only.</summary>
+    public string? Quant
+    {
+        get => IsExternalLocal && string.IsNullOrWhiteSpace(_quant)
+            ? QuantizationPresentation.FromFileName(LocalFilePath)
+            : _quant;
+        set => _quant = value;
+    }
+
+    public string DeleteConfirmationText => IsExternalLocal
+        ? $"This GGUF file will be permanently deleted from its added folder:\n{LocalFilePath}\nOther files in the folder are not removed."
+        : "The downloaded files are removed from disk. You can download the model again at any time.";
 
     // ---- Device-fit state (dims Recommended rows the machine can't run) ----
 
@@ -548,7 +561,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// </summary>
     public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed && !LoadFailed && !DownloadPaused;
 
-    public bool DeleteGlyphVisible => !IsExternalLocal && PlayGlyphVisible;
+    public bool DeleteGlyphVisible => PlayGlyphVisible;
 
     /// <summary>True when the download progress ring should be visible.</summary>
     public bool ProgressRingVisible => IsDownloading;

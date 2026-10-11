@@ -6,6 +6,31 @@ namespace LlamaApp.LlamaCpp.Tests;
 public sealed class ModelPresetsTests
 {
     [Fact]
+    public void SavedPreferencesDoNotRecreateDeletedLocalModels()
+    {
+        var contexts = new Dictionary<string, int>
+        {
+            ["local/model-123"] = 8192,
+            ["repo:Q4"] = 4096,
+        };
+        var profiles = new Dictionary<string, ModelPromptProcessingProfile>
+        {
+            ["local/model-123"] = new() { BatchSize = 512 },
+        };
+        var paths = new Dictionary<string, string>();
+
+        var ini = ModelPresets.Render(contexts, profiles, localModelPaths: paths);
+        Assert.DoesNotContain("local/model-123", ini);
+        Assert.Contains("[repo:Q4]\nctx-size = 4096", ini);
+
+        paths["local/model-123"] = @"C:\Models\Model.gguf";
+        ini = ModelPresets.Render(contexts, profiles, localModelPaths: paths);
+        Assert.Contains("[local/model-123]", ini);
+        Assert.Contains("ctx-size = 8192", ini);
+        Assert.Contains("batch-size = 512", ini);
+    }
+
+    [Fact]
     public void LocalFileAndPreferencesShareOnePresetSection()
     {
         var ini = ModelPresets.Render(

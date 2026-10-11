@@ -265,7 +265,7 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
             : "Chat with model";
 
     /// <summary>Delete is offered for installed models, and only while unloaded and idle.</summary>
-    public bool CanDelete => IsInstalled && !Model.IsExternalLocal && !IsBusy && Model.PlayGlyphVisible;
+    public bool CanDelete => IsInstalled && !IsBusy && Model.DeleteGlyphVisible;
 
     /// <summary>Download is offered for Hub models not yet installed.</summary>
     public bool CanDownload => !IsInstalled && !IsBusy;

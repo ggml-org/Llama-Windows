@@ -76,6 +76,8 @@ internal static class ModelPresets
                 localModelPaths.TryGetValue(id, out modelPath) &&
                 !string.IsNullOrWhiteSpace(modelPath) &&
                 modelPath.IndexOfAny(['\r', '\n']) < 0;
+            // Saved preferences must not recreate a deleted/removed local preset.
+            if (id.StartsWith("local/", StringComparison.Ordinal) && !hasLocalPath) continue;
             if (!hasContext && !hasProfile && !hasLocalPath) continue;
 
             sb.Append('[').Append(id).Append("]\n");

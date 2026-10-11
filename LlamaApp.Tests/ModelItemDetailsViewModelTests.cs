@@ -602,6 +602,31 @@ public sealed class ModelItemDetailsViewModelTests
     }
 
     [Fact]
+    public async Task AddedFolderDetailsRetainQuantAndForwardConfirmedDeletion()
+    {
+        var host = new FakeHost();
+        var item = new ModelItem
+        {
+            Name = "Model-Q4_K_M",
+            RepoName = "local/Model-123456789ABC",
+            LocalFilePath = @"C:\Models\Model-Q4_K_M.gguf",
+            IsExternalLocal = true,
+        };
+        var vm = MakeVm(item, host, new FakePreferences());
+
+        Assert.True(vm.CanDelete);
+        Assert.True(vm.HasQuantizationBadge);
+        Assert.Equal("Q4_K_M", vm.QuantizationBadge);
+        await vm.DeleteAsync();
+        Assert.Same(item, Assert.Single(host.Deletes));
+
+        item.IsLoaded = true;
+        Assert.False(vm.CanDelete);
+        await vm.DeleteAsync();
+        Assert.Single(host.Deletes);
+    }
+
+    [Fact]
     public async Task Delete_Is_Refused_For_A_Loaded_Model()
     {
         var host = new FakeHost();

@@ -1530,6 +1530,18 @@ namespace LlamaApp.Views
             }
 
             Log.Warn("server rejected delete for " + ((IModel)item).ServerModelId);
+            var flyout = new Flyout
+            {
+                Content = new TextBlock
+                {
+                    Text = item.IsExternalLocal
+                        ? "Couldn't complete model deletion. The file may be in use or the folder may not be writable. If the file was removed but the model is still listed, restart Llama to refresh its presets."
+                        : "Couldn't delete this model. Make sure the server is running and the model is unloaded, then try again.",
+                    TextWrapping = TextWrapping.Wrap,
+                    MaxWidth = 280,
+                },
+            };
+            flyout.ShowAt(_detailsViewModel is null ? ModelsList : DetailsView);
             return false;
         }
 
@@ -1720,7 +1732,7 @@ namespace LlamaApp.Views
                         new TextBlock { Text = "Delete this model?", FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
                         new TextBlock
                         {
-                            Text = "The downloaded files are removed from disk. You can download the model again at any time.",
+                            Text = model.DeleteConfirmationText,
                             FontSize = 12,
                             Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
                             TextWrapping = TextWrapping.Wrap,
