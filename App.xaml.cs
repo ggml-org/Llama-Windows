@@ -33,6 +33,8 @@ namespace LlamaApp
 #endif
             );
             Common.Log.Info("Llama starting");
+            UnhandledException += (_, args) =>
+                Common.Log.Error(args.Exception, "unhandled UI exception: " + args.Message);
 
             _dispatcher = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()
                           ?? throw new InvalidOperationException("App must initialize on the UI thread.");
@@ -147,16 +149,25 @@ namespace LlamaApp
             // once reachable the MainWindow fetches the Available model list via
             // GET /models.
             Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
+            Llama.LlamaManager.Shared.AdditionalModelDirectories = Settings.Current.AdditionalModelDirectories;
             Llama.LlamaManager.Shared.HuggingFaceToken = Settings.Current.HuggingFaceToken;
             Llama.LlamaManager.Shared.IdleUnloadSeconds = Settings.Current.IdleUnloadSeconds;
             Llama.LlamaManager.Shared.MaxLoadedModels = Settings.Current.MaxLoadedModels;
             Llama.LlamaManager.Shared.CacheTypeK = Settings.Current.CacheTypeK;
             Llama.LlamaManager.Shared.CacheTypeV = Settings.Current.CacheTypeV;
             Llama.LlamaManager.Shared.CustomServeArguments = Settings.Current.CustomServeArguments;
+            Llama.LlamaManager.Shared.RuntimeBackend = Settings.Current.RuntimeBackend;
+            Llama.LlamaManager.Shared.GpuDeviceName = Settings.Current.GpuDeviceName;
+            Llama.LlamaManager.Shared.GpuLayers = Settings.Current.GpuLayers;
+            Llama.LlamaManager.Shared.BatchSize = Settings.Current.BatchSize;
+            Llama.LlamaManager.Shared.MicroBatchSize = Settings.Current.MicroBatchSize;
+            Llama.LlamaManager.Shared.FlashAttention = Settings.Current.FlashAttention;
+            Llama.LlamaManager.Shared.AdvancedInferenceProfile = Settings.Current.AdvancedInferenceProfile;
             // Shared by reference: the details view mutates this dictionary when
             // the user picks a context length, and the manager renders it into
             // the server's --models-preset INI (see ReloadModelPresetsAsync).
             Llama.LlamaManager.Shared.ModelContextLengths = Settings.Current.ModelContextLengths;
+            Llama.LlamaManager.Shared.ModelPromptProfiles = Settings.Current.ModelPromptProfiles;
             Common.Log.Info($"cache directory: {Settings.Current.CacheDirectory}");
             // Presence only — never log the token itself.
             Common.Log.Info($"HF token: {(string.IsNullOrWhiteSpace(Settings.Current.HuggingFaceToken) ? "not set" : "configured")}");

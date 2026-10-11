@@ -75,4 +75,14 @@ public sealed class ContextMemoryEstimateTests
 
         Assert.Equal(modelSize + 512L * 1024 * 1024, total);
     }
+
+    [Fact]
+    public void MixedKvTypesEstimateKeyAndValueSeparately()
+    {
+        var elements = 4096L * 32 * 1024;
+        var expected = elements * 34 / 32 + elements * 18 / 32;
+        Assert.Equal(expected, ContextMemoryEstimate.EstimateKvCacheBytes(
+            4096, Llama8B, "q8_0", "q4_0"));
+        Assert.True(expected < ContextMemoryEstimate.EstimateKvCacheBytes(4096, Llama8B));
+    }
 }

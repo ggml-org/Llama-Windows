@@ -1,4 +1,5 @@
 using System;
+using System.Text.RegularExpressions;
 
 namespace LlamaApp.Views
 {
@@ -13,6 +14,18 @@ namespace LlamaApp.Views
     /// </summary>
     public static class QuantizationPresentation
     {
+        private static readonly Regex FileQuant = new(
+            @"(?:^|[._\s()-])(?<quant>IQ[1-4]_(?:XXS|XS|S|M|NL)|Q[2-8]_K(?:_[SML])?|Q[4-8]_[01](?:_[48]_[48])?|TQ[12]_0|MXFP4|NVFP4|BF16|F16|F32)(?=$|[._\s()-])",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+            TimeSpan.FromMilliseconds(100));
+
+        public static string? FromFileName(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return null;
+            var match = FileQuant.Match(Path.GetFileNameWithoutExtension(path));
+            return match.Success ? match.Groups["quant"].Value.ToUpperInvariant() : null;
+        }
+
         /// <summary>
         /// The friendly quality tier for a quant label. Unknown labels are
         /// returned unchanged so a new quant never renders as a blank row.

@@ -182,6 +182,13 @@
                                            VerticalAlignment="Center"
                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </Border>
+                            <FontIcon Glyph="&#xE8B7;"
+                                      FontSize="11"
+                                      Opacity="0.55"
+                                      VerticalAlignment="Center"
+                                      Visibility="{x:Bind Model.IsExternalLocal}"
+                                      AutomationProperties.Name="Model from an added folder"
+                                      ToolTipService.ToolTip="{x:Bind Model.LocalFilePath}" />
                             <!-- Vision marker: shown when the server reports
                                  image input (architecture.input_modalities).
                                  A small “view” (eye) glyph, dimmed so it reads
@@ -300,7 +307,7 @@
                              unloaded (PlayGlyphVisible) so a loaded/loading
                              row isn't accidentally deleted mid-use. Opens a
                              confirmation flyout — deleting re-downloads GBs. -->
-                        <Button Visibility="{x:Bind Model.PlayGlyphVisible, Mode=OneWay}"
+                        <Button Visibility="{x:Bind Model.DeleteGlyphVisible, Mode=OneWay}"
                                 Click="LocalModelDelete_Click"
                                 Tag="{x:Bind Model}"
                                 Padding="6"
@@ -315,7 +322,7 @@
                                         <TextBlock Text="Delete this model?"
                                                    FontSize="13"
                                                    FontWeight="SemiBold" />
-                                        <TextBlock Text="The downloaded files are removed from disk. You can download the model again at any time."
+                                        <TextBlock Text="{x:Bind Model.DeleteConfirmationText}"
                                                    FontSize="12"
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                    TextWrapping="Wrap" />
@@ -998,7 +1005,7 @@
                     <StackPanel Grid.Row="0"
                                 Orientation="Horizontal" Spacing="8"
                                 Margin="0,0,-2,4">
-                        <TextBlock Text="Models"
+                        <TextBlock Text="Models on this PC"
                                    FontSize="13"
                                    FontWeight="SemiBold"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />

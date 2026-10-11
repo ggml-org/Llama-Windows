@@ -94,6 +94,11 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     private readonly IModelItemDetailsHost _host;
     private readonly Func<string, int?> _loadContextPreference;
     private readonly Action<string, int> _saveContextPreference;
+    private readonly Action<string, ModelPromptProcessingProfile?> _savePromptProfile;
+    private readonly int _globalBatchSize;
+    private readonly int _globalMicroBatchSize;
+    private readonly string _globalCacheTypeK;
+    private readonly string _globalCacheTypeV;
     private readonly Func<string, CancellationToken, Task<ModelRuntimeDetails?>> _runtimeDetailsLoader;
     private readonly Func<CancellationToken, Task<ulong>> _memoryBudgetProbe;
     private readonly Func<string, int, CancellationToken, Task<bool?>> _fitParamsProbe;
@@ -117,16 +122,34 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
         Func<string, CancellationToken, Task<ModelRuntimeDetails?>>? runtimeDetailsLoader = null,
         Func<CancellationToken, Task<ulong>>? memoryBudgetProbe = null,
         Func<string, int, CancellationToken, Task<bool?>>? fitParamsProbe = null,
-        Action<Action>? dispatchToUi = null)
+        Action<Action>? dispatchToUi = null,
+        Func<string, ModelPromptProcessingProfile?>? loadPromptProfile = null,
+        Action<string, ModelPromptProcessingProfile?>? savePromptProfile = null,
+        int globalBatchSize = 0,
+        int globalMicroBatchSize = 0,
+        string? experienceMode = null,
+        string globalCacheTypeK = "f16",
+        string globalCacheTypeV = "f16")
     {
         Model = model;
         _host = host;
         _loadContextPreference = loadContextPreference;
         _saveContextPreference = saveContextPreference;
+        _savePromptProfile = savePromptProfile ?? ((_, _) => { });
+        _globalBatchSize = globalBatchSize;
+        _globalMicroBatchSize = globalMicroBatchSize;
+        _globalCacheTypeK = globalCacheTypeK;
+        _globalCacheTypeV = globalCacheTypeV;
+        AdvancedOptionsVisible = SettingsModes.ShowsAdvanced(experienceMode)
+            ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+        ExpertOptionsVisible = SettingsModes.ShowsExpert(experienceMode)
+            ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+        PromptProfile = loadPromptProfile?.Invoke(ServerModelId) ?? new ModelPromptProcessingProfile();
         _runtimeDetailsLoader = runtimeDetailsLoader ?? LoadRuntimeDetailsAsync;
         _memoryBudgetProbe = memoryBudgetProbe
             ?? (token => LlamaManager.Shared.ContextMemoryBudgetAsync(token));
-        _fitParamsProbe = fitParamsProbe ?? DefaultFitParamsProbe;
+        _fitParamsProbe = fitParamsProbe ?? ((path, context, token) =>
+            DefaultFitParamsProbe(path, context, EffectiveCacheTypeK, EffectiveCacheTypeV, token));
         _dispatchToUi = dispatchToUi;
 
         // Live state sync: the shared ModelItem already reflects every server
@@ -141,6 +164,45 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
 
     /// <summary>The canonical server model id (<c>repo:quant</c>) — the stable identity.</summary>
     public string ServerModelId => ((IModel)Model).ServerModelId;
+
+    /// <summary>Current optional prompt-processing choices for this model.</summary>
+    public ModelPromptProcessingProfile PromptProfile { get; private set; }
+
+    private string EffectiveCacheTypeK => string.IsNullOrEmpty(PromptProfile.CacheTypeK)
+        ? _globalCacheTypeK : PromptProfile.CacheTypeK;
+    private string EffectiveCacheTypeV => string.IsNullOrEmpty(PromptProfile.CacheTypeV)
+        ? _globalCacheTypeV : PromptProfile.CacheTypeV;
+
+    /// <summary>Keep tuning off the default model details page.</summary>
+    public Microsoft.UI.Xaml.Visibility AdvancedOptionsVisible { get; }
+    public Microsoft.UI.Xaml.Visibility ExpertOptionsVisible { get; }
+
+    /// <summary>Saves validated choices for the next load of this model.</summary>
+    public string? SavePromptProfile(int batchSize, int microBatchSize, string flashAttention,
+        ModelPromptProcessingProfile? otherOptions = null)
+    {
+        var profile = (otherOptions ?? new ModelPromptProcessingProfile()) with
+        {
+            BatchSize = batchSize,
+            MicroBatchSize = microBatchSize,
+            FlashAttention = flashAttention,
+        };
+        var ownError = InferenceTuning.ValidateProfile(profile);
+        if (ownError is not null) return ownError;
+        var error = InferenceTuning.ValidateEffective(_globalBatchSize, _globalMicroBatchSize,
+            batchSize, microBatchSize, flashAttention);
+        if (error is not null) return error;
+        PromptProfile = profile;
+        _savePromptProfile(ServerModelId, PromptProfile.IsAutomatic ? null : PromptProfile);
+        return null;
+    }
+
+    /// <summary>Removes model-specific prompt overrides.</summary>
+    public void ResetPromptProfile()
+    {
+        PromptProfile = new ModelPromptProcessingProfile();
+        _savePromptProfile(ServerModelId, null);
+    }
 
     /// <summary>
     /// The header name: the clean row display name (no "(quant)" suffix, no
@@ -203,7 +265,7 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
             : "Chat with model";
 
     /// <summary>Delete is offered for installed models, and only while unloaded and idle.</summary>
-    public bool CanDelete => IsInstalled && !IsBusy && Model.PlayGlyphVisible;
+    public bool CanDelete => IsInstalled && !IsBusy && Model.DeleteGlyphVisible;
 
     /// <summary>Download is offered for Hub models not yet installed.</summary>
     public bool CanDownload => !IsInstalled && !IsBusy;
@@ -405,10 +467,12 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     /// option keeps its heuristic graying then.
     /// </summary>
     private static async Task<bool?> DefaultFitParamsProbe(
-        string modelPath, int contextTokens, CancellationToken token)
+        string modelPath, int contextTokens, string cacheTypeK, string cacheTypeV,
+        CancellationToken token)
     {
         var manager = LlamaManager.Shared;
-        var estimate = await manager.QueryFitParamsAsync(modelPath, contextTokens, token);
+        var estimate = await manager.QueryFitParamsAsync(modelPath, contextTokens, token,
+            cacheTypeK, cacheTypeV);
         if (estimate is null) return null;
 
         var budget = await manager.ContextMemoryBudgetAsync(token);
@@ -465,14 +529,16 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     /// "can the weights even load".
     /// </summary>
     internal static List<ContextLengthOption> BuildOptions(
-        ModelRuntimeDetails? details, long modelSizeBytes, ulong budgetBytes = ulong.MaxValue)
+        ModelRuntimeDetails? details, long modelSizeBytes, ulong budgetBytes = ulong.MaxValue,
+        string cacheTypeK = "f16", string cacheTypeV = "f16")
     {
         var info = details?.ContextInfo;
         var size = details?.ModelSizeBytes > 0 ? details.ModelSizeBytes : modelSizeBytes;
         return StandardContextTokens.Select(tokens =>
         {
             var estimate = info is not null
-                ? ContextMemoryEstimate.EstimateTotalBytes(size, tokens, info)
+                ? ContextMemoryEstimate.EstimateTotalBytes(size, tokens, info,
+                    cacheTypeK, cacheTypeV)
                 : size;
             return new ContextLengthOption
             {
@@ -489,7 +555,8 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     private void RebuildContextOptions(ModelRuntimeDetails? details, ulong budgetBytes)
     {
         ContextLengths.Clear();
-        foreach (var option in BuildOptions(details, _modelSizeBytes, budgetBytes))
+        foreach (var option in BuildOptions(details, _modelSizeBytes, budgetBytes,
+            EffectiveCacheTypeK, EffectiveCacheTypeV))
             ContextLengths.Add(option);
     }
 

@@ -40,16 +40,23 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// </summary>
     public string? RepoName { get; set; }
 
+    /// <summary>True for a model in a user-selected additional folder.</summary>
+    public bool IsExternalLocal { get; set; }
+
+    /// <summary>Original path for a model discovered in an added folder.</summary>
+    public string? LocalFilePath { get; set; }
+
     // ---- IModel (explicit Name so IModel.Name returns the repo id) ----
 
     string IModel.Name => RepoName ?? Name;
 
     /// <summary>
     /// Server model id = <c>&lt;repo&gt;:&lt;quant&gt;</c> (or just <c>&lt;repo&gt;</c>
-    /// when <see cref="Quant"/> is empty) — the form the llama server's
+    /// when <see cref="Quant"/> is empty, or the unchanged local preset ID)
+    /// — the form the llama server's
     /// <c>/models/load</c> requires. See <see cref="IModel.ServerModelId"/>.
     /// </summary>
-    string IModel.ServerModelId => string.IsNullOrEmpty(Quant)
+    string IModel.ServerModelId => IsExternalLocal || string.IsNullOrEmpty(Quant)
         ? (RepoName ?? Name)
         : $"{RepoName ?? Name}:{Quant}";
 
@@ -124,6 +131,8 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             var head = string.IsNullOrWhiteSpace(Description)
                 ? Name
                 : $"{Name}\n{Description}";
+            if (IsExternalLocal && !string.IsNullOrWhiteSpace(LocalFilePath))
+                head += $"\n{LocalFilePath}";
             return string.IsNullOrWhiteSpace(FitNote)
                 ? head
                 : $"{head}\n{FitNote}";
@@ -141,8 +150,20 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public string License { get; set; } = "";
     public bool Vision { get; set; }
 
-    /// <summary>Quantization label, e.g. "Q4_0", "mxfp4" (used for ServerModelId).</summary>
-    public string? Quant { get; set; } = null;
+    private string? _quant;
+
+    /// <summary>Preset IDs stay unchanged; added-folder quants are display metadata only.</summary>
+    public string? Quant
+    {
+        get => IsExternalLocal && string.IsNullOrWhiteSpace(_quant)
+            ? QuantizationPresentation.FromFileName(LocalFilePath)
+            : _quant;
+        set => _quant = value;
+    }
+
+    public string DeleteConfirmationText => IsExternalLocal
+        ? $"This GGUF file will be permanently deleted from its added folder:\n{LocalFilePath}\nOther files in the folder are not removed."
+        : "The downloaded files are removed from disk. You can download the model again at any time.";
 
     // ---- Device-fit state (dims Recommended rows the machine can't run) ----
 
@@ -226,6 +247,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isDownloading = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(ProgressRingVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
@@ -298,6 +320,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _downloadPaused = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(ResumeDownloadVisible));
             OnPropertyChanged(nameof(CancelDownloadVisible));
             OnPropertyChanged(nameof(PausedPercentTextVisible));
@@ -388,6 +411,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             // The subtitle (headline vs. size) and the warning-dot tooltip both
             // depend on this flag.
             OnPropertyChanged(nameof(SubtitleText));
@@ -441,6 +465,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             // A failed row swaps the play glyph for the warning + retry affordance.
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             NotifyAccessibleNameChanged();
         }
     }
@@ -468,6 +493,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isLoading = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
             OnPropertyChanged(nameof(IsIndeterminateLoad));
@@ -513,6 +539,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             _isLoaded = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
+            OnPropertyChanged(nameof(DeleteGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
             OnPropertyChanged(nameof(OpenGlyphVisible));
             NotifyAccessibleNameChanged();
@@ -533,6 +560,8 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// failed load shows the same affordance so the rejection isn't silent.
     /// </summary>
     public bool PlayGlyphVisible => !IsDownloading && !IsLoading && !IsLoaded && !DownloadFailed && !LoadFailed && !DownloadPaused;
+
+    public bool DeleteGlyphVisible => PlayGlyphVisible;
 
     /// <summary>True when the download progress ring should be visible.</summary>
     public bool ProgressRingVisible => IsDownloading;

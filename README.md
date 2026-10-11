@@ -31,6 +31,24 @@ Grab the latest `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.c
 
 Llama manages a `llama serve` process and talks to it over its REST API. Your models stay in the standard Hugging Face cache (`%USERPROFILE%\.cache\huggingface\hub`), shared with `llama.cpp` and HF tooling. Settings and logs live under `%LOCALAPPDATA%\Llama`.
 
+### Inference hardware
+
+The Llama settings page starts in **Simple** mode. Switch to **Advanced** for inference hardware, memory, batching, threads, parallel slots, and generation defaults. **Expert** adds multi-GPU split settings, custom serve arguments, and a read-only configuration preview. Switching modes does not erase saved values; Simple shows a notice when advanced choices remain active.
+
+In **Settings → Llama → Advanced → Inference Hardware**, Automatic leaves llama.cpp's device and GPU layer choices alone. You can choose an app-managed **NVIDIA CUDA**, **AMD ROCm/HIP**, **Vulkan**, or **CPU** binary, pick any GPU reported by the installed runtime, and set GPU layers to Automatic, All, or a count. The GPU list comes from the installed `llama.exe --list-devices` result rather than a fixed list of models or vendors; reopen Settings after changing backends to see devices exposed by the new binary.
+
+Changes apply on the next app launch. When the selected GPU is missing or its device probe fails, the managed server uses CPU inference and the footer explains the fallback, without reinstalling an already-applied runtime. The official Windows installer needs the AMD HIP SDK for ROCm; if it cannot install that backend, it falls back to a CPU build. An external `llama.exe` on PATH is never replaced by the app, so runtime selection is limited to backends that binary supports. Custom serve arguments remain an expert override of the generated flags.
+
+The advanced page also offers logical batch size, physical microbatch size, Flash Attention, CPU threads, parallel slots, and optional temperature, Top K, Top P, and repeat-penalty defaults. KV cache types can be set independently for keys and values. Expert mode adds split mode and tensor split weights. Unset values leave llama.cpp defaults in place. The installed binary's `serve --help` output controls availability, and unsupported nondefault choices are rejected. API clients and the built-in chat UI may override generation defaults on individual requests.
+
+In Advanced or Expert mode, an installed model's details panel can save its own context, device (or CPU), GPU layers, KV types, batch sizes, Flash Attention, threads, parallel slots, and generation defaults. Expert mode also exposes per-model multi-GPU split settings. These choices are written to the router's model preset and apply when that model next loads; an already-loaded model must be reloaded. A missing named GPU falls back to CPU for that model. The **runtime binary/backend remains server-wide**: one router cannot start some model children with its Vulkan binary and others with its ROCm binary. Reset removes the model's optional overrides. Context memory is estimated from GGUF metadata and refined with llama.cpp fit checks where available; it is not a live KV-usage measurement.
+
+If a saved model profile becomes invalid or unsupported after a runtime change, only that profile's overrides are omitted. The router and model list remain available, and a notification, server-status tooltip, and configuration preview explain which profiles need editing or Reset. Saved preferences are retained; global unsupported settings still block startup.
+
+Additional local GGUF folders are scanned in the background at managed server startup and when the folder list changes. Preset reloads and the configuration preview use the cached snapshot, so opening Settings does not recursively scan large or network-backed folders. Restart Llama to discover files added to an unchanged folder.
+
+Models from added folders show quantization badges when their filenames contain a quant label, with a small folder icon and the full file path in the tooltip. Like cached models, unloaded models can be deleted from the list or details view after confirmation. For an added-folder model, deletion permanently removes only the selected GGUF file from its original location; other files and the folder itself are left intact.
+
 ## Privacy
 
 Llama sends no telemetry — no events, no analytics, no install id. The only thing outbound HTTP requests (model downloads, release-update checks, and calls to the local llama-server) carry is the standard User-Agent header:
@@ -55,17 +73,24 @@ dotnet build LlamaApp.csproj -c Release -r win-x86   -p:Platform=x86
 # run the unit tests (two test projects; see the ARM64 note below)
 dotnet test LlamaApp.Tests/LlamaApp.Tests.csproj -c Release
 dotnet test LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj -c Release
+```
 
-To get a runnable (unpackaged, loose-files) build, publish it. This is what
+To get a runnable (unpackaged, loose-files) build, publish it with the Windows
+App SDK runtime included. This is what
 [`.github/workflows/publish.yml`](.github/workflows/publish.yml) produces:
 
 ```bash
-dotnet publish LlamaApp.csproj -c Release -r win-arm64 -p:Platform=ARM64 \
-    --self-contained true -p:PublishReadyToRun=false -p:PublishSingleFile=false \
-    -o publish/win-arm64
+dotnet publish LlamaApp.csproj -c Release -r win-x64 -p:Platform=x64 \
+    --self-contained true -p:WindowsPackageType=None \
+    -p:WindowsAppSDKSelfContained=true \
+    -p:WindowsAppSdkDeploymentManagerInitialize=false \
+    -p:PublishTrimmed=false -p:PublishReadyToRun=false \
+    -p:PublishSingleFile=false -o publish/win-x64
 ```
 
-The app runs unpackaged from that folder. Trim/R2R are off in the official
+Run `LlamaApp.exe` from the publish folder and keep the folder's other files
+beside it. It starts in the system tray; use the tray icon or Alt+Space to open
+the UI. Trim/R2R are off in the official
 builds because the app relies on reflection-based JSON serialization and COM
 `dynamic` interop, which the trimmer would strip (see the IL2026/IL2072
 warnings if you enable `PublishTrimmed`).
@@ -87,6 +112,12 @@ The installed release is a signed `.msix`, produced by the CI
 ([`.github/workflows/_build.yml`](.github/workflows/_build.yml)) with Visual
 Studio MSBuild and the `GenerateAppxPackage` target — `dotnet build` alone
 does not pack the Appx. `dotnet publish` above is sufficient for local use.
+
+When wrapping an unpackaged publish folder in a local MSIX, generate a
+`resources.pri` using MakePRI with the MSIX identity as its index name, merging
+the published `LlamaApp.pri`. Packing the publish folder without this
+package-specific index can install successfully but crash at startup because
+WinUI cannot resolve its compiled XAML.
 
 ---
 

@@ -44,14 +44,24 @@ namespace LlamaApp.Views
         /// silence, not a grayed-out hint.</item>
         /// </list>
         /// </summary>
-        public static Description Describe(bool probeSucceeded, IReadOnlyList<LlamaDevice> devices)
+        public static Description Describe(bool probeSucceeded, IReadOnlyList<LlamaDevice> devices,
+            string? activeDeviceId = null, string? fallbackReason = null)
         {
             var accelerators = devices.Where(d => d.Kind != DeviceKind.Cpu).ToList();
 
+            if (activeDeviceId == "none")
+                return new Description(IndicatorKind.Cpu,
+                    fallbackReason ?? "CPU inference selected");
+
             if (accelerators.Count > 0)
+            {
+                if (activeDeviceId is not null)
+                    return new Description(IndicatorKind.Gpu,
+                        $"Inference {(accelerators.Count == 1 ? "GPU" : "GPUs")}: {DescribeDeviceList(accelerators)}");
                 return new Description(IndicatorKind.Gpu, accelerators.Count == 1
                     ? $"GPU acceleration available: {DescribeDeviceList(accelerators)}"
                     : $"GPU acceleration available on {accelerators.Count} devices: {DescribeDeviceList(accelerators)}");
+            }
 
             if (probeSucceeded)
                 return new Description(IndicatorKind.Cpu,

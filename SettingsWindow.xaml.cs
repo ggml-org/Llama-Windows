@@ -35,6 +35,11 @@ namespace LlamaApp
             Configure();
             SizeAndCenterOnScreen();
             LoadCurrent();
+            RuntimeBackendBox.SelectionChanged += (_, _) => UpdateGpuControls();
+            GpuLayersBox.SelectionChanged += (_, _) => UpdateGpuControls();
+            UpdateGpuControls();
+            _ = PopulateGpuDevicesAsync();
+            _ = PopulateInferenceCapabilitiesAsync();
             UpdateRuntimeUpdateCard();
 
             // Extend Mica/content into the titlebar area and register our
@@ -98,8 +103,13 @@ namespace LlamaApp
         private void LoadCurrent()
         {
             var s = Settings.Current;
+            SelectComboBoxTag(ExperienceModeBox, SettingsModes.Normalize(s.ExperienceMode), SettingsModes.Simple);
+            UpdateSettingsMode();
             TokenBox.Password = s.HuggingFaceToken ?? "";
             CacheBox.Text = s.CacheDirectory ?? "";
+            AdditionalModelsFoldersPanel.Children.Clear();
+            foreach (var directory in s.AdditionalModelDirectories)
+                AddModelsFolderRow(directory);
             PortBox.Value = s.ServerPort;
             PopulateListenAddressBox();
             SelectComboBoxTag(ListenAddressBox, s.ListenAddress, Common.ListenAddresses.Localhost);
@@ -121,14 +131,155 @@ namespace LlamaApp
             ModelsMaxBox.Value = s.MaxLoadedModels;
             SelectComboBoxTag(KvCacheKBox, s.CacheTypeK, "f16");
             SelectComboBoxTag(KvCacheVBox, s.CacheTypeV, "f16");
+            SelectComboBoxTag(RuntimeBackendBox, s.RuntimeBackend, Llama.InferenceRuntime.Automatic);
+            var layerChoice = s.GpuLayers == "all" ? "all"
+                : int.TryParse(s.GpuLayers, out _) ? "custom" : "auto";
+            SelectComboBoxTag(GpuLayersBox, layerChoice, "auto");
+            GpuLayersCountBox.Value = int.TryParse(s.GpuLayers, out var savedLayers) ? savedLayers : 32;
+            BatchSizeBox.Value = s.BatchSize;
+            MicroBatchSizeBox.Value = s.MicroBatchSize;
+            SelectComboBoxTag(FlashAttentionBox, s.FlashAttention, "auto");
+            var advanced = s.AdvancedInferenceProfile ?? new();
+            ThreadsBox.Value = advanced.Threads;
+            ThreadsBatchBox.Value = advanced.ThreadsBatch;
+            ParallelBox.Value = advanced.Parallel;
+            TemperatureBox.Value = advanced.Temperature ?? double.NaN;
+            TopKBox.Value = advanced.TopK ?? double.NaN;
+            TopPBox.Value = advanced.TopP ?? double.NaN;
+            RepeatPenaltyBox.Value = advanced.RepeatPenalty ?? double.NaN;
+            SelectComboBoxTag(SplitModeBox, advanced.SplitMode, "");
+            TensorSplitBox.Text = advanced.TensorSplit ?? "";
+            GpuDeviceBox.Items.Add(new ComboBoxItem { Content = "Automatic", Tag = "" });
+            if (!string.IsNullOrWhiteSpace(s.GpuDeviceName))
+                GpuDeviceBox.Items.Add(new ComboBoxItem
+                {
+                    Content = $"{s.GpuDeviceName} (detecting…)",
+                    Tag = s.GpuDeviceName,
+                });
+            SelectComboBoxTag(GpuDeviceBox, s.GpuDeviceName, "");
+            GpuMemoryStatusText.Text = "Checking GPU memory…";
             CustomArgsBox.Text = s.CustomServeArguments ?? "";
             CustomArgsErrorText.Text = "";
             CustomArgsErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            EffectiveConfigurationBox.Text = Llama.LlamaManager.Shared.PreviewInferenceConfiguration();
             // The OS shortcut is the source of truth: a user may have toggled
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
             LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
             LoadInstallInfo();
+        }
+
+        /// <summary>Shows each device reported by the installed llama binary.</summary>
+        private async Task PopulateGpuDevicesAsync()
+        {
+            var savedName = Settings.Current.GpuDeviceName;
+            try
+            {
+                var probe = await Llama.LlamaManager.Shared.ProbeDevicesAsync();
+                var devices = probe.Devices.Where(device =>
+                    device.Kind is not (Llama.DeviceKind.Cpu or Llama.DeviceKind.Unknown)).ToArray();
+                GpuMemoryStatusText.Text = !probe.Succeeded
+                    ? "Could not read GPU memory from the installed runtime."
+                    : devices.Length == 0
+                        ? "No GPUs were reported by the installed runtime."
+                        : "Free memory is a snapshot from the installed runtime and can change. Restart after switching runtimes to refresh this list.";
+                foreach (var device in devices)
+                {
+                    var key = Llama.GpuDeviceChoice.Key(device, devices);
+                    var existing = GpuDeviceBox.Items.OfType<ComboBoxItem>()
+                        .FirstOrDefault(item => item.Tag as string == key ||
+                            item.Tag as string == savedName &&
+                            Llama.GpuDeviceChoice.Resolve(savedName, devices) == device);
+                    if (existing is not null)
+                    {
+                        existing.Content = Llama.GpuDeviceChoice.Label(device);
+                        existing.Tag = key;
+                    }
+                    else GpuDeviceBox.Items.Add(new ComboBoxItem
+                    {
+                        Content = Llama.GpuDeviceChoice.Label(device),
+                        Tag = key,
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "GPU settings probe failed");
+                GpuMemoryStatusText.Text = "Could not read GPU memory from the installed runtime.";
+            }
+
+            var savedItem = GpuDeviceBox.Items.OfType<ComboBoxItem>()
+                .FirstOrDefault(item => item.Tag as string == savedName);
+            if (savedItem is not null && (savedItem.Content as string)?.EndsWith("(detecting…)") == true)
+                savedItem.Content = $"{savedName} (unavailable or ambiguous; choose a GPU again)";
+        }
+
+        private void UpdateGpuControls()
+        {
+            var cpu = (RuntimeBackendBox.SelectedItem as ComboBoxItem)?.Tag as string
+                == Llama.InferenceRuntime.Cpu;
+            GpuDeviceBox.IsEnabled = !cpu;
+            GpuLayersBox.IsEnabled = !cpu;
+            GpuLayersCountBox.IsEnabled = !cpu &&
+                (GpuLayersBox.SelectedItem as ComboBoxItem)?.Tag as string == "custom";
+        }
+
+        private async Task PopulateInferenceCapabilitiesAsync()
+        {
+            if (Llama.LlamaManager.Shared.BinaryPath is not { } binary)
+            {
+                InferenceCapabilitiesText.Text = "Advanced options are checked when llama.cpp is installed.";
+                return;
+            }
+            var caps = await Llama.ServeCapabilities.ProbeAsync(binary);
+            if (!caps.Succeeded)
+            {
+                InferenceCapabilitiesText.Text = "Could not read the installed llama.cpp options.";
+                return;
+            }
+            BatchSizeBox.IsEnabled = caps.Supports("--batch-size");
+            MicroBatchSizeBox.IsEnabled = caps.Supports("--ubatch-size");
+            FlashAttentionBox.IsEnabled = caps.Supports("--flash-attn");
+            KvCacheKBox.IsEnabled = caps.Supports("--cache-type-k");
+            KvCacheVBox.IsEnabled = caps.Supports("--cache-type-v");
+            ThreadsBox.IsEnabled = caps.Supports("--threads");
+            ThreadsBatchBox.IsEnabled = caps.Supports("--threads-batch");
+            ParallelBox.IsEnabled = caps.Supports("--parallel");
+            TemperatureBox.IsEnabled = caps.Supports("--temp");
+            TopKBox.IsEnabled = caps.Supports("--top-k");
+            TopPBox.IsEnabled = caps.Supports("--top-p");
+            RepeatPenaltyBox.IsEnabled = caps.Supports("--repeat-penalty");
+            SplitModeBox.IsEnabled = caps.Supports("--split-mode");
+            TensorSplitBox.IsEnabled = caps.Supports("--tensor-split");
+            InferenceCapabilitiesText.Text = "Unavailable controls are disabled for the installed llama.cpp build.";
+        }
+
+        private void ExperienceMode_SelectionChanged(object sender,
+            Microsoft.UI.Xaml.Controls.SelectionChangedEventArgs e) => UpdateSettingsMode();
+
+        private void RefreshConfiguration_Click(object sender,
+            Microsoft.UI.Xaml.RoutedEventArgs e) =>
+            EffectiveConfigurationBox.Text = Llama.LlamaManager.Shared.PreviewInferenceConfiguration();
+
+        private void UpdateSettingsMode()
+        {
+            var mode = (ExperienceModeBox.SelectedItem as ComboBoxItem)?.Tag as string;
+            AdvancedSettingsNotice.Visibility = !SettingsModes.ShowsAdvanced(mode) &&
+                SettingsModes.HasSavedAdvancedSettings(Settings.Current)
+                ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+            var advanced = SettingsModes.ShowsAdvanced(mode)
+                ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+            InferenceHardwareCard.Visibility = advanced;
+            ServerPortCard.Visibility = advanced;
+            ListenAddressCard.Visibility = advanced;
+            IdleUnloadCard.Visibility = advanced;
+            MaxModelsCard.Visibility = advanced;
+            KvCacheCard.Visibility = advanced;
+            PromptProcessingCard.Visibility = advanced;
+            CustomArgumentsCard.Visibility = SettingsModes.ShowsExpert(mode)
+                ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+            MultiGpuExpander.Visibility = SettingsModes.ShowsExpert(mode)
+                ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
         }
 
         /// <summary>
@@ -435,11 +586,126 @@ namespace LlamaApp
             }
         }
 
+        private void AddModelsFolder_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+            => AddModelsFolderRow("");
+
+        private void AddModelsFolderRow(string path)
+        {
+            var row = new Grid { ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition
+            {
+                Width = new Microsoft.UI.Xaml.GridLength(1, Microsoft.UI.Xaml.GridUnitType.Star),
+            });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = Microsoft.UI.Xaml.GridLength.Auto });
+
+            var box = new TextBox { Text = path, PlaceholderText = "Folder containing GGUF models" };
+            Grid.SetColumn(box, 0);
+            row.Children.Add(box);
+
+            var browse = new Button { Content = "Browse…" };
+            browse.Click += async (_, _) => await BrowseAdditionalModelsAsync(box);
+            Grid.SetColumn(browse, 1);
+            row.Children.Add(browse);
+
+            var remove = new Button { Content = "Remove" };
+            remove.Click += (_, _) => AdditionalModelsFoldersPanel.Children.Remove(row);
+            Grid.SetColumn(remove, 2);
+            row.Children.Add(remove);
+            AdditionalModelsFoldersPanel.Children.Add(row);
+        }
+
+        private async Task BrowseAdditionalModelsAsync(TextBox target)
+        {
+            var picker = new Windows.Storage.Pickers.FolderPicker();
+            InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(this));
+            picker.FileTypeFilter.Add("*");
+            try
+            {
+                var folder = await picker.PickSingleFolderAsync();
+                if (folder is not null) target.Text = folder.Path;
+            }
+            catch (Exception ex) { Common.Log.Warn(ex, "additional models folder picker failed"); }
+        }
+
         private async void Save_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
+            var batchSize = double.IsNaN(BatchSizeBox.Value) ? 0
+                : (int)Math.Clamp(BatchSizeBox.Value, 0, Llama.InferenceTuning.MaxBatchSize);
+            var microBatchSize = double.IsNaN(MicroBatchSizeBox.Value) ? 0
+                : (int)Math.Clamp(MicroBatchSizeBox.Value, 0, Llama.InferenceTuning.MaxBatchSize);
+            var flashAttention = (FlashAttentionBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+            if (Llama.InferenceTuning.Validate(batchSize, microBatchSize, flashAttention) is { } tuningError)
+            {
+                InferenceTuningErrorText.Text = tuningError;
+                InferenceTuningErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+                return;
+            }
+            var advancedProfile = new Llama.ModelPromptProcessingProfile
+            {
+                Threads = double.IsNaN(ThreadsBox.Value) ? 0 : (int)ThreadsBox.Value,
+                ThreadsBatch = double.IsNaN(ThreadsBatchBox.Value) ? 0 : (int)ThreadsBatchBox.Value,
+                Parallel = double.IsNaN(ParallelBox.Value) ? 0 : (int)ParallelBox.Value,
+                Temperature = double.IsNaN(TemperatureBox.Value) ? null : TemperatureBox.Value,
+                TopK = double.IsNaN(TopKBox.Value) ? null : (int)TopKBox.Value,
+                TopP = double.IsNaN(TopPBox.Value) ? null : TopPBox.Value,
+                RepeatPenalty = double.IsNaN(RepeatPenaltyBox.Value) ? null : RepeatPenaltyBox.Value,
+                SplitMode = (SplitModeBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "",
+                TensorSplit = TensorSplitBox.Text.Trim(),
+            };
+            if (Llama.InferenceTuning.ValidateProfile(advancedProfile) is { } advancedError)
+            {
+                InferenceTuningErrorText.Text = advancedError;
+                InferenceTuningErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+                return;
+            }
+            var proposedProfile = advancedProfile with
+            {
+                BatchSize = batchSize,
+                MicroBatchSize = microBatchSize,
+                FlashAttention = flashAttention,
+                CacheTypeK = (KvCacheKBox.SelectedItem as ComboBoxItem)?.Tag as string is { } k && k != "f16" ? k : "",
+                CacheTypeV = (KvCacheVBox.SelectedItem as ComboBoxItem)?.Tag as string is { } v && v != "f16" ? v : "",
+            };
+            if (!proposedProfile.IsAutomatic && Llama.LlamaManager.Shared.BinaryPath is { } binary)
+            {
+                var caps = await Llama.ServeCapabilities.ProbeAsync(binary);
+                if (Llama.InferenceTuning.UnsupportedProfileOption(proposedProfile, caps) is { } unsupported)
+                {
+                    InferenceTuningErrorText.Text = unsupported.StartsWith("--", StringComparison.Ordinal)
+                        ? $"The installed llama server does not support {unsupported}." : unsupported;
+                    InferenceTuningErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+                    return;
+                }
+            }
+            InferenceTuningErrorText.Text = "";
+            InferenceTuningErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+
+            // Finish validation before changing the in-memory settings singleton.
+            try
+            {
+                var tokens = Common.ArgumentTokenizer.Tokenize(CustomArgsBox.Text);
+                if (Common.ServeArgumentPolicy.Validate(tokens) is { } reservedError)
+                    throw new FormatException(reservedError);
+                CustomArgsErrorText.Text = "";
+                CustomArgsErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            }
+            catch (FormatException ex)
+            {
+                CustomArgsErrorText.Text = ex.Message;
+                CustomArgsErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+                return;
+            }
+
             var s = Settings.Current;
+            s.ExperienceMode = SettingsModes.Normalize(
+                (ExperienceModeBox.SelectedItem as ComboBoxItem)?.Tag as string);
             s.HuggingFaceToken = TokenBox.Password;
             s.CacheDirectory = CacheBox.Text.Trim();
+            s.AdditionalModelDirectories = Settings.NormalizeAdditionalModelDirectories(
+                AdditionalModelsFoldersPanel.Children.OfType<Grid>()
+                    .Select(row => row.Children.OfType<TextBox>().First().Text));
+            s.AdditionalModelsDirectory = null;
 
             // The NumberBox clamps to 1–65535 while editing; an empty box
             // reads as NaN — fall back to the default port in that case. The
@@ -511,25 +777,19 @@ namespace LlamaApp
             s.CacheTypeK = (KvCacheKBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "f16";
             s.CacheTypeV = (KvCacheVBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "f16";
 
-            // Validate the free-form serve arguments before saving: an open
-            // quote or a reserved flag (managed by the app — e.g. --host,
-            // --port, --api-key) would otherwise only surface as a launch
-            // failure after the user has already closed the window.
-            try
-            {
-                var tokens = Common.ArgumentTokenizer.Tokenize(CustomArgsBox.Text);
-                if (Common.ServeArgumentPolicy.Validate(tokens) is { } reservedError)
-                    throw new FormatException(reservedError);
-                CustomArgsErrorText.Text = "";
-                CustomArgsErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
-            }
-            catch (FormatException ex)
-            {
-                CustomArgsErrorText.Text = ex.Message;
-                CustomArgsErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
-                return;
-            }
             s.CustomServeArguments = CustomArgsBox.Text.Trim();
+            s.RuntimeBackend = (RuntimeBackendBox.SelectedItem as ComboBoxItem)?.Tag as string
+                ?? Llama.InferenceRuntime.Automatic;
+            s.GpuDeviceName = (GpuDeviceBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
+            var layerChoice = (GpuLayersBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "auto";
+            s.GpuLayers = layerChoice == "custom"
+                ? (double.IsNaN(GpuLayersCountBox.Value) ? "auto"
+                    : ((int)Math.Clamp(GpuLayersCountBox.Value, 0, 1000)).ToString())
+                : layerChoice;
+            s.BatchSize = batchSize;
+            s.MicroBatchSize = microBatchSize;
+            s.FlashAttention = flashAttention;
+            s.AdvancedInferenceProfile = advancedProfile;
 
             // Apply the startup preference to the OS (create/delete the .lnk)
             // and mirror it into settings.json as a hint for the checkbox on
@@ -546,7 +806,23 @@ namespace LlamaApp
                 Common.Log.Warn(ex, "startup shortcut update failed");
             }
 
-            s.Save();
+            if (!s.Save())
+            {
+                SaveErrorText.Text = "Settings could not be saved. Check the app's data folder and try again.";
+                SaveErrorText.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+                return;
+            }
+            var manager = Llama.LlamaManager.Shared;
+            var foldersChanged = !(manager.AdditionalModelDirectories ?? [])
+                .SequenceEqual(s.AdditionalModelDirectories, StringComparer.OrdinalIgnoreCase);
+            manager.AdditionalModelDirectories = s.AdditionalModelDirectories.ToArray();
+            if (foldersChanged)
+                await manager.ReloadModelPresetsAsync();
+            if (s.RuntimeBackend != manager.RuntimeBackend ||
+                s.GpuDeviceName != manager.GpuDeviceName ||
+                s.GpuLayers != manager.GpuLayers)
+                Notifications.Show("Restart Llama to apply GPU settings",
+                    "Exit Llama from the tray, then launch it again. The current model is still using the previous runtime and device.");
             Close();
         }
 

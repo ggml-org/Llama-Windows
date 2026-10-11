@@ -456,14 +456,25 @@ namespace LlamaApp.Views
         {
             var (repo, quant) = SplitServerId(sm.Id);
             byRepo.TryGetValue(repo, out var matched);
+            var external = sm.Id.StartsWith("local/", StringComparison.Ordinal);
+            ulong localBytes = 0;
+            if (external && sm.Path is not null)
+            {
+                try { localBytes = (ulong)new FileInfo(sm.Path!).Length; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
             return new ModelItem
             {
-                Name = DeriveDisplayName(repo, quant, byRepo),
+                Name = external && sm.Path is not null ? Path.GetFileNameWithoutExtension(sm.Path)
+                    : DeriveDisplayName(repo, quant, byRepo),
                 RepoName = repo,
                 Quant = quant,
+                IsExternalLocal = external,
+                LocalFilePath = external ? sm.Path : null,
                 Description = matched?.Description ?? "",
                 Parameters = matched?.Parameters ?? "",
-                Size = matched?.Size ?? "",
+                Size = external && localBytes > 0 ? MemoryFit.FormatBytes(localBytes) : matched?.Size ?? "",
+                SizeBytes = localBytes,
                 License = matched?.License ?? "",
                 Vision = sm.SupportsImage, // authoritative — from the server
                 Downloadable = false,
@@ -1519,6 +1530,18 @@ namespace LlamaApp.Views
             }
 
             Log.Warn("server rejected delete for " + ((IModel)item).ServerModelId);
+            var flyout = new Flyout
+            {
+                Content = new TextBlock
+                {
+                    Text = item.IsExternalLocal
+                        ? "Couldn't complete model deletion. The file may be in use or the folder may not be writable. If the file was removed but the model is still listed, restart Llama to refresh its presets."
+                        : "Couldn't delete this model. Make sure the server is running and the model is unloaded, then try again.",
+                    TextWrapping = TextWrapping.Wrap,
+                    MaxWidth = 280,
+                },
+            };
+            flyout.ShowAt(_detailsViewModel is null ? ModelsList : DetailsView);
             return false;
         }
 
@@ -1566,6 +1589,20 @@ namespace LlamaApp.Views
                     // load spawns the child with the new --ctx-size.
                     _ = LlamaManager.Shared.ReloadModelPresetsAsync();
                 },
+                loadPromptProfile: id =>
+                    Settings.Current.ModelPromptProfiles.TryGetValue(id, out var profile) ? profile : null,
+                savePromptProfile: (id, profile) =>
+                {
+                    if (profile is null) Settings.Current.ModelPromptProfiles.Remove(id);
+                    else Settings.Current.ModelPromptProfiles[id] = profile;
+                    Settings.Current.Save();
+                    _ = LlamaManager.Shared.ReloadModelPresetsAsync();
+                },
+                globalBatchSize: Settings.Current.BatchSize,
+                globalMicroBatchSize: Settings.Current.MicroBatchSize,
+                experienceMode: Settings.Current.ExperienceMode,
+                globalCacheTypeK: Settings.Current.CacheTypeK,
+                globalCacheTypeV: Settings.Current.CacheTypeV,
                 // The fit-params refinement awaits CLI processes; its verdicts
                 // can land on a thread-pool thread — flip bound properties on
                 // the UI thread.
@@ -1695,7 +1732,7 @@ namespace LlamaApp.Views
                         new TextBlock { Text = "Delete this model?", FontSize = 13, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold },
                         new TextBlock
                         {
-                            Text = "The downloaded files are removed from disk. You can download the model again at any time.",
+                            Text = model.DeleteConfirmationText,
                             FontSize = 12,
                             Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
                             TextWrapping = TextWrapping.Wrap,
@@ -2103,6 +2140,8 @@ namespace LlamaApp.Views
             }
         }
 
+        private string? _lastModelProfileWarning;
+
         /// <summary>
         /// Re-renders the footer's server-status dot and relaunch button from
         /// <see cref="LlamaManager.ServerStatus"/> (mapping rules live in
@@ -2116,7 +2155,14 @@ namespace LlamaApp.Views
                 LlamaManager.Shared.ServerStatus, LlamaManager.Shared.State,
                 LlamaManager.Shared.FailureMessage);
             ServerStatusDot.Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(d.Dot);
-            Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(ServerStatusDot, d.ToolTip);
+            var warning = LlamaManager.Shared.ModelProfileWarning;
+            Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(ServerStatusDot,
+                warning is null ? d.ToolTip : d.ToolTip + "\n\n" + warning);
+            if (warning != _lastModelProfileWarning)
+            {
+                _lastModelProfileWarning = warning;
+                if (warning is not null) Notifications.Show("Model overrides not applied", warning);
+            }
             ServerRestartButton.Visibility = d.CanRelaunch
                 ? Microsoft.UI.Xaml.Visibility.Visible
                 : Microsoft.UI.Xaml.Visibility.Collapsed;
@@ -2137,9 +2183,11 @@ namespace LlamaApp.Views
         private async Task UpdateGpuIndicatorAsync()
         {
             DeviceProbe probe;
+            IReadOnlyList<LlamaDevice> selectedDevices;
             try
             {
                 probe = await LlamaManager.Shared.ProbeDevicesAsync();
+                selectedDevices = await LlamaManager.Shared.ListDevicesAsync();
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -2147,7 +2195,10 @@ namespace LlamaApp.Views
                 return;
             }
 
-            var d = DeviceStatusPresentation.Describe(probe.Succeeded, probe.Devices);
+            var activeDeviceId = LlamaManager.Shared.ServerStatus == LlamaManager.ServerState.Running
+                ? LlamaManager.Shared.ActiveDeviceId : null;
+            var d = DeviceStatusPresentation.Describe(probe.Succeeded, selectedDevices,
+                activeDeviceId, LlamaManager.Shared.RuntimeFallbackReason);
 
             // The probe awaits a child process; the continuation can land on
             // a thread-pool thread, and dependency-object writes must happen
