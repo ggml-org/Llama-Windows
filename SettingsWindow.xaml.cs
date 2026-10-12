@@ -247,7 +247,9 @@ namespace LlamaApp
             {
                 path = Llama.LlamaManager.ManagedInstallDir;
                 InstallDescriptionText.Text =
-                    "Where Llama installs the llama server binary. Emptying frees disk space — the binary is downloaded again on next launch.";
+                    "Where Llama installs the llama server binary. The folder is shared " +
+                    "with other apps' aliases — removing Llama's files from it frees disk space " +
+                    "and never touches theirs. The binary is downloaded again on next launch.";
                 canEmpty = true;
             }
 
@@ -346,9 +348,12 @@ namespace LlamaApp
             var confirm = new Microsoft.UI.Xaml.Controls.ContentDialog
             {
                 XamlRoot = Content.XamlRoot,
-                Title = "Empty Llama folder?",
-                Content = $"This stops the llama server (if running) and deletes everything in:\n\n{path}\n\nThe llama binary is downloaded again the next time Llama needs it.",
-                PrimaryButtonText = "Empty",
+                Title = "Remove Llama's install files?",
+                Content = $"This stops the llama server (if running) and removes Llama's " +
+                    $"files from:\n\n{path}\n\nThat folder is shared with other apps' " +
+                    $"aliases — their files are left untouched. The llama binary is " +
+                    $"downloaded again the next time Llama needs it.",
+                PrimaryButtonText = "Remove",
                 CloseButtonText = "Cancel",
                 DefaultButton = Microsoft.UI.Xaml.Controls.ContentDialogButton.Close,
             };
@@ -357,26 +362,34 @@ namespace LlamaApp
 
             try
             {
-                // Stop first: a running server holds a lock on llama.exe.
-                Llama.LlamaManager.Shared.StopServer();
-
-                // Empty = delete the contents, keep the folder itself.
-                foreach (var dir in Directory.EnumerateDirectories(path))
-                    Directory.Delete(dir, recursive: true);
-                foreach (var file in Directory.EnumerateFiles(path))
-                    File.Delete(file);
-
+                // Stop + delete exactly Llama's known artifacts (the binary plus
+                // any leftovers older installers dropped there) and the
+                // interrupted-install scratch dir. Never a wholesale wipe: the
+                // install dir is the SHARED WindowsApps folder, home of other
+                // apps' execution aliases (winget.exe, python.exe, …).
+                var (deleted, failed) = Llama.LlamaManager.Shared.EmptyManagedInstall();
                 Llama.LlamaManager.Shared.NotifyManagedInstallRemoved();
-                Common.Log.Info($"emptied llama install folder: {path}");
-                await ShowMessageAsync("Folder emptied",
-                    "The llama binary will be downloaded again the next time it's needed.");
+                Common.Log.Info(
+                    $"removed {deleted} llama install artifact(s) from {path}" +
+                    (failed > 0 ? $" ({failed} failed - likely in use)" : ""));
+
+                if (failed > 0)
+                    await ShowMessageAsync("Some files couldn't be removed",
+                        $"{deleted} file(s) removed. A file is probably still in use — " +
+                        "close any program using the folder and try again.");
+                else if (deleted > 0)
+                    await ShowMessageAsync("Llama files removed",
+                        "The llama binary will be downloaded again the next time it's needed.");
+                else
+                    await ShowMessageAsync("Nothing to remove",
+                        "No Llama install files were found in that folder.");
             }
             catch (Exception ex)
             {
                 // The raw exception is logged, not shown — a user-facing
                 // dialog gets an actionable message, not ex.Message.
-                Common.Log.Warn(ex, "empty install folder failed");
-                await ShowMessageAsync("Couldn't empty the folder",
+                Common.Log.Warn(ex, "removing install files failed");
+                await ShowMessageAsync("Couldn't remove Llama's files",
                     "Some files may still be in use. Close any program using the folder and try again.");
             }
 

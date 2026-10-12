@@ -845,9 +845,9 @@
                                                 Click="OpenInstallFolder_Click"
                                                 ToolTipService.ToolTip="Show the folder in File Explorer" />
                                         <Button x:Name="EmptyInstallFolderButton"
-                                                Content="Empty Folder…"
+                                                Content="Remove Llama Files…"
                                                 Click="EmptyInstallFolder_Click"
-                                                ToolTipService.ToolTip="Delete the folder's contents — the llama binary is downloaded again on next launch" />
+                                                ToolTipService.ToolTip="Remove only Llama's install files — the folder is shared with other apps; their files stay untouched. The binary is downloaded again on next launch" />
                                     </StackPanel>
                                 </StackPanel>
                             </Border>

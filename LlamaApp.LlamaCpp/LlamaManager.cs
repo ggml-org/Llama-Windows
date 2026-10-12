@@ -94,8 +94,107 @@ public sealed class LlamaManager
     /// The install directory the app manages — surfaced read-only in Settings
     /// ("Installation Folder" card). External (PATH) installations are never
     /// managed: their location comes from <see cref="BinaryPath"/> instead.
+    /// <b>Shared:</b> this is the WindowsApps folder that also holds every
+    /// other packaged app's execution aliases (winget.exe, python.exe, …),
+    /// so only the names in <see cref="ManagedInstallArtifacts"/> may ever
+    /// be deleted from it.
     /// </summary>
     public static string ManagedInstallDir => ManagedDir;
+
+    /// <summary>
+    /// File names <c>install.ps1</c> can leave in <see cref="ManagedInstallDir"/>.
+    /// The current script moves only <c>llama.exe</c> there (everything else
+    /// lives in the <see cref="InstallScratchDir"/> it wipes on exit); older
+    /// generations decompressed and probed directly in the install dir and can
+    /// have left any of the others. Because the folder is shared, "emptying"
+    /// must delete exactly these names and nothing else.
+    /// </summary>
+    internal static readonly IReadOnlyList<string> ManagedInstallArtifacts = new[]
+    {
+        "llama.exe",       // the installed server binary
+        "llama.exe.old",   // re-install backup, if an install died mid-move
+        "unzstd.exe",      // .zst decompressor (older scripts dropped it here)
+        "cuda-probe.exe",  // hardware probes (older scripts ran them in place)
+        "rocm-probe.exe",
+        "vulkan-probe.exe",
+        "featcode.exe",
+        "tmp.zst",         // interrupted .zst extraction
+    };
+
+    /// <summary>
+    /// <c>install.ps1</c>'s scratch directory (<c>%LOCALAPPDATA%\llama-app</c>):
+    /// downloads and probes land here during an install, and the script
+    /// deletes it on the way out — anything left is debris from an
+    /// interrupted install (the partial <c>tmp.zst</c> can be large).
+    /// </summary>
+    internal static string InstallScratchDir =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "llama-app");
+
+    /// <summary>
+    /// Deletes exactly the known llama install artifacts from
+    /// <paramref name="directory"/> — never other files: the real install dir
+    /// is the shared WindowsApps folder whose other entries belong to other
+    /// apps (deleting "everything in the folder" used to wipe their execution
+    /// aliases). Each artifact is attempted independently, so one locked file
+    /// counts as failed instead of aborting the rest. Returns (deleted,
+    /// failed) counts; directory parameter for tests.
+    /// </summary>
+    internal static (int Deleted, int Failed) EmptyManagedInstall(string directory)
+    {
+        var deleted = 0;
+        var failed = 0;
+        foreach (var name in ManagedInstallArtifacts)
+        {
+            try
+            {
+                var path = Path.Combine(directory, name);
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                    deleted++;
+                }
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                Log.Warn(ex, $"could not delete install artifact '{name}'");
+            }
+        }
+        return (deleted, failed);
+    }
+
+    /// <summary>
+    /// Removes an interrupted install's scratch directory, if any — the folder
+    /// is created and destroyed by <c>install.ps1</c> itself, so anything
+    /// present is download debris. Best-effort and logged, like the artifact
+    /// deletion. Directory parameter for tests.
+    /// </summary>
+    internal static void DeleteInstallScratch(string directory)
+    {
+        try
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, $"could not delete install scratch dir '{directory}'");
+        }
+    }
+
+    /// <summary>
+    /// The Settings "Empty" action: stops the managed server (llama.exe is
+    /// otherwise locked), removes the known llama artifacts from the shared
+    /// install dir, and clears interrupted-install debris from the scratch
+    /// dir. Other apps' files in the shared folder are never touched.
+    /// </summary>
+    public (int Deleted, int Failed) EmptyManagedInstall()
+    {
+        StopServer();
+        var result = EmptyManagedInstall(ManagedInstallDir);
+        DeleteInstallScratch(InstallScratchDir);
+        return result;
+    }
 
     /// <summary>
     /// Where the resolved binary comes from — surfaced in the flyout footer, so
