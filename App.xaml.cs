@@ -37,6 +37,16 @@ namespace LlamaApp
             _dispatcher = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()
                           ?? throw new InvalidOperationException("App must initialize on the UI thread.");
 
+            // XAML-domain unhandled exceptions (including failures inside the
+            // async void OnLaunched continuation) are otherwise SWALLOWED by
+            // the framework: the process keeps pumping with no windows, tray
+            // icon or hotkey — the app silently "doesn't start". Surface every
+            // one in the log so the failure is diagnosable.
+            UnhandledException += (_, e) =>
+            {
+                Common.Log.Error(e.Exception, "unhandled XAML exception");
+            };
+
             InitializeComponent();
         }
 
@@ -204,6 +214,8 @@ namespace LlamaApp
                 Notifications.Show("Llama is running",
                     "Find it in the system tray — and press Alt+Space anytime to chat with a loaded model.");
             }
+
+            Common.Log.Info("startup complete");
         }
 
         /// <summary>
