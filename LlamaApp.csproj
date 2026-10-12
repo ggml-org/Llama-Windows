@@ -30,10 +30,11 @@
              two are behaviorally neutral: FontIcon/BitmapIcon drop a decorative
              Grid from their visual tree (this app resolves rows by walking the
              tree for DataContext, which is unaffected), and Style setters with
-             no value stop loading. DefaultStyleOptimizations (optimized
-             ScrollBar/control templates) is deliberately NOT enabled — it
-             changes control visuals and should get a runtime look first. -->
-        <EnabledXamlOptionalChanges>IconNoGridOptimization,OptimizeApplyStyles</EnabledXamlOptionalChanges>
+             no value stop loading. DefaultStyleOptimizations swaps in the
+             optimized control templates (notably ScrollBar); enabled after a
+             runtime pass over the flyout, Settings and the overlay confirmed
+             everything renders and scrolls. -->
+        <EnabledXamlOptionalChanges>IconNoGridOptimization,OptimizeApplyStyles,DefaultStyleOptimizations</EnabledXamlOptionalChanges>
         <ImplicitUsings>enable</ImplicitUsings>
         <RootNamespace>LlamaApp</RootNamespace>
 
@@ -82,13 +83,9 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <!-- All image assets — package logos at every scale (Start tile,
-             taskbar, installer dialog, Add/Remove Programs, splash), the tray
-             icon, and the per-row brand logos — ship as Content so the
-             single-project MSIX packs them and they land next to the exe for
-             AppContext.BaseDirectory lookups (see TrayIconManager). A glob, so
-             a newly added asset can't be forgotten from the package. -->
-        <Content Include="Assets\**" />
+        <Content Include="Assets\**">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
     </ItemGroup>
 
     <ItemGroup>
