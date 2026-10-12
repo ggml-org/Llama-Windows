@@ -13,6 +13,16 @@
         <!-- Project Options -->
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
+
+        <!-- WinAppSDK 2.3.1+ XAML performance opt-ins (compiled into the
+             generated entry point via XamlOptionalChanges.EnableChange). These
+             two are behaviorally neutral: FontIcon/BitmapIcon drop a decorative
+             Grid from their visual tree (this app resolves rows by walking the
+             tree for DataContext, which is unaffected), and Style setters with
+             no value stop loading. DefaultStyleOptimizations (optimized
+             ScrollBar/control templates) is deliberately NOT enabled — it
+             changes control visuals and should get a runtime look first. -->
+        <EnabledXamlOptionalChanges>IconNoGridOptimization,OptimizeApplyStyles</EnabledXamlOptionalChanges>
         <ImplicitUsings>enable</ImplicitUsings>
         <RootNamespace>LlamaApp</RootNamespace>
 

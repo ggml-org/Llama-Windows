@@ -416,11 +416,18 @@ namespace LlamaApp
 
         private async void Browse_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
-            // FolderPicker requires an owner HWND in unpackaged WinUI 3 apps.
-            var hwnd = WindowNative.GetWindowHandle(this);
-            var picker = new Windows.Storage.Pickers.FolderPicker();
-            InitializeWithWindow.Initialize(picker, hwnd);
-            picker.FileTypeFilter.Add("*");
+            // WindowsAppSDK's modern FolderPicker (Microsoft.Windows.Storage.Pickers,
+            // available since 1.8 and extended in 2.0): it takes the owning
+            // WindowId directly — no InitializeWithWindow interop dance — remembers the last
+            // used folder across launches via SettingsIdentifier, shows a proper
+            // dialog title, and (fixed in 2.4) restores keyboard focus to this
+            // window when the dialog closes, instead of leaving it unfocused like
+            // the legacy Windows.Storage.Pickers picker.
+            var picker = new Microsoft.Windows.Storage.Pickers.FolderPicker(AppWindow.Id)
+            {
+                Title = "Choose the model cache folder",
+                SettingsIdentifier = "LlamaCacheDirectoryPicker",
+            };
 
             try
             {
