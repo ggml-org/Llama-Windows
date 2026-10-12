@@ -10,6 +10,17 @@
         <EnableMsixTooling>true</EnableMsixTooling>
         <WindowsPackageType>MSIX</WindowsPackageType>
 
+        <!-- Self-contained Windows App SDK: the runtime DLLs are bundled with
+             the app. WindowsAppSDK 2.x no longer resolves an OS-registered
+             runtime for UNPACKAGED processes without a machine-level runtime
+             install (the 2.5.1 auto-initializer dies with REGDB_E_CLASSNOTREG
+             before any app code runs), and this is how the app has always been
+             run from bin/ ("dotnet run", double-clicking the exe). Bundling
+             also removes the end-user runtime dependency from the shipped
+             MSIX — installs no longer require the Windows App Runtime
+             framework packages. -->
+        <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+
         <!-- Project Options -->
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
