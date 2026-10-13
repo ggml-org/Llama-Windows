@@ -65,7 +65,11 @@ public sealed partial class OverlayWindow : Window
     // after) the show sequence when Windows denies us foreground — without it
     // the overlay hides itself straight back, looking like it never opened.
     private const long ShownDeactivationGraceMs = 250;
-    private bool _suppressDeactivate;
+
+    // How long the CURRENT summon ignores deactivations (see Summon): the
+    // hotkey default is ShownDeactivationGraceMs; programmatic summons pass a
+    // longer grace to survive the dismissing share sheet's focus churn.
+    private long _hideGraceMs = ShownDeactivationGraceMs;
     private long _lastShownMs;
 
     public OverlayWindow()
@@ -128,6 +132,12 @@ public sealed partial class OverlayWindow : Window
     private const int MaxShareAttempts = 40; // ~2 min at 3s
     private bool _imageWaitNotified;
 
+    // Retry chains are generation-guarded: a second share while the first is
+    // still retrying must invalidate the first chain (otherwise both chains
+    // share one attempt counter and give up in half the intended time —
+    // observed in the logs as a give-up after ~1 minute instead of ~2).
+    private int _shareGeneration;
+
     /// <summary>
     /// Queues shared text for the WebUI's chat composer. Attempts injection
     /// immediately and keeps retrying on a timer until a composer exists
@@ -138,6 +148,7 @@ public sealed partial class OverlayWindow : Window
         _pendingShare = new PendingShare(prompt, null);
         _shareAttempts = 0;
         _imageWaitNotified = false;
+        _shareGeneration++;
         TryInjectPendingShareAsync();
     }
 
@@ -153,6 +164,7 @@ public sealed partial class OverlayWindow : Window
         _pendingShare = new PendingShare(null, imagePath);
         _shareAttempts = 0;
         _imageWaitNotified = false;
+        _shareGeneration++;
         TryInjectPendingShareAsync();
     }
 
@@ -240,8 +252,13 @@ public sealed partial class OverlayWindow : Window
             if (pending.ImagePath is { } abandoned) DeleteOwnScratchImage(abandoned);
             return;
         }
+        var generation = _shareGeneration;
         _ = Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(
-            _ => _dispatcher.TryEnqueue(TryInjectPendingShareAsync));
+            _ =>
+            {
+                if (generation != _shareGeneration) return; // superseded by a newer share
+                _dispatcher.TryEnqueue(TryInjectPendingShareAsync);
+            });
     }
 
     /// <summary>
@@ -299,7 +316,13 @@ public sealed partial class OverlayWindow : Window
     }
 
     /// <summary>Shows the overlay centered on the monitor nearest the cursor, ready for input.</summary>
-    public void Summon()
+    /// <param name="hideGraceMs">How long after the summon a focus loss (deactivation)
+    /// is ignored instead of hiding the overlay. The hotkey summon keeps the
+    /// default; programmatic summons (a share/Open With handoff) pass a longer
+    /// grace — the dismissing share sheet races the summon for focus and can
+    /// activate-then-deactivate the overlay repeatedly, which used to flash it
+    /// shut before the user ever saw it.</param>
+    public void Summon(long hideGraceMs = ShownDeactivationGraceMs)
     {
         // Show the window FIRST, then populate content. Mutating a batch of
         // control properties on a frameless WS_POPUP Mica window before it has
@@ -310,7 +333,7 @@ public sealed partial class OverlayWindow : Window
         Common.Log.Info("overlay summon: begin");
         CenterOnScreen();
         _lastShownMs = Environment.TickCount64;
-        _suppressDeactivate = true;
+        _hideGraceMs = hideGraceMs;
 
         AppWindow.Show();
         ShowWindow(_hwnd, SW_SHOW);
@@ -561,20 +584,15 @@ public sealed partial class OverlayWindow : Window
 
     private void OverlayWindow_Activated(object sender, WindowActivatedEventArgs args)
     {
-        // Dismiss on deactivation (clicking away), the same UX as the tray flyout.
-        if (args.WindowActivationState == WindowActivationState.Deactivated)
+        // Dismiss on deactivation (clicking away), the same UX as the tray
+        // flyout — except within the summon's grace window (see Summon):
+        // focus churn around a programmatic summon (the share sheet dismissing)
+        // must not flash the overlay shut.
+        if (args.WindowActivationState == WindowActivationState.Deactivated &&
+            Environment.TickCount64 - _lastShownMs > _hideGraceMs)
         {
-            if (_suppressDeactivate ||
-                Environment.TickCount64 - _lastShownMs <= ShownDeactivationGraceMs)
-            {
-                _suppressDeactivate = false;
-                return;
-            }
+            Common.Log.Debug("overlay hidden by deactivation (focus lost)");
             Hide();
-        }
-        else
-        {
-            _suppressDeactivate = false;
         }
     }
 

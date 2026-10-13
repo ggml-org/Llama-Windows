@@ -495,7 +495,7 @@ namespace LlamaApp
             try
             {
                 Common.Log.Info($"shared text received ({prompt.Length} chars); opening the chat overlay");
-                _overlay?.Summon();
+                _overlay?.Summon(ShareSummonGraceMs);
                 _overlay?.SetPendingPrompt(prompt);
             }
             catch (Exception ex)
@@ -506,24 +506,85 @@ namespace LlamaApp
         }
 
         /// <summary>
+        /// A programmatic overlay summon ignores focus loss for this long: the
+        /// dismissing share sheet races the summon for focus and can
+        /// activate-then-deactivate the overlay repeatedly, which used to flash
+        /// it shut before the user ever saw it. Long enough to outlast the sheet's
+        /// teardown; short enough that click-away still dismisses normally after.
+        /// </summary>
+        private const int ShareSummonGraceMs = 3000;
+
+        /// <summary>
         /// A shared image attaches to the chat overlay: the overlay opens and
         /// the image is queued as a pending attachment (a synthetic paste
         /// into the WebUI's composer, gated on an image-capable model — see
-        /// <see cref="OverlayWindow.SetPendingImage"/>).
+        /// <see cref="OverlayWindow.SetPendingImage"/>). When no image-capable
+        /// model is loaded, one is loaded for the share — the user's intent is
+        /// "ask about this image", which needs vision — preferring models the
+        /// user has used before (a saved context length), smallest first; the
+        /// overlay's retry loop pastes once the model is resident.
         /// </summary>
         private async Task HandleSharedImageAsync(string imagePath)
         {
             try
             {
                 Common.Log.Info($"shared image received '{System.IO.Path.GetFileName(imagePath)}'; opening the chat overlay");
-                _overlay?.Summon();
+                _overlay?.Summon(ShareSummonGraceMs);
                 _overlay?.SetPendingImage(imagePath);
+                _ = EnsureVisionModelForShareAsync();
             }
             catch (Exception ex)
             {
                 Common.Log.Warn(ex, "handling the shared image failed");
             }
             await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Loads an image-capable model for an incoming shared image when no
+        /// suitable model is loaded: prefer the loaded model when it already
+        /// accepts images, else prefer models the user has configured a context
+        /// length for (a trace of prior use), smallest on-disk model first so
+        /// the pick fits the GPU and loads fast. Fire-and-forget — the overlay's
+        /// paste retry loop delivers once the model is resident.
+        /// </summary>
+        private async Task EnsureVisionModelForShareAsync()
+        {
+            try
+            {
+                var snapshot = Llama.LlamaManager.Shared.LastModelsSnapshot;
+                if (snapshot.FirstOrDefault(m => m.IsLoaded && m.SupportsImage) is not null)
+                    return; // already usable — the retry loop will paste
+
+                var candidates = snapshot
+                    .Where(m => m.SupportsImage && !m.IsLoading && !m.IsDownloading)
+                    .ToList();
+                if (candidates.Count == 0)
+                {
+                    Common.Log.Warn("no image-capable model is available for the shared image; " +
+                        "the overlay will wait for the user to load one");
+                    return; // the wait-and-notify path remains
+                }
+
+                var preferred = candidates
+                    .Where(m => Settings.Current.ModelContextLengths.ContainsKey(m.Id))
+                    .ToList();
+                var pool = preferred.Count > 0 ? preferred : candidates;
+                var choice = pool
+                    .OrderBy(m => System.IO.File.Exists(m.Path) ? new System.IO.FileInfo(m.Path).Length : long.MaxValue)
+                    .First();
+
+                Common.Log.Info($"loading image-capable model '{choice.Id}' for the shared image");
+                var item = new Views.ModelItem { Name = choice.Id, RepoName = choice.Id };
+                if (!await Llama.LlamaManager.Shared.LoadModelAsync(item))
+                    Common.Log.Warn($"the server declined to load '{choice.Id}' for the shared image");
+                // Loaded or not: the overlay's retry loop decides delivery, and
+                // the poller refreshes LoadedModelSupportsImages within ~1s.
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "auto-loading a vision model for the share failed");
+            }
         }
 
         /// <summary>
@@ -638,7 +699,7 @@ namespace LlamaApp
         /// Opens the chat overlay — the Alt+Space panel — from surfaces that
         /// don't own the hotkey (toast Chat button, tray context menu).
         /// </summary>
-        internal void SummonChatOverlay() => _overlay?.Summon();
+        internal void SummonChatOverlay() => _overlay?.Summon(ShareSummonGraceMs);
 
         /// <summary>
         /// Responds to a toast activation on the UI thread: a body click keeps
