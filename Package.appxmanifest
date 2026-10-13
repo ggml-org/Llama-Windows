@@ -77,7 +77,10 @@
              or an image (.jpg/.jpeg/.png) to Llama. Shared text is placed in
              the chat overlay's composer; a shared model follows the same
              import-and-load path as Open With; a shared image attaches to the
-             chat (image-capable models). -->
+             chat (image-capable models). StorageItems is what a FILE share
+             (Explorer, Photos) carries — without it in the declared formats,
+             file shares never match this target; Bitmap covers raw-pixel
+             shares (screenshot tools); Text covers selected text. -->
         <uap:Extension Category="windows.shareTarget">
           <uap:ShareTarget Description="Send to Llama">
             <uap:SupportedFileTypes>
@@ -88,6 +91,7 @@
             </uap:SupportedFileTypes>
             <uap:DataFormat>Text</uap:DataFormat>
             <uap:DataFormat>Bitmap</uap:DataFormat>
+            <uap:DataFormat>StorageItems</uap:DataFormat>
           </uap:ShareTarget>
         </uap:Extension>
       </Extensions>
