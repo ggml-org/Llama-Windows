@@ -79,11 +79,9 @@ namespace LlamaApp
                     // second launch). A share's DataPackageView cannot cross a
                     // process boundary, so the payload is extracted HERE — in the
                     // process that received it — and only the distilled request
-                    // (a path, or the text) is handed off. The redirect below is
-                    // still performed (best-effort; the OS also propagates the
-                    // MSIX file arguments that way when it works).
-                    var handoff = await ExtractHandoffFromActivationAsync(
-                        instance.GetActivatedEventArgs(), ownsShareOperation: false);
+                    // (a path, or the text) is handed off.
+                    var activatedArgs = instance.GetActivatedEventArgs();
+                    var handoff = await ExtractHandoffFromActivationAsync(activatedArgs);
                     switch (handoff.Kind)
                     {
                         case Common.HandoffKind.ModelPath:
@@ -98,9 +96,19 @@ namespace LlamaApp
                     }
                     Common.InstanceHandoff.Signal();
 
-                    // Off the UI thread — the documented redirect pattern.
-                    var activatedArgs = instance.GetActivatedEventArgs();
-                    await Task.Run(() => instance.RedirectActivationToAsync(activatedArgs));
+                    // Redirect the activation to the running instance — the
+                    // documented pattern for launch/file activations — EXCEPT
+                    // for shares: RedirectActivationToAsync does not support
+                    // ShareTarget activations (the ShareOperation cannot cross
+                    // processes, which is exactly why the payload travels via
+                    // the handoff above). Redirecting a share anyway leaves the
+                    // OS share machinery with an activation it cannot deliver,
+                    // and in practice this failed fast the second process
+                    // (0xC0000409 from the native share host).
+                    var isShareActivation =
+                        activatedArgs.Data is Windows.ApplicationModel.Activation.ShareTargetActivatedEventArgs;
+                    if (!isShareActivation)
+                        await Task.Run(() => instance.RedirectActivationToAsync(activatedArgs));
                 }
                 catch (Exception ex)
                 {
@@ -124,7 +132,7 @@ namespace LlamaApp
             // startup completes below. A cold-start share is ours to report
             // (the share sheet is waiting on this process).
             var activationArgs = Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs();
-            var startupHandoff = await ExtractHandoffFromActivationAsync(activationArgs, ownsShareOperation: true);
+            var startupHandoff = await ExtractHandoffFromActivationAsync(activationArgs);
             var openModelFile = startupHandoff.Kind == Common.HandoffKind.ModelPath ? startupHandoff.ModelPath : null;
             var sharedPrompt = startupHandoff.Kind == Common.HandoffKind.Text ? startupHandoff.Text : null;
             openModelFile ??= FirstGgufOnCommandLine();
@@ -254,6 +262,16 @@ namespace LlamaApp
             // working the moment Llama exits.
             _overlay = new OverlayWindow();
             _hotkey = new GlobalHotkey();
+            // Initialize the overlay's WebView2 NOW — at a calm point in
+            // startup, awaited and fully observed — rather than at the first
+            // summon. The app runs x64-emulated on ARM64, and the first WebView2
+            // initialization occasionally trips the emulation layer when a
+            // share delivery triggers the first summon while the OS share
+            // machinery is churning around the process (unobserved WinRT
+            // failure → stowed exception → 0xC000027B fail-fast, catchable by
+            // nothing). Prewarmed, the first summon just navigates — and is
+            // instant, too.
+            _overlay.PrewarmWebView();
             _hotkey.Register(() => _dispatcher.TryEnqueue(() => _overlay.Summon()));
 
             // The hotkey is hard-coded and otherwise undiscoverable — say so
@@ -351,22 +369,22 @@ namespace LlamaApp
 
         /// <summary>
         /// Distills this process's activation into a handoff request: a share
-        /// activation's payload (shared .gguf files — text shares go to the
-        /// overlay — wait, see below), an "Open With" .gguf, or nothing.
+        /// activation's payload (shared text, a .gguf, or an image), an
+        /// "Open With" .gguf, or nothing.
         ///
         /// <para>A share's <c>DataPackageView</c> cannot cross a process
         /// boundary, so the extraction happens in the process that received
-        /// the activation — whether that process is the cold-start instance
-        /// (which keeps the data and handles it after startup) or a second
-        /// instance (which writes the distilled request to the handoff file
-        /// and exits). <paramref name="ownsShareOperation"/> reflects the
-        /// difference: only the cold-start instance should report the share
-        /// operation's progress (the second instance's copy belongs to the
-        /// OS share sheet, which dismisses it on process exit).</para>
+        /// the activation — the cold-start instance (which keeps the distilled
+        /// request and handles it after startup) or a second instance (which
+        /// writes it to the handoff file and exits). Per the ShareOperation
+        /// contract, the process that received the activation ALWAYS reports
+        /// it — ReportStarted around the extraction, ReportCompleted after,
+        /// ReportError on failure. Exiting with an unreported operation leaves
+        /// the in-process share host in a bad state and failed fast in
+        /// practice (0xC0000409 from the native share machinery).</para>
         /// </summary>
         private static async Task<Common.HandoffRequest> ExtractHandoffFromActivationAsync(
-            Microsoft.Windows.AppLifecycle.AppActivationArguments activatedArgs,
-            bool ownsShareOperation)
+            Microsoft.Windows.AppLifecycle.AppActivationArguments activatedArgs)
         {
             try
             {
@@ -380,70 +398,88 @@ namespace LlamaApp
                 if (data is Windows.ApplicationModel.Activation.ShareTargetActivatedEventArgs share)
                 {
                     var operation = share.ShareOperation;
-                    if (ownsShareOperation) operation.ReportStarted();
-
-                    var package = operation.Data;
-                    if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+                    operation.ReportStarted();
+                    try
                     {
-                        var text = await package.GetTextAsync();
-                        if (ownsShareOperation) operation.ReportCompleted();
-                        return text.Length > 0
-                            ? Common.HandoffRequest.ForText(text)
-                            : Common.HandoffRequest.None;
+                        return await ExtractSharePayloadAsync(operation);
                     }
-
-                    if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+                    catch (Exception ex)
                     {
-                        var items = await package.GetStorageItemsAsync();
-                        var paths = items.Select(item => item.Path).Where(p => p is not null).Cast<string>().ToList();
-
-                        // A shared .gguf is a model to load — the same pipeline
-                        // as Open With.
-                        var model = paths.FirstOrDefault(Common.GgufFile.IsGguf);
-                        if (model is not null)
-                        {
-                            if (ownsShareOperation) operation.ReportCompleted();
-                            return Common.HandoffRequest.ForModel(model);
-                        }
-
-                        // Otherwise an image (.jpg/.jpeg/.png) attaches to the
-                        // chat.
-                        var image = paths.FirstOrDefault(Common.SharedImage.IsImagePath);
-                        if (ownsShareOperation) operation.ReportCompleted();
-                        return image is not null
-                            ? Common.HandoffRequest.ForImage(image)
-                            : Common.HandoffRequest.None;
+                        Common.Log.Warn(ex, "share payload extraction failed; reporting the share as failed");
+                        try { operation.ReportError("Llama could not read the shared content."); } catch { /* best-effort */ }
+                        return Common.HandoffRequest.None;
                     }
-
-                    // A Bitmap share (e.g. a screenshot tool that hands over
-                    // pixels, not a file) is re-encoded as PNG into the app's
-                    // scratch dir — the WebUI paste takes a file's bytes.
-                    if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap))
-                    {
-                        var reference = await package.GetBitmapAsync();
-                        string? imagePath = null;
-                        try
-                        {
-                            using var stream = await reference.OpenReadAsync();
-                            imagePath = await SaveSharedBitmapAsync(stream);
-                        }
-                        catch (Exception ex)
-                        {
-                            Common.Log.Warn(ex, "decoding the shared bitmap failed");
-                        }
-                        if (ownsShareOperation) operation.ReportCompleted();
-                        return imagePath is not null
-                            ? Common.HandoffRequest.ForImage(imagePath)
-                            : Common.HandoffRequest.None;
-                    }
-
-                    if (ownsShareOperation) operation.ReportCompleted();
                 }
             }
             catch (Exception ex)
             {
                 Common.Log.Warn(ex, "share activation extraction failed");
             }
+            return Common.HandoffRequest.None;
+        }
+
+        /// <summary>The payload of a reported share: text, a model file, an image
+        /// file, or a re-encoded raw bitmap. Assumes ReportStarted was already
+        /// called and the caller reports Completed/Error.</summary>
+        private static async Task<Common.HandoffRequest> ExtractSharePayloadAsync(
+            Windows.ApplicationModel.DataTransfer.ShareTarget.ShareOperation operation)
+        {
+            var package = operation.Data;
+            if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+            {
+                var text = await package.GetTextAsync();
+                operation.ReportCompleted();
+                return text.Length > 0
+                    ? Common.HandoffRequest.ForText(text)
+                    : Common.HandoffRequest.None;
+            }
+
+            if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+            {
+                var items = await package.GetStorageItemsAsync();
+                var paths = items.Select(item => item.Path).Where(p => p is not null).Cast<string>().ToList();
+
+                // A shared .gguf is a model to load — the same pipeline
+                // as Open With.
+                var model = paths.FirstOrDefault(Common.GgufFile.IsGguf);
+                if (model is not null)
+                {
+                    operation.ReportCompleted();
+                    return Common.HandoffRequest.ForModel(model);
+                }
+
+                // Otherwise an image (.jpg/.jpeg/.png) attaches to the
+                // chat.
+                var image = paths.FirstOrDefault(Common.SharedImage.IsImagePath);
+                operation.ReportCompleted();
+                return image is not null
+                    ? Common.HandoffRequest.ForImage(image)
+                    : Common.HandoffRequest.None;
+            }
+
+            // A Bitmap share (e.g. a screenshot tool that hands over
+            // pixels, not a file) is re-encoded as PNG into the app's
+            // scratch dir — the WebUI paste takes a file's bytes.
+            if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap))
+            {
+                var reference = await package.GetBitmapAsync();
+                string? imagePath = null;
+                try
+                {
+                    using var stream = await reference.OpenReadAsync();
+                    imagePath = await SaveSharedBitmapAsync(stream);
+                }
+                catch (Exception ex)
+                {
+                    Common.Log.Warn(ex, "decoding the shared bitmap failed");
+                }
+                operation.ReportCompleted();
+                return imagePath is not null
+                    ? Common.HandoffRequest.ForImage(imagePath)
+                    : Common.HandoffRequest.None;
+            }
+
+            operation.ReportCompleted();
             return Common.HandoffRequest.None;
         }
 

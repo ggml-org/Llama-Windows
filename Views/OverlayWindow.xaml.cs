@@ -161,15 +161,18 @@ public sealed partial class OverlayWindow : Window
         var pending = _pendingShare;
         if (pending is null) return;
 
-        var core = ModelWebUi.CoreWebView2;
-        if (core is null)
-        {
-            RetryShareSoon(pending);
-            return;
-        }
-
+        // Everything inside try: the CoreWebView2 getter can itself fault
+        // while initialization is in flight, and an async void has no
+        // catch-all — an escape here fail-fasts the process.
         try
         {
+            var core = ModelWebUi.CoreWebView2;
+            if (core is null)
+            {
+                RetryShareSoon(pending);
+                return;
+            }
+
             if (pending.ImagePath is { } imagePath)
             {
                 // The attachment pipeline is only wired up for image-capable
@@ -394,6 +397,32 @@ public sealed partial class OverlayWindow : Window
     private Uri? _desiredUri;
 
     /// <summary>
+    /// Initializes the overlay's WebView2 NOW, at a calm point in app startup,
+    /// instead of lazily at the first summon. Two reasons:
+    ///
+    /// <list type="bullet">
+    /// <item>the first summon becomes instant (no init wait);</item>
+    /// <item>the first initialization is the one that occasionally trips the
+    /// x64-on-ARM64 emulation layer (an unobserved WinRT failure surfaced as
+    /// a stowed exception — 0xC000027B from the SE code in xtajit64se — which
+    /// fail-fasts the process and no handler can catch). It reproduced when a
+    /// share delivery triggered the first summon while the OS share machinery
+    /// was churning around the process. Prewarming moves that first
+    /// initialization to startup, where it is awaited in a fully-observed
+    /// context with nothing racing it; a failure here is caught, logged, and
+    /// retried at the next summon instead of killing the app.</item>
+    /// </list>
+    /// </summary>
+    public void PrewarmWebView()
+    {
+        if (ModelWebUi.CoreWebView2 is not null || _webViewInitStarted)
+            return; // already initialized (or an attempt in flight)
+
+        _webViewInitStarted = true;
+        _ = ConfigureWebViewThenNavigateAsync();
+    }
+
+    /// <summary>
     /// Initializes the WebView2's CoreWebView2, applies the navigation policy
     /// (see <see cref="Common.WebOriginPolicy"/>), then navigates to
     /// <see cref="_desiredUri"/>. Failures are logged and swallowed — a
@@ -438,6 +467,10 @@ public sealed partial class OverlayWindow : Window
             {
                 ModelWebUi.Source = _desiredUri;
                 Common.Log.Info($"overlay webview: navigating to {_desiredUri}");
+            }
+            else
+            {
+                Common.Log.Info("overlay webview: initialized (prewarm); navigation policy armed");
             }
         }
         catch (Exception ex)
