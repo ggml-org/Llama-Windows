@@ -54,4 +54,38 @@ public static class OverlayPromptInjection
             })();
             """;
     }
+
+    /// <summary>
+    /// The script executed in the WebUI to attach a shared image to the chat.
+    /// The composer's <c>onPaste</c> handler feeds pasted files into the
+    /// attachment pipeline (<c>clipboardData.items → getAsFile →
+    /// onFilesAdd</c>), so the image rides a synthetic paste: the base64
+    /// payload becomes a <c>File</c> on a constructed <c>DataTransfer</c>,
+    /// dispatched on the composer as a <c>ClipboardEvent</c>. The payload is
+    /// JSON-embedded (never interpolated). Returns plain <c>true</c> when a
+    /// composer was found and the paste dispatched — the same JSON-encoded
+    /// success contract as <see cref="Build"/>.
+    /// </summary>
+    public static string BuildImagePaste(string base64, string mimeType, string fileName)
+    {
+        return $$"""
+            (function () {
+                const b64 = {{JsonSerializer.Serialize(base64)}};
+                const mime = {{JsonSerializer.Serialize(mimeType)}};
+                const name = {{JsonSerializer.Serialize(fileName)}};
+                const textareas = Array.from(document.querySelectorAll('textarea'));
+                if (textareas.length === 0) return false;
+                const composer =
+                    textareas.find(t => t.placeholder === {{JsonSerializer.Serialize(ComposerPlaceholder)}}) ||
+                    textareas[textareas.length - 1];
+                const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                const file = new File([bytes], name, { type: mime });
+                const data = new DataTransfer();
+                data.items.add(file);
+                composer.dispatchEvent(new ClipboardEvent('paste', {
+                    clipboardData: data, bubbles: true, cancelable: true }));
+                return true;
+            })();
+            """;
+    }
 }

@@ -113,15 +113,20 @@ public sealed partial class OverlayWindow : Window
         };
     }
 
-    // ---- Shared-prompt delivery (Windows share sheet) ----
+    // ---- Shared-payload delivery (Windows share sheet) ----
 
-    // Text handed over by App (a Windows share) waiting for the WebUI to have
-    // a chat composer. Injection retries: a share can land before any model is
-    // loaded, when the WebUI shows its model picker and there is no textarea
-    // yet — the prompt waits and lands once the chat screen is up.
-    private string? _pendingPrompt;
-    private int _promptAttempts;
-    private const int MaxPromptAttempts = 40; // ~2 min at 3s
+    // A payload handed over by App (a Windows share) waiting for the WebUI to
+    // be able to take it. Injection retries: a share can land before any model
+    // is loaded, when the WebUI shows its model picker and there is no
+    // composer yet — the payload waits and lands once the chat screen is up.
+    // A shared image additionally waits for an image-capable model (the
+    // paste targets the attachment pipeline, which needs vision).
+    private sealed record PendingShare(string? Prompt, string? ImagePath);
+
+    private PendingShare? _pendingShare;
+    private int _shareAttempts;
+    private const int MaxShareAttempts = 40; // ~2 min at 3s
+    private bool _imageWaitNotified;
 
     /// <summary>
     /// Queues shared text for the WebUI's chat composer. Attempts injection
@@ -130,57 +135,131 @@ public sealed partial class OverlayWindow : Window
     /// </summary>
     public void SetPendingPrompt(string prompt)
     {
-        _pendingPrompt = prompt;
-        _promptAttempts = 0;
-        TryInjectPendingPromptAsync();
+        _pendingShare = new PendingShare(prompt, null);
+        _shareAttempts = 0;
+        _imageWaitNotified = false;
+        TryInjectPendingShareAsync();
     }
 
-    private async void TryInjectPendingPromptAsync()
+    /// <summary>
+    /// Queues a shared image (.jpg/.jpeg/.png) as a synthetic paste into the
+    /// WebUI's composer — its <c>onPaste</c> handler feeds pasted files to the
+    /// attachment pipeline. The paste waits for an image-capable model to be
+    /// loaded (a text-only model's chat accepts no attachments), retrying
+    /// like a text prompt until then.
+    /// </summary>
+    public void SetPendingImage(string imagePath)
     {
-        var prompt = _pendingPrompt;
-        if (prompt is null) return;
+        _pendingShare = new PendingShare(null, imagePath);
+        _shareAttempts = 0;
+        _imageWaitNotified = false;
+        TryInjectPendingShareAsync();
+    }
+
+    private async void TryInjectPendingShareAsync()
+    {
+        var pending = _pendingShare;
+        if (pending is null) return;
 
         var core = ModelWebUi.CoreWebView2;
         if (core is null)
         {
-            RetryPromptSoon();
+            RetryShareSoon(pending);
             return;
         }
 
         try
         {
-            var result = await core.ExecuteScriptAsync(OverlayPromptInjection.Build(prompt));
-            // ExecuteScriptAsync returns the script's result JSON-encoded —
-            // a boolean comes back as the literal "true".
-            if (bool.TryParse(result, out var placed) && placed)
+            if (pending.ImagePath is { } imagePath)
             {
-                _pendingPrompt = null;
-                Common.Log.Info("overlay webview: shared prompt placed in the chat composer");
-                return;
+                // The attachment pipeline is only wired up for image-capable
+                // models — wait (and say so, once) rather than pasting into a
+                // chat that can't take the image.
+                if (!LlamaManager.Shared.LoadedModelSupportsImages)
+                {
+                    if (!_imageWaitNotified)
+                    {
+                        _imageWaitNotified = true;
+                        Notifications.Show("Waiting for an image-capable model",
+                            "The shared image will attach once a model that supports images is loaded — pick one in the chat.");
+                    }
+                    RetryShareSoon(pending);
+                    return;
+                }
+
+                var script = OverlayPromptInjection.BuildImagePaste(
+                    Convert.ToBase64String(File.ReadAllBytes(imagePath)),
+                    Common.SharedImage.MimeTypeFor(imagePath),
+                    System.IO.Path.GetFileName(imagePath));
+                var result = await core.ExecuteScriptAsync(script);
+                if (bool.TryParse(result, out var attached) && attached)
+                {
+                    _pendingShare = null;
+                    Common.Log.Info("overlay webview: shared image pasted into the chat composer");
+                    DeleteOwnScratchImage(imagePath);
+                    return;
+                }
+            }
+            else if (pending.Prompt is { } prompt)
+            {
+                var result = await core.ExecuteScriptAsync(OverlayPromptInjection.Build(prompt));
+                // ExecuteScriptAsync returns the script's result JSON-encoded —
+                // a boolean comes back as the literal "true".
+                if (bool.TryParse(result, out var placed) && placed)
+                {
+                    _pendingShare = null;
+                    Common.Log.Info("overlay webview: shared prompt placed in the chat composer");
+                    return;
+                }
             }
         }
         catch (Exception ex)
         {
-            Common.Log.Debug($"overlay webview: prompt injection not ready ({ex.Message})");
+            Common.Log.Debug($"overlay webview: share delivery not ready ({ex.Message})");
         }
-        RetryPromptSoon();
+        RetryShareSoon(pending);
     }
 
     /// <summary>Another attempt in a few seconds — the composer may not exist
-    /// yet (no model loaded) or the page may still be loading.</summary>
-    private void RetryPromptSoon()
+    /// yet (no model loaded), the page may still be loading, or (for images)
+    /// the loaded model may not accept images.</summary>
+    private void RetryShareSoon(PendingShare pending)
     {
-        if (_pendingPrompt is null) return;
-        if (++_promptAttempts >= MaxPromptAttempts)
+        if (_pendingShare is null) return;
+        if (++_shareAttempts >= MaxShareAttempts)
         {
             Common.Log.Warn(
-                $"gave up placing the shared prompt ({_pendingPrompt.Length} chars) — " +
-                "no chat composer appeared");
-            _pendingPrompt = null;
+                (pending.ImagePath is { } path
+                    ? $"gave up delivering the shared image '{path}'"
+                    : $"gave up placing the shared prompt ({pending.Prompt?.Length ?? 0} chars)") +
+                " — the chat never became ready for it");
+            _pendingShare = null;
+            if (pending.ImagePath is { } abandoned) DeleteOwnScratchImage(abandoned);
             return;
         }
         _ = Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(
-            _ => _dispatcher.TryEnqueue(TryInjectPendingPromptAsync));
+            _ => _dispatcher.TryEnqueue(TryInjectPendingShareAsync));
+    }
+
+    /// <summary>
+    /// The app's scratch dir for converted Bitmap shares — the only images
+    /// Llama owns (a StorageItems share points at the user's own file, which
+    /// must not be deleted).
+    /// </summary>
+    internal static string ScratchImageDir =>
+        System.IO.Path.Combine(Common.AppData.Root, "shared");
+
+    private static void DeleteOwnScratchImage(string path)
+    {
+        try
+        {
+            if (System.IO.Path.GetFullPath(path).StartsWith(
+                    System.IO.Path.GetFullPath(ScratchImageDir) +
+                    System.IO.Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase))
+                File.Delete(path);
+        }
+        catch { /* best-effort scratch cleanup */ }
     }
 
     /// <summary>Style as a borderless, taskbar-less spotlight popup centered on screen.</summary>

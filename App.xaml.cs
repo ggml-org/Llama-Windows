@@ -92,6 +92,9 @@ namespace LlamaApp
                         case Common.HandoffKind.Text:
                             Common.InstanceHandoff.WriteText(handoff.Text!);
                             break;
+                        case Common.HandoffKind.Image:
+                            Common.InstanceHandoff.WriteImage(handoff.ModelPath!);
+                            break;
                     }
                     Common.InstanceHandoff.Signal();
 
@@ -314,6 +317,9 @@ namespace LlamaApp
                 case Common.HandoffKind.Text:
                     _ = HandleSharedPromptAsync(request.Text!);
                     break;
+                case Common.HandoffKind.Image:
+                    _ = HandleSharedImageAsync(request.ModelPath!);
+                    break;
                 default:
                     _trayIcon?.ShowFlyout();
                     break;
@@ -389,13 +395,45 @@ namespace LlamaApp
                     if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
                     {
                         var items = await package.GetStorageItemsAsync();
-                        var model = items
-                            .Select(item => item.Path)
-                            .Where(path => path is not null && Common.GgufFile.IsGguf(path))
-                            .FirstOrDefault();
+                        var paths = items.Select(item => item.Path).Where(p => p is not null).Cast<string>().ToList();
+
+                        // A shared .gguf is a model to load — the same pipeline
+                        // as Open With.
+                        var model = paths.FirstOrDefault(Common.GgufFile.IsGguf);
+                        if (model is not null)
+                        {
+                            if (ownsShareOperation) operation.ReportCompleted();
+                            return Common.HandoffRequest.ForModel(model);
+                        }
+
+                        // Otherwise an image (.jpg/.jpeg/.png) attaches to the
+                        // chat.
+                        var image = paths.FirstOrDefault(Common.SharedImage.IsImagePath);
                         if (ownsShareOperation) operation.ReportCompleted();
-                        return model is not null
-                            ? Common.HandoffRequest.ForModel(model)
+                        return image is not null
+                            ? Common.HandoffRequest.ForImage(image)
+                            : Common.HandoffRequest.None;
+                    }
+
+                    // A Bitmap share (e.g. a screenshot tool that hands over
+                    // pixels, not a file) is re-encoded as PNG into the app's
+                    // scratch dir — the WebUI paste takes a file's bytes.
+                    if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap))
+                    {
+                        var reference = await package.GetBitmapAsync();
+                        string? imagePath = null;
+                        try
+                        {
+                            using var stream = await reference.OpenReadAsync();
+                            imagePath = await SaveSharedBitmapAsync(stream);
+                        }
+                        catch (Exception ex)
+                        {
+                            Common.Log.Warn(ex, "decoding the shared bitmap failed");
+                        }
+                        if (ownsShareOperation) operation.ReportCompleted();
+                        return imagePath is not null
+                            ? Common.HandoffRequest.ForImage(imagePath)
                             : Common.HandoffRequest.None;
                     }
 
@@ -429,6 +467,54 @@ namespace LlamaApp
                 Common.Log.Warn(ex, "handling the shared prompt failed");
             }
             await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// A shared image attaches to the chat overlay: the overlay opens and
+        /// the image is queued as a pending attachment (a synthetic paste
+        /// into the WebUI's composer, gated on an image-capable model — see
+        /// <see cref="OverlayWindow.SetPendingImage"/>).
+        /// </summary>
+        private async Task HandleSharedImageAsync(string imagePath)
+        {
+            try
+            {
+                Common.Log.Info($"shared image received '{System.IO.Path.GetFileName(imagePath)}'; opening the chat overlay");
+                _overlay?.Summon();
+                _overlay?.SetPendingImage(imagePath);
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "handling the shared image failed");
+            }
+            await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Re-encodes a shared <see cref="Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap"/>
+        /// stream as PNG into the app's scratch dir
+        /// (<c>%LOCALAPPDATA%\Llama\shared</c>, swept on delivery). Returns the
+        /// written path, or null when the pixels couldn't be decoded (some
+        /// sources share raw DIB data the decoder can't read).
+        /// </summary>
+        private static async Task<string?> SaveSharedBitmapAsync(
+            Windows.Storage.Streams.IRandomAccessStream stream)
+        {
+            var dir = Views.OverlayWindow.ScratchImageDir;
+            Directory.CreateDirectory(dir);
+            var path = System.IO.Path.Combine(dir, $"shared-{Guid.NewGuid():N}.png");
+
+            var decoder = await Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(stream);
+            using var softwareBitmap = await decoder.GetSoftwareBitmapAsync();
+
+            using var fileStream = File.Open(path, FileMode.CreateNew);
+            using var winrtStream = fileStream.AsRandomAccessStream();
+            var encoder = await Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(
+                Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId, winrtStream);
+            encoder.SetSoftwareBitmap(softwareBitmap);
+            await encoder.FlushAsync();
+
+            return path;
         }
 
         /// <summary>
