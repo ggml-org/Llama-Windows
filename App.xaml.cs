@@ -71,8 +71,24 @@ namespace LlamaApp
                 Common.Log.Info("another instance is already running; redirecting activation and exiting");
                 try
                 {
-                    await instance.RedirectActivationToAsync(
-                        instance.GetActivatedEventArgs());
+                    // The running instance must learn about this launch. Its
+                    // AppInstance.Activated callback never fires on this setup
+                    // (verified), so the request travels via the handoff file +
+                    // named event instead: an "Open With" .gguf (command line or
+                    // the activation arguments) is written to the file, and the
+                    // signal — with no model it's the plain "reopen the flyout"
+                    // second launch — is always raised. The redirect below is
+                    // still performed (best-effort; the OS also propagates the
+                    // MSIX file arguments that way when it works).
+                    var handoffModel = FirstGgufOnCommandLine()
+                                       ?? FirstGgufFromFileActivation(instance.GetActivatedEventArgs().Data);
+                    if (handoffModel is not null)
+                        Common.OpenWithHandoff.Write(handoffModel);
+                    Common.OpenWithHandoff.Signal();
+
+                    // Off the UI thread — the documented redirect pattern.
+                    var activatedArgs = instance.GetActivatedEventArgs();
+                    await Task.Run(() => instance.RedirectActivationToAsync(activatedArgs));
                 }
                 catch (Exception ex)
                 {
@@ -85,6 +101,17 @@ namespace LlamaApp
             // The startup shortcut was renamed with the app ("LlamaApp.lnk" →
             // "Llama.lnk") — sweep any leftover from a pre-rename install.
             StartupHelper.RemoveLegacyShortcut();
+
+            // "Open With → Llama" on a .gguf: an MSIX file activation delivers
+            // the path through the activation arguments (OnLaunched is the one
+            // startup hook WinUI 3 desktop has — there is no OnFileActivated),
+            // and an unpackaged `LlamaApp.exe <file.gguf>` launch delivers it
+            // on the command line (LaunchActivatedEventArgs.Arguments is
+            // empty for unpackaged launches — verified). Captured here, handled
+            // once startup completes below.
+            var openModelFile = FirstGgufFromFileActivation(
+                                   Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs().Data)
+                               ?? FirstGgufOnCommandLine();
 
             // Create the llama-server manager singleton with the configured
             // port and listen address BEFORE anything else can touch
@@ -139,6 +166,16 @@ namespace LlamaApp
             // Add the system-tray icon with its right-click context menu.
             _trayIcon = new TrayIconManager(_window);
 
+            // Listen for a second instance's signal (Open With handoff or a
+            // plain second launch): the named event fires, we consume any
+            // pending model request and act on it. Replaces the
+            // AppInstance.Activated path that never fires on this setup.
+            var openWithEvent = Common.OpenWithHandoff.Listen();
+            ThreadPool.RegisterWaitForSingleObject(
+                openWithEvent,
+                (_, _) => _dispatcher.TryEnqueue(HandleSecondLaunchSignal),
+                null, Timeout.Infinite, executeOnlyOnce: false);
+
             // Toast notifications for background events (model loaded, download
             // failed) while the flyout is hidden. Clicking a toast re-opens the
             // flyout; so does a redirected second-launch activation.
@@ -149,7 +186,17 @@ namespace LlamaApp
                     $"The configured listen address ({Settings.Current.ListenAddress}) isn't assigned to this machine. " +
                     $"The llama server will listen on {resolvedListen.Address} instead.");
             Notifications.Invoked += args => _dispatcher.TryEnqueue(() => HandleToastActivation(args));
-            instance.Activated += (_, _) => _dispatcher.TryEnqueue(() => _trayIcon?.ShowFlyout());
+            instance.Activated += (sender, args) => _dispatcher.TryEnqueue(() =>
+            {
+                // Belt-and-braces: when the redirect DOES deliver (MSIX on
+                // other configurations), handle the activation directly.
+                var reopened = FirstGgufFromFileActivation(args.Data) ??
+                                Common.OpenWithHandoff.TryConsume();
+                if (reopened is not null)
+                    _ = OpenModelFileAsync(reopened);
+                else
+                    _trayIcon?.ShowFlyout();
+            });
 
             // Ensure a llama.cpp server is reachable on the configured port:
             // adopt an already-running one, launch one from a found binary, or
@@ -216,6 +263,27 @@ namespace LlamaApp
             }
 
             Common.Log.Info("startup complete");
+
+            // The .gguf this instance was opened for (see openModelFile above) —
+            // now the tray, server pipeline and overlay all exist. A handoff
+            // left by a second instance that signalled before the listener was
+            // up is consumed here the same way.
+            openModelFile ??= Common.OpenWithHandoff.TryConsume();
+            if (openModelFile is not null)
+                _ = OpenModelFileAsync(openModelFile);
+        }
+
+        /// <summary>
+        /// A second instance signalled (named event): an "Open With" model is
+        /// waiting in the handoff file — load it; a plain second launch re-opens
+        /// the flyout, as it always should have.
+        /// </summary>
+        private void HandleSecondLaunchSignal()
+        {
+            if (Common.OpenWithHandoff.TryConsume() is { } modelPath)
+                _ = OpenModelFileAsync(modelPath);
+            else
+                _trayIcon?.ShowFlyout();
         }
 
         /// <summary>
@@ -223,6 +291,104 @@ namespace LlamaApp
         /// Settings uses it for the Check-for-updates card.
         /// </summary>
         internal Llama.RuntimeUpdateScheduler RuntimeUpdates => _runtimeUpdates!;
+
+        /// <summary>
+        /// The first .gguf among a file activation's files (an "Open With"
+        /// activation may carry several), or null. Works for the cold-start
+        /// activation (<see cref="LlamaApp.OnLaunched"/>) and for the ones
+        /// redirected from a second instance (AppInstance.Activated).
+        /// </summary>
+        private static string? FirstGgufFromFileActivation(object? activationData)
+        {
+            if (activationData is Windows.ApplicationModel.Activation.FileActivatedEventArgs fileArgs)
+            {
+                foreach (var file in fileArgs.Files)
+                    if (Common.GgufFile.IsGguf(file.Path))
+                        return file.Path;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// An unpackaged <c>LlamaApp.exe C:\path\model.gguf</c> launch (dev
+        /// runs, scripts) carries the path on the command line — WinUI 3's
+        /// LaunchActivatedEventArgs.Arguments is empty there, so argv is read
+        /// directly. Quotes are tolerated; a non-existing file is ignored
+        /// (the arguments are free-form).
+        /// </summary>
+        private static string? FirstGgufOnCommandLine()
+        {
+            var argv = Environment.GetCommandLineArgs();
+            for (var i = 1; i < argv.Length; i++)
+            {
+                var candidate = argv[i].Trim().Trim('"');
+                if (Common.GgufFile.IsGguf(candidate) && File.Exists(candidate))
+                    return candidate;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Handles "Open With → Llama" on a .gguf: shows the flyout, ensures
+        /// the llama server is up, links the file into the server's
+        /// <c>--models-dir</c> (where the router discovers it as a model named
+        /// after the file), refreshes the model list so the router registers
+        /// the import, and loads it. On success the chat overlay opens on the
+        /// model; failures surface as toasts with actionable text.
+        /// </summary>
+        private async Task OpenModelFileAsync(string modelPath)
+        {
+            var fileName = System.IO.Path.GetFileName(modelPath);
+            try
+            {
+                // Something visibly happens immediately (loads take a while).
+                _trayIcon?.ShowFlyout();
+
+                // The server may need installing/starting (first ever use can
+                // be triggered by opening a model file).
+                var reachable = await Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
+                if (!reachable)
+                {
+                    Notifications.Show($"Couldn't open {fileName}",
+                        "The llama server isn't running. Open the Llama flyout and check the server status, then try again.");
+                    return;
+                }
+
+                var import = Llama.LlamaManager.ImportLocalModel(modelPath);
+                if (import.Outcome == Llama.LocalModelImportOutcome.Copied)
+                    Notifications.Show($"Copying {fileName}",
+                        "The file lives on another drive, so it was copied into Llama's models folder — the model loads next.");
+
+                // The router rescans its model sources when asked (older
+                // servers only on GET /models?reload=1) — the refresh registers
+                // the import, making its id loadable (a load without it would
+                // answer 404 model-is-not-found).
+                await Llama.LlamaManager.Shared.RefreshModelsAsync();
+
+                // ServerModelId of a file-imported model is its id (no
+                // repo:quant shape — see LocalModelImport.DeriveModelId).
+                var model = new Views.ModelItem { Name = import.ModelId, RepoName = import.ModelId };
+                var loaded = await Llama.LlamaManager.Shared.LoadModelAsync(model);
+                if (loaded)
+                {
+                    Common.Log.Info($"opened model file '{modelPath}' as '{import.ModelId}'");
+                    SummonChatOverlay();
+                }
+                else
+                {
+                    Common.Log.Warn($"open-with: the server rejected model '{import.ModelId}' ({modelPath})");
+                    Notifications.Show($"Couldn't load {fileName}",
+                        "The llama server rejected the model. It may be an unsupported or damaged GGUF file.");
+                }
+            }
+            catch (Exception ex)
+            {
+                // The importer throws actionable IOExceptions (file missing,
+                // no space for a cross-volume copy) — the message is the toast.
+                Common.Log.Error(ex, $"open-with of '{modelPath}' failed");
+                Notifications.Show($"Couldn't open {fileName}", ex.Message);
+            }
+        }
 
         /// <summary>
         /// Opens the chat overlay — the Alt+Space panel — from surfaces that

@@ -57,6 +57,22 @@
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
         <uap:SplashScreen Image="Assets\SplashScreen.png" />
       </uap:VisualElements>
+
+      <!-- "Open With → Llama" for GGUF models: registering the file type
+           puts the app into the shell's Open With list (and lets users pick it
+           as the default .gguf handler). The activation itself arrives through
+           AppInstance.GetActivatedEventArgs() (see App.OnLaunched): the file
+           is linked into the server's models folder and loaded. -->
+      <Extensions>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="gguf">
+            <uap:DisplayName>GGUF Model</uap:DisplayName>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.gguf</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
     </Application>
   </Applications>
 
