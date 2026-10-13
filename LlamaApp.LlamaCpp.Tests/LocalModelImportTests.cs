@@ -166,4 +166,153 @@ public sealed class LocalModelImportTests : IDisposable
             Path.Combine(Common.AppData.Root, "models"),
             LlamaManager.ManagedModelsDir);
     }
+
+    // ---- Sidecars: mmproj / draft / shards (llama.cpp models-dir rules) ----
+
+    private string Sidecar(string name, int size = 128)
+    {
+        var dir = Path.Combine(_root, "src");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, name);
+        File.WriteAllBytes(path, new byte[size]);
+        return path;
+    }
+
+    [Fact]
+    public void CollectModelFiles_PicksUpTheMmprojSidecar()
+    {
+        var main = WriteSource("Vision-8B-Q4_K_M.gguf");
+        var mmproj = Sidecar("mmproj-Vision-8B-F16.gguf");
+
+        var files = LocalModelImport.CollectModelFiles(main);
+
+        Assert.Contains(main, files);
+        Assert.Contains(mmproj, files);
+        Assert.Equal(2, files.Count);
+    }
+
+    [Fact]
+    public void CollectModelFiles_PrefersTheQuantMatchingMmproj()
+    {
+        var main = WriteSource("Vision-8B-Q4_K_M.gguf");
+        var mismatched = Sidecar("mmproj-Vision-8B-Q8_0.gguf");
+        var matched = Sidecar("mmproj-Vision-8B-Q4_K_M.gguf");
+
+        var files = LocalModelImport.CollectModelFiles(main);
+
+        Assert.Contains(matched, files);
+        Assert.DoesNotContain(mismatched, files);
+    }
+
+    [Fact]
+    public void CollectModelFiles_KeepsOneDraftSidecar()
+    {
+        var main = WriteSource("model.gguf");
+        var draft = Sidecar("mtp-model.gguf");
+
+        var files = LocalModelImport.CollectModelFiles(main);
+
+        Assert.Equal(new[] { main, draft }, files);
+    }
+
+    [Fact]
+    public void CollectModelFiles_CollectsShardSiblings()
+    {
+        var shard1 = WriteSource("Big-00001-of-00002.gguf");
+        var shard2 = Sidecar("Big-00002-of-00002.gguf");
+        Sidecar("unrelated.gguf");
+
+        var files = LocalModelImport.CollectModelFiles(shard1);
+
+        Assert.Contains(shard1, files);
+        Assert.Contains(shard2, files);
+        Assert.Equal(2, files.Count);
+    }
+
+    [Fact]
+    public void CollectModelFiles_AloneModel_ImportsJustItself()
+    {
+        var main = WriteSource("lonewolf.gguf");
+
+        Assert.Equal(new[] { main }, LocalModelImport.CollectModelFiles(main));
+    }
+
+    [Fact]
+    public void Import_WithSidecars_UsesTheDirectoryLayout()
+    {
+        var main = WriteSource("Vision-8B-Q4_K_M.gguf");
+        var mmproj = Sidecar("mmproj-Vision-8B-F16.gguf");
+        var dir = Path.Combine(_root, "models");
+
+        var result = LocalModelImport.Import(main, dir);
+
+        Assert.Equal("Vision-8B-Q4_K_M", result.ModelId);
+        Assert.Equal(2, result.FileCount);
+        var modelDir = Path.Combine(dir, "Vision-8B-Q4_K_M");
+        Assert.True(File.Exists(Path.Combine(modelDir, "Vision-8B-Q4_K_M.gguf")));
+        Assert.True(File.Exists(Path.Combine(modelDir, "mmproj-Vision-8B-F16.gguf")));
+        // Top level stays clean — a directory import must not also drop a file.
+        Assert.False(File.Exists(Path.Combine(dir, "Vision-8B-Q4_K_M.gguf")));
+    }
+
+    [Fact]
+    public void Import_WithSidecars_ReopenIsANoOp()
+    {
+        var main = WriteSource("Vision-8B-Q4_K_M.gguf");
+        Sidecar("mmproj-Vision-8B-F16.gguf");
+        var dir = Path.Combine(_root, "models");
+        LocalModelImport.Import(main, dir);
+
+        var second = LocalModelImport.Import(main, dir);
+
+        Assert.Equal(LocalModelImportOutcome.AlreadyPresent, second.Outcome);
+        Assert.Equal(2, second.FileCount);
+    }
+
+    [Fact]
+    public void Import_MmprojOpenedDirectly_ResolvesToTheSiblingModel()
+    {
+        WriteSource("Vision-8B-Q4_K_M.gguf");
+        var mmproj = Sidecar("mmproj-Vision-8B-F16.gguf");
+        var dir = Path.Combine(_root, "models");
+
+        var result = LocalModelImport.Import(mmproj, dir);
+
+        Assert.Equal("Vision-8B-Q4_K_M", result.ModelId);
+        Assert.Equal(2, result.FileCount);
+    }
+
+    [Fact]
+    public void Import_MmprojWithNoSiblingModel_FailsWithAGuidingMessage()
+    {
+        var mmproj = Sidecar("mmproj-lonely-F16.gguf");
+
+        var ex = Assert.Throws<IOException>(() =>
+            LocalModelImport.Import(mmproj, Path.Combine(_root, "models")));
+
+        Assert.Contains("projector sidecar", ex.Message);
+        Assert.Contains("Open the model file", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("Big-00001-of-00002.gguf", "Big")]
+    [InlineData("Big-00007-of-00003.gguf", "Big")]
+    [InlineData("plain.gguf", "plain")]
+    [InlineData("Qwen-Coder-00001-of-00004.gguf", "Qwen-Coder")]
+    public void DeriveModelId_StripsShardSuffixes(string fileName, string expected)
+    {
+        Assert.Equal(expected, LocalModelImport.DeriveModelId(Path.Combine(_root, "x", fileName)));
+    }
+
+    [Theory]
+    [InlineData("Vision-8B-Q4_K_M", "Q4_K_M")]
+    [InlineData("Vision-8B-BF16", "BF16")]
+    [InlineData("model-Q8_0", "Q8_0")]
+    [InlineData("Vision-8B-Instruct", null)]  // not a quant tag
+    [InlineData("model", null)]
+    [InlineData("a-IQ4_NL", "IQ4_NL")]
+    public void ExtractQuantTag_PicksTheTrailingQuant(string stem, string? expected)
+    {
+        Assert.Equal(expected, LocalModelImport.ExtractQuantTag(stem));
+    }
 }
