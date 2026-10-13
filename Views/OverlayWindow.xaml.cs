@@ -335,6 +335,18 @@ public sealed partial class OverlayWindow : Window
         _lastShownMs = Environment.TickCount64;
         _hideGraceMs = hideGraceMs;
 
+        // Raise the overlay above every normal window before showing it. A
+        // programmatic summon (share/Open With handoff, tray) runs while another
+        // app holds the foreground, and Windows denies SetForegroundWindow to
+        // background processes — without this raise the freshly shown overlay
+        // stays at its old Z position, invisible behind the user's windows, and
+        // the summon looks like nothing happened. Topmost is safe here: the
+        // overlay hides itself on the next deactivation, so it never lingers
+        // above other apps.
+        const uint SWP_NOMOVE_S = 0x0002, SWP_NOSIZE_S = 0x0001, SWP_NOACTIVATE = 0x0010;
+        SetWindowPos(_hwnd, new IntPtr(-1) /* HWND_TOPMOST */, 0, 0, 0, 0,
+            SWP_NOMOVE_S | SWP_NOSIZE_S | SWP_NOACTIVATE);
+
         AppWindow.Show();
         ShowWindow(_hwnd, SW_SHOW);
         SetForegroundWindow(_hwnd);
