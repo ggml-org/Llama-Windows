@@ -193,7 +193,13 @@ public static class Log
             // Append + FileShare.ReadWrite so the file can be opened in a text
             // editor / tail while the app keeps writing.
             var fs = new FileStream(_currentPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, 4096);
-            _writer = new StreamWriter(fs, new UTF8Encoding(false)) { AutoFlush = false };
+            // AutoFlush: short-lived second instances (share/Open With
+            // extractors) exit via Environment.Exit, which never disposes the
+            // writer — without a per-write flush their log lines are lost
+            // entirely. The volume here is a few lines per second; the cost is
+            // negligible, and crash forensics stop depending on graceful
+            // shutdown.
+            _writer = new StreamWriter(fs, new UTF8Encoding(false)) { AutoFlush = true };
         }
         catch { _writer = null; }
     }
