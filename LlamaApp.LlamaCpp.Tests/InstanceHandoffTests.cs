@@ -70,6 +70,34 @@ public sealed class InstanceHandoffTests : IDisposable
     }
 
     [Fact]
+    public void WriteImageThenConsume_RoundTrips()
+    {
+        InstanceHandoff.WriteImage(@"C:\Users\me\Pictures\shot.png", Pending);
+
+        var taken = InstanceHandoff.TryConsume(Pending);
+        Assert.Equal(HandoffKind.Image, taken.Kind);
+        Assert.Equal(@"C:\Users\me\Pictures\shot.png", taken.ModelPath);
+        Assert.Null(taken.Text);
+
+        Assert.Equal(HandoffKind.None, InstanceHandoff.TryConsume(Pending).Kind);
+        Assert.False(File.Exists(Pending));
+    }
+
+    [Fact]
+    public void ImageRequest_ReplacesModelAndText()
+    {
+        InstanceHandoff.WriteModel(@"C:\a\model.gguf", Pending);
+        InstanceHandoff.WriteImage(@"C:\p\img.jpg", Pending);
+
+        var taken = InstanceHandoff.TryConsume(Pending);
+        Assert.Equal(HandoffKind.Image, taken.Kind);
+
+        InstanceHandoff.WriteText("prompt", Pending);
+        var back = InstanceHandoff.TryConsume(Pending);
+        Assert.Equal(HandoffKind.Text, back.Kind);
+    }
+
+    [Fact]
     public void TextRequest_ReplacesAModelRequest_AndBack()
     {
         InstanceHandoff.WriteModel(@"C:\a\model.gguf", Pending);

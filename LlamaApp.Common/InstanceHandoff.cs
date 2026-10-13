@@ -9,6 +9,10 @@ public enum HandoffKind
     /// <summary>Shared text to place in the chat overlay's composer.</summary>
     Text,
 
+    /// <summary>A shared image (.jpg/.jpeg/.png file, or a converted Bitmap
+    /// share) to attach in the chat overlay.</summary>
+    Image,
+
     /// <summary>No payload — a plain second launch, which re-opens the flyout.</summary>
     None,
 }
@@ -24,6 +28,8 @@ public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string?
     public static HandoffRequest ForModel(string path) => new(HandoffKind.ModelPath, path, null);
 
     public static HandoffRequest ForText(string text) => new(HandoffKind.Text, null, text);
+
+    public static HandoffRequest ForImage(string path) => new(HandoffKind.Image, path, null);
 }
 
 /// <summary>
@@ -69,6 +75,10 @@ public static class InstanceHandoff
     public static void WriteText(string text, string? pendingPath = null) =>
         Write(HandoffRequest.ForText(text), pendingPath ?? PendingPath);
 
+    /// <summary>Records a pending shared-image request, replacing any previous.</summary>
+    public static void WriteImage(string imagePath, string? pendingPath = null) =>
+        Write(HandoffRequest.ForImage(imagePath), pendingPath ?? PendingPath);
+
     /// <summary>Testable core of the Write* methods with an explicit request path.</summary>
     public static void Write(HandoffRequest request, string pendingPath)
     {
@@ -79,6 +89,7 @@ public static class InstanceHandoff
             {
                 HandoffKind.ModelPath => "model\n" + request.ModelPath,
                 HandoffKind.Text => "text\n" + request.Text,
+                HandoffKind.Image => "image\n" + request.ModelPath,
                 _ => null,
             };
             if (payload is null) return;
@@ -137,6 +148,11 @@ public static class InstanceHandoff
         if (string.Equals(marker, "text", StringComparison.Ordinal))
             return payload.Length > 0
                 ? HandoffRequest.ForText(payload)
+                : HandoffRequest.None;
+
+        if (string.Equals(marker, "image", StringComparison.Ordinal))
+            return payload.Trim().Length > 0
+                ? HandoffRequest.ForImage(payload.Trim())
                 : HandoffRequest.None;
 
         // No marker: the original Open With format — a bare model path.

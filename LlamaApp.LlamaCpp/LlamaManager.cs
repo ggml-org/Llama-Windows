@@ -2350,6 +2350,15 @@ public sealed class LlamaManager
     public string? LoadedModelId => (from m in _lastModelsSnapshot where m.IsLoaded select m.Id).FirstOrDefault();
 
     /// <summary>
+    /// True when the loaded model accepts image input (per the poller's
+    /// latest snapshot) — the gate for attaching a shared image in the chat.
+    /// False while a text-only model is loaded; the share waits for the user
+    /// to load an image-capable model.
+    /// </summary>
+    public bool LoadedModelSupportsImages =>
+        (from m in _lastModelsSnapshot where m.IsLoaded select m.SupportsImage).FirstOrDefault();
+
+    /// <summary>
     /// The most recent <c>GET /models</c> snapshot (refreshed by the 1s poller
     /// while the server runs). Lets detail views read per-model metadata (e.g.
     /// the on-disk <see cref="ServerModel.Path"/>) without an extra HTTP round
