@@ -29,6 +29,7 @@ public sealed class ServeArgumentPolicyTests
     [InlineData("--api-key")]
     [InlineData("--api-key-file")]
     [InlineData("--models-preset")]
+    [InlineData("--models-dir")]
     [InlineData("--ssl")]
     [InlineData("--ssl-key-file")]
     [InlineData("--ssl-cert-file")]

@@ -102,6 +102,26 @@ public sealed class LlamaManager
     public static string ManagedInstallDir => ManagedDir;
 
     /// <summary>
+    /// The app's local-models directory, passed to the llama server as
+    /// <c>--models-dir</c>: <c>%LOCALAPPDATA%\Llama\models</c>. The router scans
+    /// it on every <c>GET /models</c>, and a <c>.gguf</c> dropped directly in
+    /// it becomes a loadable model named after its file — which is how
+    /// "Open With → Llama" on a .gguf works: the file is linked in here
+    /// (<see cref="LocalModelImport"/>), then loaded by that id.
+    /// </summary>
+    public static string ManagedModelsDir =>
+        Path.Combine(Common.AppData.Root, "models");
+
+    /// <summary>
+    /// Brings a model file into <see cref="ManagedModelsDir"/> for the
+    /// router to load — the "Open With" step for a local .gguf. Returns the
+    /// imported model's id (the file name without extension); see
+    /// <see cref="LocalModelImport.Import"/> for link/copy/no-op semantics.
+    /// </summary>
+    public static LocalModelImportResult ImportLocalModel(string sourcePath)
+        => LocalModelImport.Import(sourcePath, ManagedModelsDir);
+
+    /// <summary>
     /// File names <c>install.ps1</c> can leave in <see cref="ManagedInstallDir"/>.
     /// The current script moves only <c>llama.exe</c> there (everything else
     /// lives in the <see cref="InstallScratchDir"/> it wipes on exit); older
@@ -755,7 +775,10 @@ public sealed class LlamaManager
     /// non-empty <paramref name="apiKeyFilePath"/> adds
     /// <c>--api-key-file</c> (only set for a non-loopback bind — the key
     /// itself is NEVER a process argument, which any local user can read via
-    /// WMI); <paramref name="customArguments"/> tokens are
+    /// WMI); a non-empty <paramref name="modelsDir"/> adds
+    /// <c>--models-dir</c> (local models the "Open With" flow imports —
+    /// see <see cref="ManagedModelsDir"/> and <see cref="LocalModelImport"/>);
+    /// <paramref name="customArguments"/> tokens are
     /// appended LAST so they can override the built-in flags (llama.cpp honors
     /// the last occurrence) — except the reserved bind/auth flags, which
     /// <see cref="ServeArgumentPolicy"/> refuses before this is reached.
@@ -769,7 +792,8 @@ public sealed class LlamaManager
         string? cacheTypeV,
         string? contextPresetPath,
         IReadOnlyList<string>? customArguments,
-        string? apiKeyFilePath = null)
+        string? apiKeyFilePath = null,
+        string? modelsDir = null)
     {
         // `serve` is the unified subcommand (replaces the old llama-server).
         // Router mode hosts the webui and serves requests even with no model
@@ -795,6 +819,16 @@ public sealed class LlamaManager
         {
             args.Add("--api-key-file");
             args.Add(apiKeyFilePath);
+        }
+
+        // Local models the "Open With" flow imports. The router scans this
+        // dir on every GET /models, so a .gguf linked here becomes loadable
+        // without restarting the server. App-owned and reserved — a custom
+        // --models-dir would silently break the Open With flow.
+        if (!string.IsNullOrWhiteSpace(modelsDir))
+        {
+            args.Add("--models-dir");
+            args.Add(modelsDir);
         }
 
         // Idle model unload. Done server-side because the server is the only
@@ -995,9 +1029,15 @@ public sealed class LlamaManager
                 Directory.CreateDirectory(Path.GetDirectoryName(apiKeyFilePath)!);
                 File.WriteAllText(apiKeyFilePath, ApiKey);
             }
+
+            // The local-models dir for the "Open With" flow: the router scans
+            // it on every GET /models, and llama.cpp's scan throws (rather than
+            // skipping) on a missing dir, so it must exist before the launch.
+            Directory.CreateDirectory(ManagedModelsDir);
             foreach (var arg in BuildServeArguments(
                          ServerPort, ListenAddress, IdleUnloadSeconds, MaxLoadedModels,
-                         CacheTypeK, CacheTypeV, contextPresetPath, customArguments, apiKeyFilePath))
+                         CacheTypeK, CacheTypeV, contextPresetPath, customArguments, apiKeyFilePath,
+                         ManagedModelsDir))
                 psi.ArgumentList.Add(arg);
 
             // Point the HF cache at the user-configured directory so the server
@@ -2251,6 +2291,20 @@ public sealed class LlamaManager
     /// isn't running or the request fails.
     /// </summary>
     public async Task<IReadOnlyList<ServerModel>> GetModelsAsync(CancellationToken cancel = default)
+        => await FetchModelsAsync(reload: false, cancel);
+
+    /// <summary>
+    /// <see cref="GetModelsAsync"/>, but first tells the router to rescan its
+    /// model sources — the HF cache and the <c>--models-dir</c> local-models
+    /// folder. Older servers only rescan when asked (<c>GET /models?reload=1</c>);
+    /// newer ones rescan on every fetch, where the parameter is simply ignored.
+    /// This is what makes a freshly imported file (<see cref="ImportLocalModel"/>)
+    /// loadable without restarting the server.
+    /// </summary>
+    public async Task<IReadOnlyList<ServerModel>> RefreshModelsAsync(CancellationToken cancel = default)
+        => await FetchModelsAsync(reload: true, cancel);
+
+    private async Task<IReadOnlyList<ServerModel>> FetchModelsAsync(bool reload, CancellationToken cancel)
     {
         if (ServerStatus != ServerState.Running)
             return [];
@@ -2258,7 +2312,7 @@ public sealed class LlamaManager
         try
         {
             using var budget = WithTimeout(TimeSpan.FromSeconds(10), cancel);
-            using var resp = await _http.GetAsync("/models", budget.Token);
+            using var resp = await _http.GetAsync(reload ? "/models?reload=1" : "/models", budget.Token);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
             var dto = await JsonSerializer.DeserializeAsync<ModelsResponseDto>(stream, cancellationToken: cancel);

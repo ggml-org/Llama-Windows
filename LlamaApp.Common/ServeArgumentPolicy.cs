@@ -18,7 +18,8 @@ public static class ServeArgumentPolicy
     /// Flags the app sets itself and refuses in custom arguments. <c>--host</c>
     /// and <c>--port</c> define the reachable endpoint; <c>--api-key</c> the
     /// app-managed auth; <c>--models-preset</c> the per-model context file;
-    /// the <c>--ssl*</c> flags change the transport (and would break the
+    /// <c>--models-dir</c> the "Open With" local-models folder; the
+    /// <c>--ssl*</c> flags change the transport (and would break the
     /// loopback client's assumptions).
     /// </summary>
     public static readonly IReadOnlyList<string> ReservedFlags = new[]
@@ -28,6 +29,7 @@ public static class ServeArgumentPolicy
         "--api-key",
         "--api-key-file",
         "--models-preset",
+        "--models-dir",
         "--ssl",
         "--ssl-key-file",
         "--ssl-cert-file",

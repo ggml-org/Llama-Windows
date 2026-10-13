@@ -113,6 +113,31 @@ public sealed class LlamaManagerArgumentsTests
         Assert.DoesNotContain("--api-key-file", args);
     }
 
+    // ---- --models-dir ("Open With" local models) ----
+
+    [Fact]
+    public void BuildServeArguments_AddsModelsDir_WhenProvided()
+    {
+        var args = LlamaManager.BuildServeArguments(
+            9931, "127.0.0.1", -1, 0, null, null, null, null,
+            modelsDir: @"C:\Users\me\AppData\Local\Llama\models");
+
+        var flagIndex = args.IndexOf("--models-dir");
+        Assert.True(flagIndex >= 0);
+        Assert.Equal(@"C:\Users\me\AppData\Local\Llama\models", args[flagIndex + 1]);
+        // App-owned block: sits with the other built-ins, before the custom tail.
+        Assert.True(flagIndex < args.IndexOf("--jinja") + 2);
+    }
+
+    [Fact]
+    public void BuildServeArguments_OmitsModelsDir_WhenNull()
+    {
+        var args = LlamaManager.BuildServeArguments(
+            9931, "127.0.0.1", -1, 0, null, null, null, null, modelsDir: null);
+
+        Assert.DoesNotContain("--models-dir", args);
+    }
+
     [Fact]
     public void BuildServeArguments_AddsCacheTypeKAndV_WhenConfigured()
     {
