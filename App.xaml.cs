@@ -74,17 +74,26 @@ namespace LlamaApp
                     // The running instance must learn about this launch. Its
                     // AppInstance.Activated callback never fires on this setup
                     // (verified), so the request travels via the handoff file +
-                    // named event instead: an "Open With" .gguf (command line or
-                    // the activation arguments) is written to the file, and the
-                    // signal — with no model it's the plain "reopen the flyout"
-                    // second launch — is always raised. The redirect below is
+                    // named event instead: an "Open With" .gguf, a Windows-share
+                    // payload, or nothing at all (the plain "reopen the flyout"
+                    // second launch). A share's DataPackageView cannot cross a
+                    // process boundary, so the payload is extracted HERE — in the
+                    // process that received it — and only the distilled request
+                    // (a path, or the text) is handed off. The redirect below is
                     // still performed (best-effort; the OS also propagates the
                     // MSIX file arguments that way when it works).
-                    var handoffModel = FirstGgufOnCommandLine()
-                                       ?? FirstGgufFromFileActivation(instance.GetActivatedEventArgs().Data);
-                    if (handoffModel is not null)
-                        Common.OpenWithHandoff.Write(handoffModel);
-                    Common.OpenWithHandoff.Signal();
+                    var handoff = await ExtractHandoffFromActivationAsync(
+                        instance.GetActivatedEventArgs(), ownsShareOperation: false);
+                    switch (handoff.Kind)
+                    {
+                        case Common.HandoffKind.ModelPath:
+                            Common.InstanceHandoff.WriteModel(handoff.ModelPath!);
+                            break;
+                        case Common.HandoffKind.Text:
+                            Common.InstanceHandoff.WriteText(handoff.Text!);
+                            break;
+                    }
+                    Common.InstanceHandoff.Signal();
 
                     // Off the UI thread — the documented redirect pattern.
                     var activatedArgs = instance.GetActivatedEventArgs();
@@ -102,16 +111,20 @@ namespace LlamaApp
             // "Llama.lnk") — sweep any leftover from a pre-rename install.
             StartupHelper.RemoveLegacyShortcut();
 
-            // "Open With → Llama" on a .gguf: an MSIX file activation delivers
-            // the path through the activation arguments (OnLaunched is the one
-            // startup hook WinUI 3 desktop has — there is no OnFileActivated),
-            // and an unpackaged `LlamaApp.exe <file.gguf>` launch delivers it
-            // on the command line (LaunchActivatedEventArgs.Arguments is
-            // empty for unpackaged launches — verified). Captured here, handled
-            // once startup completes below.
-            var openModelFile = FirstGgufFromFileActivation(
-                                   Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs().Data)
-                               ?? FirstGgufOnCommandLine();
+            // "Open With → Llama" on a .gguf and Windows shares both deliver
+            // through this instance's activation arguments (OnLaunched is the
+            // one startup hook WinUI 3 desktop has — there is no
+            // OnFileActivated/OnShareTargetActivated); an unpackaged
+            // `LlamaApp.exe <file.gguf>` launch delivers it on the command
+            // line (LaunchActivatedEventArgs.Arguments is empty for
+            // unpackaged launches — verified). Captured here, handled once
+            // startup completes below. A cold-start share is ours to report
+            // (the share sheet is waiting on this process).
+            var activationArgs = Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs();
+            var startupHandoff = await ExtractHandoffFromActivationAsync(activationArgs, ownsShareOperation: true);
+            var openModelFile = startupHandoff.Kind == Common.HandoffKind.ModelPath ? startupHandoff.ModelPath : null;
+            var sharedPrompt = startupHandoff.Kind == Common.HandoffKind.Text ? startupHandoff.Text : null;
+            openModelFile ??= FirstGgufOnCommandLine();
 
             // Create the llama-server manager singleton with the configured
             // port and listen address BEFORE anything else can touch
@@ -166,11 +179,11 @@ namespace LlamaApp
             // Add the system-tray icon with its right-click context menu.
             _trayIcon = new TrayIconManager(_window);
 
-            // Listen for a second instance's signal (Open With handoff or a
-            // plain second launch): the named event fires, we consume any
-            // pending model request and act on it. Replaces the
+            // Listen for a second instance's signal (Open With handoff, a
+            // Windows share, or a plain second launch): the named event fires,
+            // we consume any pending request and act on it. Replaces the
             // AppInstance.Activated path that never fires on this setup.
-            var openWithEvent = Common.OpenWithHandoff.Listen();
+            var openWithEvent = Common.InstanceHandoff.Listen();
             ThreadPool.RegisterWaitForSingleObject(
                 openWithEvent,
                 (_, _) => _dispatcher.TryEnqueue(HandleSecondLaunchSignal),
@@ -190,12 +203,10 @@ namespace LlamaApp
             {
                 // Belt-and-braces: when the redirect DOES deliver (MSIX on
                 // other configurations), handle the activation directly.
-                var reopened = FirstGgufFromFileActivation(args.Data) ??
-                                Common.OpenWithHandoff.TryConsume();
-                if (reopened is not null)
-                    _ = OpenModelFileAsync(reopened);
-                else
-                    _trayIcon?.ShowFlyout();
+                var request = FirstGgufFromFileActivation(args.Data) is { } directModel
+                    ? Common.HandoffRequest.ForModel(directModel)
+                    : Common.InstanceHandoff.TryConsume();
+                DispatchHandoff(request);
             });
 
             // Ensure a llama.cpp server is reachable on the configured port:
@@ -264,26 +275,49 @@ namespace LlamaApp
 
             Common.Log.Info("startup complete");
 
-            // The .gguf this instance was opened for (see openModelFile above) —
-            // now the tray, server pipeline and overlay all exist. A handoff
-            // left by a second instance that signalled before the listener was
-            // up is consumed here the same way.
-            openModelFile ??= Common.OpenWithHandoff.TryConsume();
-            if (openModelFile is not null)
-                _ = OpenModelFileAsync(openModelFile);
+            // The .gguf this instance was opened for, or the text it received
+            // as a share (see startupHandoff above) — now the tray, server
+            // pipeline and overlay all exist. A handoff left by a second
+            // instance that signalled before the listener was up is consumed
+            // here the same way.
+            var startupRequest = openModelFile is not null
+                ? Common.HandoffRequest.ForModel(openModelFile)
+                : (sharedPrompt is not null
+                    ? Common.HandoffRequest.ForText(sharedPrompt)
+                    : Common.InstanceHandoff.TryConsume());
+            DispatchHandoff(startupRequest);
         }
 
         /// <summary>
-        /// A second instance signalled (named event): an "Open With" model is
-        /// waiting in the handoff file — load it; a plain second launch re-opens
-        /// the flyout, as it always should have.
+        /// A second instance signalled (named event): consume whatever request
+        /// it handed off — a model file ("Open With"/share) loads, shared
+        /// text goes to the chat overlay; a plain second launch re-opens the
+        /// flyout, as it always should have.
         /// </summary>
         private void HandleSecondLaunchSignal()
         {
-            if (Common.OpenWithHandoff.TryConsume() is { } modelPath)
-                _ = OpenModelFileAsync(modelPath);
-            else
-                _trayIcon?.ShowFlyout();
+            DispatchHandoff(Common.InstanceHandoff.TryConsume());
+        }
+
+        /// <summary>
+        /// Acts on one handoff request: a model file loads through the
+        /// "Open With" pipeline, shared text is delivered to the chat
+        /// overlay's composer, and no request re-opens the flyout.
+        /// </summary>
+        private void DispatchHandoff(Common.HandoffRequest request)
+        {
+            switch (request.Kind)
+            {
+                case Common.HandoffKind.ModelPath:
+                    _ = OpenModelFileAsync(request.ModelPath!);
+                    break;
+                case Common.HandoffKind.Text:
+                    _ = HandleSharedPromptAsync(request.Text!);
+                    break;
+                default:
+                    _trayIcon?.ShowFlyout();
+                    break;
+            }
         }
 
         /// <summary>
@@ -307,6 +341,94 @@ namespace LlamaApp
                         return file.Path;
             }
             return null;
+        }
+
+        /// <summary>
+        /// Distills this process's activation into a handoff request: a share
+        /// activation's payload (shared .gguf files — text shares go to the
+        /// overlay — wait, see below), an "Open With" .gguf, or nothing.
+        ///
+        /// <para>A share's <c>DataPackageView</c> cannot cross a process
+        /// boundary, so the extraction happens in the process that received
+        /// the activation — whether that process is the cold-start instance
+        /// (which keeps the data and handles it after startup) or a second
+        /// instance (which writes the distilled request to the handoff file
+        /// and exits). <paramref name="ownsShareOperation"/> reflects the
+        /// difference: only the cold-start instance should report the share
+        /// operation's progress (the second instance's copy belongs to the
+        /// OS share sheet, which dismisses it on process exit).</para>
+        /// </summary>
+        private static async Task<Common.HandoffRequest> ExtractHandoffFromActivationAsync(
+            Microsoft.Windows.AppLifecycle.AppActivationArguments activatedArgs,
+            bool ownsShareOperation)
+        {
+            try
+            {
+                var data = activatedArgs.Data;
+
+                // "Open With": a file activation carries the path directly.
+                if (FirstGgufFromFileActivation(data) is { } gguf)
+                    return Common.HandoffRequest.ForModel(gguf);
+
+                // A Windows share: text, or files (.gguf imports).
+                if (data is Windows.ApplicationModel.Activation.ShareTargetActivatedEventArgs share)
+                {
+                    var operation = share.ShareOperation;
+                    if (ownsShareOperation) operation.ReportStarted();
+
+                    var package = operation.Data;
+                    if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+                    {
+                        var text = await package.GetTextAsync();
+                        if (ownsShareOperation) operation.ReportCompleted();
+                        return text.Length > 0
+                            ? Common.HandoffRequest.ForText(text)
+                            : Common.HandoffRequest.None;
+                    }
+
+                    if (package.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+                    {
+                        var items = await package.GetStorageItemsAsync();
+                        var model = items
+                            .Select(item => item.Path)
+                            .Where(path => path is not null && Common.GgufFile.IsGguf(path))
+                            .FirstOrDefault();
+                        if (ownsShareOperation) operation.ReportCompleted();
+                        return model is not null
+                            ? Common.HandoffRequest.ForModel(model)
+                            : Common.HandoffRequest.None;
+                    }
+
+                    if (ownsShareOperation) operation.ReportCompleted();
+                }
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "share activation extraction failed");
+            }
+            return Common.HandoffRequest.None;
+        }
+
+        /// <summary>
+        /// Shared text lands in the chat overlay: the overlay opens (Summon)
+        /// and the text is handed to it as a pending prompt, which the overlay
+        /// injects into the WebUI's composer as soon as one exists (a share
+        /// that arrives before any model is loaded waits until the chat
+        /// screen is up — see OverlayWindow.SetPendingPrompt).
+        /// </summary>
+        private async Task HandleSharedPromptAsync(string prompt)
+        {
+            try
+            {
+                Common.Log.Info($"shared text received ({prompt.Length} chars); opening the chat overlay");
+                _overlay?.Summon();
+                _overlay?.SetPendingPrompt(prompt);
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "handling the shared prompt failed");
+            }
+            await Task.CompletedTask;
         }
 
         /// <summary>

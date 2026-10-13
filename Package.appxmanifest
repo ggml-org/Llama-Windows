@@ -72,6 +72,19 @@
             </uap:SupportedFileTypes>
           </uap:FileTypeAssociation>
         </uap:Extension>
+
+        <!-- Share target: Share any selected text, or a .gguf file from
+             Explorer, to Llama. Shared text is placed in the chat overlay's
+             composer (waiting until a page with a composer is up); a shared
+             model follows the same import-and-load path as Open With. -->
+        <uap:Extension Category="windows.shareTarget">
+          <uap:ShareTarget Description="Send to Llama">
+            <uap:SupportedFileTypes>
+              <uap:FileType>.gguf</uap:FileType>
+            </uap:SupportedFileTypes>
+            <uap:DataFormat>Text</uap:DataFormat>
+          </uap:ShareTarget>
+        </uap:Extension>
       </Extensions>
     </Application>
   </Applications>

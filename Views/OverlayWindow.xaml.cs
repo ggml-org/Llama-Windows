@@ -47,6 +47,12 @@ public sealed partial class OverlayWindow : Window
     private const int GWL_STYLE = -16;
     private const long WS_POPUP = 0x80000000L;
 
+    // UI thread queue — the shared-prompt retry needs to come back here
+    // (WebView2 calls must stay on the UI thread).
+    private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcher =
+        Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()
+        ?? throw new InvalidOperationException("OverlayWindow must be created on the UI thread.");
+
     private bool _configured;
     private IntPtr _hwnd;
 
@@ -105,6 +111,76 @@ public sealed partial class OverlayWindow : Window
                 args.Request.Headers.SetHeader("Authorization", $"Bearer {key}");
             Common.Log.Info("overlay webview: API-key header attached for the authenticated WebUI");
         };
+    }
+
+    // ---- Shared-prompt delivery (Windows share sheet) ----
+
+    // Text handed over by App (a Windows share) waiting for the WebUI to have
+    // a chat composer. Injection retries: a share can land before any model is
+    // loaded, when the WebUI shows its model picker and there is no textarea
+    // yet — the prompt waits and lands once the chat screen is up.
+    private string? _pendingPrompt;
+    private int _promptAttempts;
+    private const int MaxPromptAttempts = 40; // ~2 min at 3s
+
+    /// <summary>
+    /// Queues shared text for the WebUI's chat composer. Attempts injection
+    /// immediately and keeps retrying on a timer until a composer exists
+    /// (the model picker screen has none) or the attempts run out.
+    /// </summary>
+    public void SetPendingPrompt(string prompt)
+    {
+        _pendingPrompt = prompt;
+        _promptAttempts = 0;
+        TryInjectPendingPromptAsync();
+    }
+
+    private async void TryInjectPendingPromptAsync()
+    {
+        var prompt = _pendingPrompt;
+        if (prompt is null) return;
+
+        var core = ModelWebUi.CoreWebView2;
+        if (core is null)
+        {
+            RetryPromptSoon();
+            return;
+        }
+
+        try
+        {
+            var result = await core.ExecuteScriptAsync(OverlayPromptInjection.Build(prompt));
+            // ExecuteScriptAsync returns the script's result JSON-encoded —
+            // a boolean comes back as the literal "true".
+            if (bool.TryParse(result, out var placed) && placed)
+            {
+                _pendingPrompt = null;
+                Common.Log.Info("overlay webview: shared prompt placed in the chat composer");
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            Common.Log.Debug($"overlay webview: prompt injection not ready ({ex.Message})");
+        }
+        RetryPromptSoon();
+    }
+
+    /// <summary>Another attempt in a few seconds — the composer may not exist
+    /// yet (no model loaded) or the page may still be loading.</summary>
+    private void RetryPromptSoon()
+    {
+        if (_pendingPrompt is null) return;
+        if (++_promptAttempts >= MaxPromptAttempts)
+        {
+            Common.Log.Warn(
+                $"gave up placing the shared prompt ({_pendingPrompt.Length} chars) — " +
+                "no chat composer appeared");
+            _pendingPrompt = null;
+            return;
+        }
+        _ = Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(
+            _ => _dispatcher.TryEnqueue(TryInjectPendingPromptAsync));
     }
 
     /// <summary>Style as a borderless, taskbar-less spotlight popup centered on screen.</summary>
