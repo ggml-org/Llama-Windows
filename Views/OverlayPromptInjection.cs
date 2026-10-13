@@ -56,6 +56,30 @@ public static class OverlayPromptInjection
     }
 
     /// <summary>
+    /// The script executed in the WebUI to focus the chat composer after the
+    /// overlay opens (or a share lands in it), so the user can type right
+    /// away instead of clicking the input first. Same composer selection as
+    /// <see cref="Build"/>; places the caret at the end of the text and
+    /// returns plain <see langword="true"/> when the composer ended up
+    /// focused — the same JSON-encoded success contract.
+    /// </summary>
+    public static string BuildComposerFocus()
+    {
+        return $$"""
+            (function () {
+                const textareas = Array.from(document.querySelectorAll('textarea'));
+                if (textareas.length === 0) return false;
+                const composer =
+                    textareas.find(t => t.placeholder === {{JsonSerializer.Serialize(ComposerPlaceholder)}}) ||
+                    textareas[textareas.length - 1];
+                composer.focus();
+                composer.setSelectionRange(composer.value.length, composer.value.length);
+                return document.activeElement === composer;
+            })();
+            """;
+    }
+
+    /// <summary>
     /// The script executed in the WebUI to attach a shared image to the chat.
     /// The composer's <c>onPaste</c> handler feeds pasted files into the
     /// attachment pipeline (<c>clipboardData.items → getAsFile →

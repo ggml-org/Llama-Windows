@@ -349,15 +349,83 @@ public sealed partial class OverlayWindow : Window
 
         AppWindow.Show();
         ShowWindow(_hwnd, SW_SHOW);
-        SetForegroundWindow(_hwnd);
+        TakeForegroundInput();
         Common.Log.Info("overlay summon: window shown");
 
         // Now that the window is on screen, refresh the chrome and navigate
         // the WebView2 to the loaded model's WebUI.
         RefreshModelBadge();
         NavigateToModel();
+        FocusComposerWhenReady();
 
         Common.Log.Info("overlay summon: done");
+    }
+
+    /// <summary>
+    /// Asks Windows to make the overlay the foreground window so keystrokes
+    /// land in the chat instead of the app the user was in. A plain
+    /// <see cref="SetForegroundWindow"/> is denied while another process
+    /// holds the foreground (programmatic summons run in the background), so
+    /// borrow the foreground thread's input state via
+    /// <see cref="AttachThreadInput"/> — the documented escape hatch that
+    /// makes the raise succeed. Failures are harmless: the overlay is still
+    /// visible (topmost) and one click focuses it, same as before.
+    /// </summary>
+    private void TakeForegroundInput()
+    {
+        if (GetForegroundWindow() == _hwnd) return; // already ours (hotkey path)
+        try
+        {
+            var ourThread = GetCurrentThreadId();
+            var foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out _);
+            if (foregroundThread != 0 && foregroundThread != ourThread)
+            {
+                AttachThreadInput(ourThread, foregroundThread, true);
+                SetForegroundWindow(_hwnd);
+                AttachThreadInput(ourThread, foregroundThread, false);
+            }
+            else
+            {
+                SetForegroundWindow(_hwnd);
+            }
+        }
+        catch (Exception ex)
+        {
+            Common.Log.Debug($"overlay: foreground request failed ({ex.Message})");
+        }
+    }
+
+    /// <summary>
+    /// Focuses the WebUI's chat composer so the user can type immediately
+    /// after the overlay opens — without this the page loads with the
+    /// composer unfocused and a mouse click is needed first. Retries for a
+    /// few seconds because the page (and its composer) may still be
+    /// navigating; gives up quietly if the WebUI never shows a composer.
+    /// </summary>
+    private async void FocusComposerWhenReady()
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                var core = ModelWebUi.CoreWebView2;
+                if (core is not null)
+                {
+                    var result = await core.ExecuteScriptAsync(
+                        OverlayPromptInjection.BuildComposerFocus());
+                    if (bool.TryParse(result, out var focused) && focused)
+                    {
+                        Common.Log.Debug("overlay webview: composer focused");
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Debug($"overlay webview: composer focus not ready ({ex.Message})");
+            }
+            await Task.Delay(500);
+        }
     }
 
     /// <summary>
@@ -677,4 +745,16 @@ public sealed partial class OverlayWindow : Window
 
     [DllImport("user32.dll")]
     private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
 }
