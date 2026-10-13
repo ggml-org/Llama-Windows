@@ -94,6 +94,16 @@
             <uap:DataFormat>StorageItems</uap:DataFormat>
           </uap:ShareTarget>
         </uap:Extension>
+        <!-- Deep links: llama://chat?prompt=... opens the chat overlay with the
+             composer prefilled; llama://model/<id> loads a server-known model
+             and opens the chat on it. Protocol activations can come from any
+             app or website, so payloads are parsed strictly and model ids are
+             matched against the server's model list before anything loads. -->
+        <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="llama">
+            <uap:DisplayName>Chat with Llama</uap:DisplayName>
+          </uap:Protocol>
+        </uap:Extension>
       </Extensions>
     </Application>
   </Applications>

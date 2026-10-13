@@ -13,23 +13,30 @@ public enum HandoffKind
     /// share) to attach in the chat overlay.</summary>
     Image,
 
+    /// <summary>A server-known model id (from a <c>llama://model/</c> deep link)
+    /// to load and chat with.</summary>
+    ModelId,
+
     /// <summary>No payload — a plain second launch, which re-opens the flyout.</summary>
     None,
 }
 
 /// <summary>
-/// A request consumed by the running instance: a model file path, or shared
-/// text (exactly one of the two is non-null, per <see cref="HandoffKind"/>).
+/// A request consumed by the running instance: a model file path, a
+/// server-known model id, or shared text (exactly one non-null field, per
+/// <see cref="HandoffKind"/>).
 /// </summary>
-public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string? Text)
+public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string? Text, string? ModelId)
 {
-    public static readonly HandoffRequest None = new(HandoffKind.None, null, null);
+    public static readonly HandoffRequest None = new(HandoffKind.None, null, null, null);
 
-    public static HandoffRequest ForModel(string path) => new(HandoffKind.ModelPath, path, null);
+    public static HandoffRequest ForModel(string path) => new(HandoffKind.ModelPath, path, null, null);
 
-    public static HandoffRequest ForText(string text) => new(HandoffKind.Text, null, text);
+    public static HandoffRequest ForText(string text) => new(HandoffKind.Text, null, text, null);
 
-    public static HandoffRequest ForImage(string path) => new(HandoffKind.Image, path, null);
+    public static HandoffRequest ForImage(string path) => new(HandoffKind.Image, path, null, null);
+
+    public static HandoffRequest ForModelId(string modelId) => new(HandoffKind.ModelId, null, null, modelId);
 }
 
 /// <summary>
@@ -49,8 +56,9 @@ public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string?
 /// which re-opens the flyout — restoring the second-launch behavior the
 /// broken redirect had been silently losing.</para>
 ///
-/// <para><b>File format:</b> a kind marker line (<c>model</c> / <c>text</c>)
-/// followed by the payload — a single path line for models, the remainder of
+/// <para><b>File format:</b> a kind marker line (<c>model</c> / <c>text</c> /
+/// <c>image</c> / <c>modelid</c>)
+/// followed by the payload — a single path or id line for models, the remainder of
 /// the file for (multi-line) text. A file with no recognized marker is a bare
 /// model path — the pre-share format — so an in-flight handoff from an older
 /// build still reads correctly.</para>
@@ -79,6 +87,10 @@ public static class InstanceHandoff
     public static void WriteImage(string imagePath, string? pendingPath = null) =>
         Write(HandoffRequest.ForImage(imagePath), pendingPath ?? PendingPath);
 
+    /// <summary>Records a pending model-id request (a deep link), replacing any previous.</summary>
+    public static void WriteModelId(string modelId, string? pendingPath = null) =>
+        Write(HandoffRequest.ForModelId(modelId), pendingPath ?? PendingPath);
+
     /// <summary>Testable core of the Write* methods with an explicit request path.</summary>
     public static void Write(HandoffRequest request, string pendingPath)
     {
@@ -90,6 +102,7 @@ public static class InstanceHandoff
                 HandoffKind.ModelPath => "model\n" + request.ModelPath,
                 HandoffKind.Text => "text\n" + request.Text,
                 HandoffKind.Image => "image\n" + request.ModelPath,
+                HandoffKind.ModelId => "modelid\n" + request.ModelId,
                 _ => null,
             };
             if (payload is null) return;
@@ -126,8 +139,9 @@ public static class InstanceHandoff
 
     /// <summary>
     /// Parses the handoff payload: <c>model\n&lt;path&gt;</c>,
-    /// <c>text\n&lt;multi-line text&gt;</c>, or a bare model path (the
-    /// pre-share format). Unrecognized content yields <see cref="HandoffRequest.None"/>.
+    /// <c>text\n&lt;multi-line text&gt;</c>, <c>image\n&lt;path&gt;</c>,
+    /// <c>modelid\n&lt;id&gt;</c>, or a bare model path (the pre-share format).
+    /// Unrecognized content yields <see cref="HandoffRequest.None"/>.
     /// CRLF line endings are tolerated (the app writes bare LF, but a
     /// hand-edited or externally-written request may carry CR). Pure.
     /// </summary>
@@ -153,6 +167,11 @@ public static class InstanceHandoff
         if (string.Equals(marker, "image", StringComparison.Ordinal))
             return payload.Trim().Length > 0
                 ? HandoffRequest.ForImage(payload.Trim())
+                : HandoffRequest.None;
+
+        if (string.Equals(marker, "modelid", StringComparison.Ordinal))
+            return payload.Trim().Length > 0
+                ? HandoffRequest.ForModelId(payload.Trim())
                 : HandoffRequest.None;
 
         // No marker: the original Open With format — a bare model path.

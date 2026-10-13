@@ -93,6 +93,9 @@ namespace LlamaApp
                         case Common.HandoffKind.Image:
                             Common.InstanceHandoff.WriteImage(handoff.ModelPath!);
                             break;
+                        case Common.HandoffKind.ModelId:
+                            Common.InstanceHandoff.WriteModelId(handoff.ModelId!);
+                            break;
                     }
                     Common.InstanceHandoff.Signal();
 
@@ -135,6 +138,7 @@ namespace LlamaApp
             var startupHandoff = await ExtractHandoffFromActivationAsync(activationArgs);
             var openModelFile = startupHandoff.Kind == Common.HandoffKind.ModelPath ? startupHandoff.ModelPath : null;
             var sharedPrompt = startupHandoff.Kind == Common.HandoffKind.Text ? startupHandoff.Text : null;
+            var openModelId = startupHandoff.Kind == Common.HandoffKind.ModelId ? startupHandoff.ModelId : null;
             openModelFile ??= FirstGgufOnCommandLine();
 
             // Create the llama-server manager singleton with the configured
@@ -305,7 +309,9 @@ namespace LlamaApp
                 ? Common.HandoffRequest.ForModel(openModelFile)
                 : (sharedPrompt is not null
                     ? Common.HandoffRequest.ForText(sharedPrompt)
-                    : Common.InstanceHandoff.TryConsume());
+                    : (openModelId is not null
+                        ? Common.HandoffRequest.ForModelId(openModelId)
+                        : Common.InstanceHandoff.TryConsume()));
             DispatchHandoff(startupRequest);
         }
 
@@ -337,6 +343,9 @@ namespace LlamaApp
                     break;
                 case Common.HandoffKind.Image:
                     _ = HandleSharedImageAsync(request.ModelPath!);
+                    break;
+                case Common.HandoffKind.ModelId:
+                    _ = LoadModelByIdAsync(request.ModelId!);
                     break;
                 default:
                     _trayIcon?.ShowFlyout();
@@ -389,10 +398,33 @@ namespace LlamaApp
             try
             {
                 var data = activatedArgs.Data;
+                Common.Log.Debug(
+                    $"activation kind={activatedArgs.Kind} data-type={data?.GetType().FullName ?? "null"}");
 
                 // "Open With": a file activation carries the path directly.
                 if (FirstGgufFromFileActivation(data) is { } gguf)
                     return Common.HandoffRequest.ForModel(gguf);
+
+                // A llama:// deep link (protocol activation): a chat prompt, or
+                // a model id to load. Parsing is strict (unknown hosts and
+                // oversized payloads yield no request — the link just re-opens
+                // the flyout), and the id is matched against the server's model
+                // list before anything loads.
+                if (activatedArgs.Kind == Microsoft.Windows.AppLifecycle.ExtendedActivationKind.Protocol &&
+                    data is Windows.ApplicationModel.Activation.IProtocolActivatedEventArgs protocol)
+                {
+                    Common.Log.Debug($"deep link received: {protocol.Uri}");
+                    var link = Common.DeepLink.Parse(protocol.Uri?.ToString());
+                    switch (link.Kind)
+                    {
+                        case Common.DeepLinkKind.Chat when link.Prompt is { } prompt:
+                            return Common.HandoffRequest.ForText(prompt);
+                        case Common.DeepLinkKind.LoadModel when link.ModelId is { } modelId:
+                            return Common.HandoffRequest.ForModelId(modelId);
+                        // llama://chat with no prompt behaves like a plain second launch.
+                    }
+                    return Common.HandoffRequest.None;
+                }
 
                 // A Windows share: text, or files (.gguf imports).
                 if (data is Windows.ApplicationModel.Activation.ShareTargetActivatedEventArgs share)
@@ -481,6 +513,47 @@ namespace LlamaApp
 
             operation.ReportCompleted();
             return Common.HandoffRequest.None;
+        }
+
+        /// <summary>
+        /// A <c>llama://model/&lt;id&gt;</c> deep link: summon the chat overlay and
+        /// load the model. The id is remote-controlled data (any app or site
+        /// can open one of these), so it must match a model the server actually
+        /// knows — never a download, never a path — and the load rides the same
+        /// POST /models/load pipeline as a click in the main window. On a cold
+        /// start the model list may still be loading, so the match retries for
+        /// a few seconds before giving up with a toast.
+        /// </summary>
+        private async Task LoadModelByIdAsync(string modelId)
+        {
+            try
+            {
+                _overlay?.Summon(ShareSummonGraceMs);
+
+                // The startup model list may not be in yet — poll briefly.
+                for (var attempt = 0; attempt < 10; attempt++)
+                {
+                    var snapshot = Llama.LlamaManager.Shared.LastModelsSnapshot;
+                    var known = snapshot.FirstOrDefault(m => string.Equals(m.Id, modelId, StringComparison.Ordinal));
+                    if (known is not null)
+                    {
+                        Common.Log.Info($"deep link: loading model '{modelId}'");
+                        var item = new Views.ModelItem { Name = modelId, RepoName = modelId };
+                        if (!await Llama.LlamaManager.Shared.LoadModelAsync(item))
+                            Common.Log.Warn($"deep link: the server declined to load '{modelId}'");
+                        return; // loaded or not, the overlay is up with the WebUI
+                    }
+                    await Task.Delay(500);
+                }
+
+                Common.Log.Warn($"deep link: model '{modelId}' is not known to the server");
+                Notifications.Show("Model not found",
+                    $"'{modelId}' isn't available on this server — pick or download a model in the chat.");
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "deep link model load failed");
+            }
         }
 
         /// <summary>
