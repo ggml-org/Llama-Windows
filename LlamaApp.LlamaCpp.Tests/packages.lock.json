@@ -98,6 +98,12 @@
           "System.Security.Cryptography.ProtectedData": "[10.0.12, )"
         }
       },
+      "llamaapp.huggingface": {
+        "type": "Project",
+        "dependencies": {
+          "LlamaApp.Common": "[1.0.0, )"
+        }
+      },
       "llamaapp.llamacpp": {
         "type": "Project",
         "dependencies": {

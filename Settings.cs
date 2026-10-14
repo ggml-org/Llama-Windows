@@ -166,6 +166,20 @@ public sealed class Settings
     /// </summary>
     public Dictionary<string, int> ModelContextLengths { get; set; } = new();
 
+    /// <summary>
+    /// Per-model speculative-decoding draft heads, keyed by the server model
+    /// id (<c>repo:quant</c>): the value is the llama.cpp <c>--spec-type</c>
+    /// token (<c>draft-dflash</c>, <c>draft-dspark</c>, <c>draft-mtp</c>), or
+    /// an empty string for "checked, the repo ships none" (a negative cache
+    /// so the Hub isn't re-queried on every session). Detected from the
+    /// repo's file listing (see <see cref="Common.DraftHeads"/>) when the
+    /// model is downloaded and for cached models at startup; rendered into
+    /// the <c>--models-preset</c> INI so the server downloads and wires the
+    /// sidecar at the model's next load. Models that ship no head carry no
+    /// spec decoding — the setting is not user-editable.
+    /// </summary>
+    public Dictionary<string, string> ModelSpeculativeTypes { get; set; } = new();
+
     private static Settings Load()
     {
         try

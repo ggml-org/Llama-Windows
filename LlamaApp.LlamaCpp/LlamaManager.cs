@@ -422,6 +422,21 @@ public sealed class LlamaManager
     /// </summary>
     public IReadOnlyDictionary<string, int>? ModelContextLengths { get; set; }
 
+    /// <summary>
+    /// Per-model speculative-decoding draft heads (keyed by server model id,
+    /// <c>repo:quant</c>; the value is a llama.cpp <c>--spec-type</c> token
+    /// like <c>draft-dflash</c>, or empty for "none shipped"), rendered into
+    /// the same <c>--models-preset</c> INI as
+    /// <see cref="ModelContextLengths"/>. With a spec type set, the server's
+    /// child download plan for that model also fetches the matching draft
+    /// sidecar (<c>mtp-/dflash-/dspark-….gguf</c>) from the repo and wires it
+    /// in — speculative decoding, a free up-to-~2x generation speedup with
+    /// identical output (issue #97). Set by the caller (App.OnLaunched shares
+    /// <c>Settings.Current.ModelSpeculativeTypes</c> by reference, so later
+    /// detections are visible here). Only affects servers the app launches.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? ModelSpeculativeTypes { get; set; }
+
     private Process? _serverProcess;
 
     // Single-flight guard for EnsureLlamaOrDownloadAsync / StartServerAsync. Called
@@ -1238,29 +1253,68 @@ public sealed class LlamaManager
             ".llama", "model-context-presets.ini");
 
     /// <summary>
-    /// Writes <see cref="ModelContextLengths"/> as a llama.cpp preset INI and
-    /// returns its path, or <c>null</c> when no model has a custom context
-    /// length (the server then launches without <c>--models-preset</c>).
-    /// Best-effort — a write failure just skips the flag.
+    /// Renders the llama.cpp <c>--models-preset</c> INI: one
+    /// <c>[repo:quant]</c> section per model that has a custom context length
+    /// and/or a speculative-decoding spec type, as
+    /// <c>ctx-size = N</c> / <c>spec-type = draft-…</c> lines. A model with
+    /// both appears once with both lines. Pure so the exact shape — the
+    /// section spelling and key names the router's INI parser accepts
+    /// (<c>rm_leading_dashes</c> of the CLI long options) — is unit-testable.
     /// </summary>
-    private string? WriteContextPresetsIni()
+    internal static string RenderModelsPresetIni(
+        IEnumerable<KeyValuePair<string, int>> contextLengths,
+        IEnumerable<KeyValuePair<string, string>>? speculativeTypes = null)
     {
-        var presets = ModelContextLengths;
-        if (presets is null || presets.Count == 0) return null;
+        var spec = speculativeTypes?.Where(kv => !string.IsNullOrWhiteSpace(kv.Value)).ToDictionary() ?? [];
 
         var sb = new StringBuilder();
-        foreach (var (id, ctx) in presets)
+        foreach (var (id, ctx) in contextLengths)
         {
             if (ctx <= 0 || string.IsNullOrWhiteSpace(id)) continue;
             sb.Append('[').Append(id).Append(']').Append('\n');
-            sb.Append("ctx-size = ").Append(ctx).Append("\n\n");
+            sb.Append("ctx-size = ").Append(ctx).Append('\n');
+            if (spec.TryGetValue(id, out var specType))
+            {
+                sb.Append("spec-type = ").Append(specType).Append('\n');
+                spec.Remove(id);
+            }
+            sb.Append('\n');
         }
-        if (sb.Length == 0) return null;
+        // Models with only a spec type (no custom context length).
+        foreach (var (id, specType) in spec)
+        {
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            sb.Append('[').Append(id).Append(']').Append('\n');
+            sb.Append("spec-type = ").Append(specType).Append('\n').Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Writes the <c>--models-preset</c> INI from
+    /// <see cref="ModelContextLengths"/> and
+    /// <see cref="ModelSpeculativeTypes"/> and returns its path, or
+    /// <c>null</c> when no model needs an entry (the server then launches
+    /// without <c>--models-preset</c>). Best-effort — a write failure just
+    /// skips the flag.
+    /// </summary>
+    private string? WriteContextPresetsIni()
+    {
+        var contexts = ModelContextLengths;
+        var specs = ModelSpeculativeTypes;
+        var hasContexts = contexts is { Count: > 0 };
+        var hasSpecs = specs is { Count: > 0 } && specs.Any(kv => !string.IsNullOrWhiteSpace(kv.Value));
+        if (!hasContexts && !hasSpecs) return null;
+
+        var ini = RenderModelsPresetIni(
+            contexts ?? Enumerable.Empty<KeyValuePair<string, int>>(),
+            specs ?? Enumerable.Empty<KeyValuePair<string, string>>());
+        if (ini.Length == 0) return null;
 
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ContextPresetPath)!);
-            File.WriteAllText(ContextPresetPath, sb.ToString());
+            File.WriteAllText(ContextPresetPath, ini);
             return ContextPresetPath;
         }
         catch (Exception ex)

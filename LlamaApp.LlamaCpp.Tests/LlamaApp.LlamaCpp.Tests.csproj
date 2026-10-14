@@ -19,6 +19,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\LlamaApp.LlamaCpp\LlamaApp.LlamaCpp.csproj" />
+        <ProjectReference Include="..\LlamaApp.HuggingFace\LlamaApp.HuggingFace.csproj" />
     </ItemGroup>
 
 </Project>

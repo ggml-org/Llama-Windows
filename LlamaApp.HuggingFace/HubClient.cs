@@ -220,6 +220,84 @@ public class HubClient(string? token)
     }
 
     /// <summary>
+    /// Lists a Hub repo's root files: GET <c>/api/models/{repo}/tree/{revision}</c>.
+    /// Used to detect the speculative-decoding sidecars a model repo ships
+    /// (<c>mtp-</c>/<c>dflash-</c>/<c>dspark-</c> GGUFs — see
+    /// <see cref="Common.DraftHeads"/>) before handing the model to the
+    /// server, so the app can request the matching <c>--spec-type</c>.
+    /// Returns an empty list on any failure (missing repo, gated content,
+    /// network) — draft-head detection is best-effort and must never fault
+    /// the caller. Repos with more than 1000 root files would need cursor
+    /// pagination; GGUF repos carry a few dozen files at most.
+    /// </summary>
+    public async Task<List<string>> ListRepoFilesAsync(
+        string repoId, CancellationToken cancel = default, string revision = "main")
+    {
+        if (string.IsNullOrWhiteSpace(repoId)) return [];
+
+        return await ListRepoFilesAsync(Http, repoId, cancel, revision);
+    }
+
+    // Split from the public overload so tests can drive the HTTP path with
+    // a mock handler (same pattern as SearchModels). Auth goes per-request
+    // (see SearchModels).
+    internal async Task<List<string>> ListRepoFilesAsync(
+        HttpClient client, string repoId, CancellationToken cancel = default, string revision = "main")
+    {
+        if (string.IsNullOrWhiteSpace(repoId)) return [];
+
+        try
+        {
+            // The repo id's '/' must stay a literal path separator: escaping
+            // the whole id (owner%2Frepo) is rejected by the Hub (HTTP 400,
+            // verified) — each SEGMENT is escaped instead.
+            var segments = repoId.Split('/').Select(Uri.EscapeDataString);
+            var url = $"{HUGGINGFACE_HUB_BASE_URL}/models/{string.Join("/", segments)}/tree/{Uri.EscapeDataString(revision)}";
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            if (!string.IsNullOrWhiteSpace(token))
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var resp = await client.SendAsync(req, cancel);
+            // A missing/gated repo is an expected answer, not an error: the
+            // caller just learns "no detectable draft heads".
+            if (!resp.IsSuccessStatusCode) return [];
+            var json = await resp.Content.ReadAsStringAsync(cancel);
+            return ParseRepoFiles(json);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
+            or InvalidOperationException or JsonException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>tree response DTO — only the fields the file list needs.</summary>
+    internal sealed class RepoTreeEntryDto
+    {
+        [JsonPropertyName("type")] public string? Type { get; set; }
+        [JsonPropertyName("path")] public string? Path { get; set; }
+    }
+
+    /// <summary>
+    /// Parses a tree response JSON array into the repo's root file paths.
+    /// Malformed JSON yields an empty list.
+    /// </summary>
+    internal static List<string> ParseRepoFiles(string json)
+    {
+        try
+        {
+            var entries = JsonSerializer.Deserialize<List<RepoTreeEntryDto>>(json);
+            return entries?
+                .Where(e => e?.Type == "file" && !string.IsNullOrEmpty(e.Path))
+                .Select(e => e.Path!)
+                .ToList() ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
     /// Fetches a Hub user's/org's avatar image bytes: GET
     /// <c>/api/users/{name}/avatarUrl</c> resolves the CDN URL, a second
     /// request fetches the bytes. Returns null when the user has no avatar
