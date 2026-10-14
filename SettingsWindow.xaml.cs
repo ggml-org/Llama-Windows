@@ -545,8 +545,8 @@ namespace LlamaApp
 
             s.ListenAddress = selectedListen;
             // Ensure an app-generated key exists for a non-loopback bind; it is
-            // handed to the server via --api-key-file at the next launch and
-            // surfaced in the Listen On card for copy.
+            // handed to the server via the LLAMA_API_KEY environment variable at
+            // the next launch and surfaced in the Listen On card for copy.
             if (Common.ServerAuth.RequiresApiKey(selectedListen) && string.IsNullOrWhiteSpace(s.ServerApiKey))
             {
                 s.ServerApiKey = Common.ServerAuth.GenerateApiKey();

@@ -59,8 +59,8 @@ public sealed class LlamaManager
     /// changed settings only take effect on the next app launch. A null,
     /// blank, or unparseable address falls back to loopback. When
     /// <paramref name="apiKey"/> is non-empty it is sent as a Bearer token on
-    /// every request and passed to the server via a per-user key file
-    /// (<c>--api-key-file</c>).
+    /// every request and passed to the server via the <c>LLAMA_API_KEY</c>
+    /// environment variable.
     /// </summary>
     public static LlamaManager Initialize(int serverPort, string? listenAddress = null, string? apiKey = null)
     {
@@ -385,9 +385,10 @@ public sealed class LlamaManager
     /// <summary>
     /// API key the app generated for a non-loopback bind, or null for the
     /// default loopback server (which needs none). Sent as a Bearer token on
-    /// every REST request and handed to the server via a per-user key file
-    /// (<c>--api-key-file</c> — never an argv flag, which any local user could
-    /// read via WMI), so a network-exposed server isn't an open control API.
+    /// every REST request and handed to the server via the
+    /// <c>LLAMA_API_KEY</c> environment variable (never an argv flag, which any
+    /// local user could read via WMI, and never a file on disk), so a
+    /// network-exposed server isn't an open control API.
     /// It must never appear in URLs (browser/WebView history, caches, server
     /// logs): the overlay injects it as a request header, the sample curl uses
     /// the Authorization header, and Settings shows it for copy if the
@@ -882,10 +883,7 @@ public sealed class LlamaManager
     /// <paramref name="cacheTypeK"/>/<paramref name="cacheTypeV"/> values add
     /// <c>--cache-type-k</c>/<c>--cache-type-v</c>; a non-null
     /// <paramref name="contextPresetPath"/> adds <c>--models-preset</c>; a
-    /// non-empty <paramref name="apiKeyFilePath"/> adds
-    /// <c>--api-key-file</c> (only set for a non-loopback bind — the key
-    /// itself is NEVER a process argument, which any local user can read via
-    /// WMI); a non-empty <paramref name="modelsDir"/> adds
+    /// non-empty <paramref name="modelsDir"/> adds
     /// <c>--models-dir</c> (local models the "Open With" flow imports —
     /// see <see cref="ManagedModelsDir"/> and <see cref="LocalModelImport"/>);
     /// <paramref name="customArguments"/> tokens are
@@ -902,7 +900,6 @@ public sealed class LlamaManager
         string? cacheTypeV,
         string? contextPresetPath,
         IReadOnlyList<string>? customArguments,
-        string? apiKeyFilePath = null,
         string? modelsDir = null)
     {
         // `serve` is the unified subcommand (replaces the old llama-server).
@@ -919,17 +916,11 @@ public sealed class LlamaManager
             "--jinja",
         };
 
-        // Non-loopback binds get an app-generated key so the server isn't an
-        // open control API on the network. Handed over as a per-user key FILE
-        // (llama.cpp reads the first line) rather than a --api-key argument —
-        // the process command line is readable by any local user via WMI.
-        // App-owned, so it is never overridable from custom arguments
-        // (ServeArgumentPolicy reserves --api-key and --api-key-file).
-        if (!string.IsNullOrWhiteSpace(apiKeyFilePath))
-        {
-            args.Add("--api-key-file");
-            args.Add(apiKeyFilePath);
-        }
+        // The API key is deliberately neither a process argument (argv is
+        // readable by any local user via WMI) nor a file on disk — it is handed
+        // to the server via the LLAMA_API_KEY environment variable (see
+        // StartServerAsync). Nothing to add here; ServeArgumentPolicy reserves
+        // --api-key and --api-key-file so custom arguments cannot inject one.
 
         // Local models the "Open With" flow imports. The router scans this
         // dir on every GET /models, so a .gguf linked here becomes loadable
@@ -1069,10 +1060,11 @@ public sealed class LlamaManager
                 FailureMessage = null;
                 ServerStatus = ServerState.Running;
                 _ = ResolveAndReadVersionAsync(cancel);
-                // An adopted server already holds the key in memory; any
-                // materialized copy left behind by a crashed launch is ours
-                // (content-checked) and can go now.
-                DeleteMaterializedApiKeyFile(Path.Combine(SharedLlamaDir, ".llama.apikey"), ApiKey);
+                // An adopted server already holds the key in memory (it was
+                // started with LLAMA_API_KEY); sweep any plaintext file a
+                // pre-env build left behind while we're here.
+                RemoveLegacyApiKeyFile(SharedLlamaDir);
+                RemoveLegacyApiKeyFile(Common.AppData.Root);
                 return true;
             }
             Log.Warn($"managed llama server (pid {managedPid}) never became reachable; killing and relaunching");
@@ -1130,34 +1122,16 @@ public sealed class LlamaManager
             // via --models-preset (see BuildServeArguments). Written fresh every
             // launch from the current preferences.
             var contextPresetPath = await WriteContextPresetsIniAsync();
-            // Materialize the app-generated key (non-loopback binds) into a
-            // per-user file right before launch: the server reads it via
-            // --api-key-file, so the key never appears in argv, process
-            // listings, or WMI queries. Rewritten every launch; the value is
-            // stable (persisted in settings.json) so an adopted server keeps
-            // accepting it across app restarts.
-            //
-            // Under SharedLlamaDir, never %LOCALAPPDATA%\Llama: the server
-            // opens this file from OUTSIDE the package identity, and an
-            // MSIX-virtualized write lands where it cannot see — the server
-            // then refuses to start on non-loopback binds ("failed to open
-            // file", issue #107). Best-effort cleanup of the pre-fix copy.
-            string? apiKeyFilePath = null;
-            if (ApiKey is not null)
-            {
-                // Materialized for the launch window only: the server parses
-                // --api-key-file into memory at startup and never re-reads it
-                // (verified — auth stays enforced with the file deleted), so
-                // the plaintext copy is removed as soon as the server is up
-                // (see the finally below) instead of resting on disk between
-                // runs. A crash mid-launch leaves it for the next launch to
-                // rewrite and remove.
-                apiKeyFilePath = Path.Combine(SharedLlamaDir, ".llama.apikey");
-                Directory.CreateDirectory(SharedLlamaDir);
-                File.WriteAllText(apiKeyFilePath, ApiKey);
-                try { File.Delete(Path.Combine(Common.AppData.Root, ".llama.apikey")); }
-                catch { /* best-effort cleanup of the stale pre-fix copy */ }
-            }
+            // The app-generated API key (non-loopback binds) reaches the server
+            // via the LLAMA_API_KEY environment variable (set on the launch
+            // below) — never argv (WMI-readable) and never a file on disk. The
+            // only thing persisted is the DPAPI-protected form in settings.json
+            // (see Settings.ProtectedServerApiKey), so there is no plaintext to
+            // materialize here. As hygiene, drop any plaintext key file a
+            // pre-env build left behind (earlier dev builds wrote one for
+            // --api-key-file).
+            RemoveLegacyApiKeyFile(SharedLlamaDir);
+            RemoveLegacyApiKeyFile(Common.AppData.Root);
 
             // The local-models dir for the "Open With" flow: the router scans
             // it on every GET /models, and llama.cpp's scan throws (rather than
@@ -1167,7 +1141,7 @@ public sealed class LlamaManager
             EnsureManagedModelsDir();
             foreach (var arg in BuildServeArguments(
                          ServerPort, ListenAddress, IdleUnloadSeconds, MaxLoadedModels,
-                         CacheTypeK, CacheTypeV, contextPresetPath, customArguments, apiKeyFilePath,
+                         CacheTypeK, CacheTypeV, contextPresetPath, customArguments,
                          ManagedModelsDir))
                 psi.ArgumentList.Add(arg);
 
@@ -1175,6 +1149,18 @@ public sealed class LlamaManager
             // resolves downloaded models from the same place the app scans.
             if (!string.IsNullOrEmpty(CacheDirectory) && Directory.Exists(CacheDirectory))
                 psi.EnvironmentVariables["HF_HUB_CACHE"] = CacheDirectory;
+
+            // Hand the server the app-generated API key (non-loopback binds) as
+            // an environment variable — the same channel as HF_TOKEN below, and
+            // for the same reason: llama.cpp reads LLAMA_API_KEY into
+            // params.api_keys at startup and enforces it, while env keeps the
+            // secret out of argv (WMI / process listings) and off disk
+            // entirely. Log presence only, never the value.
+            if (ApiKey is not null)
+            {
+                psi.EnvironmentVariables["LLAMA_API_KEY"] = ApiKey;
+                Log.Info("API key configured; passing LLAMA_API_KEY to the llama server");
+            }
 
             // Hand the server the user's HF access token (if any) so it can
             // download private/gated models. Passed as an environment variable
@@ -1191,7 +1177,7 @@ public sealed class LlamaManager
                 ? ""
                 : " " + Common.ServeArgumentPolicy.RedactForLog(customArguments);
             Log.Info($"starting llama server: {BinaryPath} serve --host {ListenAddress} --port {ServerPort} --jinja" +
-                (ApiKey is not null ? $" --api-key-file {apiKeyFilePath}" : "") +
+                (ApiKey is not null ? " (LLAMA_API_KEY set)" : "") +
                 (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : "") +
                 (MaxLoadedModels > 0 ? $" --models-max {MaxLoadedModels}" : "") +
                 (!string.IsNullOrWhiteSpace(CacheTypeK) ? $" --cache-type-k {CacheTypeK}" : "") +
@@ -1214,7 +1200,6 @@ public sealed class LlamaManager
                 Log.Error("llama server process failed to start (proc.Start returned false)");
                 FailureMessage = "The llama server process failed to start.";
                 ServerStatus = ServerState.Failed;
-                DeleteMaterializedApiKeyFile(apiKeyFilePath, ApiKey);
                 return false;
             }
             _serverProcess = proc;
@@ -1233,48 +1218,28 @@ public sealed class LlamaManager
             // We pass `proc` so the wait fast-fails if the process exits before
             // becoming ready (e.g. it couldn't bind the port because a sibling
             // already did) instead of polling for the full 15s timeout.
-            //
-            // The finally removes the materialized API-key file on every exit
-            // from the launch window: on success the server has parsed the key
-            // into memory (it never re-reads the file — verified), on failure
-            // the process is killed below, and on cancellation anything still
-            // starting fails closed ("failed to open file") instead of
-            // lingering with a plaintext secret next to it.
-            try
+            if (await WaitForPortAsync(proc, TimeSpan.FromSeconds(15), cancel))
             {
-                if (await WaitForPortAsync(proc, TimeSpan.FromSeconds(15), cancel))
-                {
-                    Log.Info("llama server is reachable");
-                    FailureMessage = null;
-                    ServerStatus = ServerState.Running;
-                    return true;
-                }
+                Log.Info("llama server is reachable");
+                FailureMessage = null;
+                ServerStatus = ServerState.Running;
+                return true;
+            }
 
-                // Timed out (or the process exited early). DON'T leave the spawned
-                // process running: a prior timeout-then-abandon left the server
-                // alive, and a later app start (or this same retry) spawned a
-                // second on the same port → two servers eating RAM. Kill ours so
-                // the port is free for the next attempt. StopServer sets Stopped
-                // before killing (deliberate intent — the supervisor never leaves
-                // Stopped on its own), then we surface the failure.
-                Log.Error("llama server failed to become ready within 15s (port probe timed out)");
-                // The pipes close when the process exits, so the drain tasks finish
-                // almost immediately in the died-at-startup case; the timeout only
-                // matters for a genuinely hung server, where we surface whatever
-                // stderr arrived before giving up.
-                try { await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromMilliseconds(500)); }
-                catch { /* snapshot whatever arrived */ }
-            }
-            finally
-            {
-                // The launch window is over: on success the server has parsed
-                // the key into memory (it never re-reads the file — verified),
-                // on failure the process dies below, and on cancellation
-                // anything still starting fails closed ("failed to open
-                // file"). Whatever the outcome, the plaintext copy does not
-                // outlive this call.
-                DeleteMaterializedApiKeyFile(apiKeyFilePath, ApiKey);
-            }
+            // Timed out (or the process exited early). DON'T leave the spawned
+            // process running: a prior timeout-then-abandon left the server
+            // alive, and a later app start (or this same retry) spawned a
+            // second on the same port → two servers eating RAM. Kill ours so
+            // the port is free for the next attempt. StopServer sets Stopped
+            // before killing (deliberate intent — the supervisor never leaves
+            // Stopped on its own), then we surface the failure.
+            Log.Error("llama server failed to become ready within 15s (port probe timed out)");
+            // The pipes close when the process exits, so the drain tasks finish
+            // almost immediately in the died-at-startup case; the timeout only
+            // matters for a genuinely hung server, where we surface whatever
+            // stderr arrived before giving up.
+            try { await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromMilliseconds(500)); }
+            catch { /* snapshot whatever arrived */ }
             FailureMessage = FormatStartFailureMessage(stderrTail.Snapshot());
             StopServer();
             ServerStatus = ServerState.Failed;
@@ -1294,28 +1259,27 @@ public sealed class LlamaManager
     }
 
     /// <summary>
-    /// Removes the materialized API-key file (<c>--api-key-file</c>'s value)
-    /// once the server has finished starting: llama-server parses the file
-    /// into memory at startup and never re-reads it (verified — auth stays
-    /// enforced with the file deleted), so the plaintext copy only has to
-    /// exist for the launch window. Content-checked before deleting: the file
-    /// is removed only while it still holds <paramref name="expectedKey"/>,
-    /// so a same-named file repurposed by something else is left alone.
-    /// Best-effort and total — a locked or missing file is a no-op.
+    /// Removes any plaintext API-key file that earlier builds materialized for
+    /// <c>--api-key-file</c>. The current design delivers the key to the server
+    /// via the <c>LLAMA_API_KEY</c> environment variable and never writes it to
+    /// disk (DPAPI covers the persisted form in settings.json), so a lingering
+    /// file is pure residue and is swept on every launch. Best-effort and total
+    /// — a missing or locked file is a silent no-op.
     /// </summary>
-    internal static void DeleteMaterializedApiKeyFile(string? path, string? expectedKey)
+    internal static void RemoveLegacyApiKeyFile(string dir)
     {
-        if (path is null || string.IsNullOrEmpty(expectedKey)) return;
         try
         {
-            if (!File.Exists(path)) return;
-            if (File.ReadAllText(path).Trim() != expectedKey) return;
-            File.Delete(path);
-            Log.Debug("materialized API-key file removed after launch");
+            var p = Path.Combine(dir, ".llama.apikey");
+            if (File.Exists(p))
+            {
+                File.Delete(p);
+                Log.Debug("removed legacy plaintext API-key file");
+            }
         }
         catch (Exception ex)
         {
-            Log.Debug($"materialized API-key file could not be removed: {ex.Message}");
+            Log.Debug($"legacy API-key file could not be removed: {ex.Message}");
         }
     }
 

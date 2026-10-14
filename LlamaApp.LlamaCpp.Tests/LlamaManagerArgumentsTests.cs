@@ -78,38 +78,21 @@ public sealed class LlamaManagerArgumentsTests
         }
     }
 
-    // ---- --api-key-file (non-loopback binds) ----
+    // ---- API key: env-only delivery (never argv) ----
 
-    [Fact]
-    public void BuildServeArguments_AddsApiKeyFile_WhenPathProvided()
+    [Theory]
+    [InlineData("0.0.0.0")]
+    [InlineData("127.0.0.1")]
+    public void BuildServeArguments_NeverEmitsApiKeyFlags(string listenAddress)
     {
+        // The key is delivered via the LLAMA_API_KEY environment variable (see
+        // LlamaManager.StartServerAsync), never as a process argument — argv is
+        // readable by any local user via WMI / process listings. So no API-key
+        // flag of any kind may appear in the built arguments, for any bind.
         var args = LlamaManager.BuildServeArguments(
-            9931, "0.0.0.0", -1, 0, null, null, null, null,
-            apiKeyFilePath: @"C:\Users\me\AppData\Local\Llama\.llama.apikey");
+            9931, listenAddress, -1, 0, null, null, null, null);
 
-        var flagIndex = args.IndexOf("--api-key-file");
-        Assert.True(flagIndex >= 0);
-        Assert.Equal(@"C:\Users\me\AppData\Local\Llama\.llama.apikey", args[flagIndex + 1]);
-        // The KEY value itself must never be an argument (argv is readable by
-        // any local user via WMI) — only the file path is.
         Assert.DoesNotContain("--api-key", args);
-    }
-
-    [Fact]
-    public void BuildServeArguments_OmitsApiKeyFile_ForLoopback()
-    {
-        var args = LlamaManager.BuildServeArguments(
-            9931, "127.0.0.1", -1, 0, null, null, null, null, apiKeyFilePath: null);
-
-        Assert.DoesNotContain("--api-key-file", args);
-    }
-
-    [Fact]
-    public void BuildServeArguments_OmitsApiKeyFile_WhenBlank()
-    {
-        var args = LlamaManager.BuildServeArguments(
-            9931, "0.0.0.0", -1, 0, null, null, null, null, apiKeyFilePath: "   ");
-
         Assert.DoesNotContain("--api-key-file", args);
     }
 

@@ -84,7 +84,8 @@ public sealed class Settings
     public string ListenAddress { get; set; } = LlamaApp.Common.ListenAddresses.Localhost;
 
     /// <summary>
-    /// Key the app generates and hands to the llama server via <c>--api-key-file</c>
+    /// Key the app generates and hands to the llama server via the
+    /// <c>LLAMA_API_KEY</c> environment variable
     /// when <see cref="ListenAddress"/> is not loopback, so a network-exposed
     /// server isn't an open control API. Reused across restarts (and across the
     /// switch back to a non-loopback bind) so an adopted server stays
