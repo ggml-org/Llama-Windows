@@ -33,6 +33,12 @@ public sealed class ServeArgumentPolicyTests
     [InlineData("--ssl")]
     [InlineData("--ssl-key-file")]
     [InlineData("--ssl-cert-file")]
+    // Secret-bearing: custom args become argv, where values leak into
+    // command-line auditing (Event 4688), EDR telemetry and crash dumps.
+    // The app's own protected channels cover these (HF_TOKEN env for the
+    // token, --api-key-file for the key).
+    [InlineData("--hf-token")]
+    [InlineData("--ssl-key-pass")]
     public void ReservedFlag_IsRejected(string flag)
     {
         var error = ServeArgumentPolicy.Validate(Tokens("--threads", "4", flag, "value"));

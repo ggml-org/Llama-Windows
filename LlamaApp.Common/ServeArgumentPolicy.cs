@@ -21,6 +21,15 @@ public static class ServeArgumentPolicy
     /// <c>--models-dir</c> the "Open With" local-models folder; the
     /// <c>--ssl*</c> flags change the transport (and would break the
     /// loopback client's assumptions).
+    ///
+    /// <para>Also the secret-bearing flags: custom arguments become process
+    /// argv, where a value leaks into command-line auditing (Event Log 4688),
+    /// EDR telemetry, crash dumps and process listings. The app's own
+    /// channels exist precisely to keep secrets off argv — the HF token
+    /// travels as the server's HF_TOKEN environment variable, the API key as
+    /// <c>--api-key-file</c>, the key password as <c>--ssl-key-pass</c>'s
+    /// file-based counterpart — so a custom-args copy of any of them is
+    /// refused (matching <see cref="SecretFlags"/>).</para>
     /// </summary>
     public static readonly IReadOnlyList<string> ReservedFlags = new[]
     {
@@ -33,6 +42,8 @@ public static class ServeArgumentPolicy
         "--ssl",
         "--ssl-key-file",
         "--ssl-cert-file",
+        "--hf-token",
+        "--ssl-key-pass",
     };
 
     /// <summary>Flags whose value must never be written to the log.</summary>

@@ -89,8 +89,27 @@ public sealed class Settings
     /// server isn't an open control API. Reused across restarts (and across the
     /// switch back to a non-loopback bind) so an adopted server stays
     /// reachable. Empty for the default loopback bind, which needs no key.
+    ///
+    /// <para>Like <see cref="HuggingFaceToken"/>, never serialized:
+    /// <see cref="Save"/> writes it to <see cref="ProtectedServerApiKey"/>
+    /// through DPAPI (bound to this user on this machine), so a copied or
+    /// stolen settings file carries no working credential. The server reads a
+    /// materialized copy at launch (see <c>LlamaManager.StartServerAsync</c>);
+    /// the key is a LAN access token for the model server — not a user
+    /// identity credential — but it belongs behind the same door as the HF
+    /// token.</para>
     /// </summary>
+    [JsonIgnore]
     public string ServerApiKey { get; set; } = "";
+
+    /// <summary>
+    /// DPAPI-protected form of <see cref="ServerApiKey"/> — the only
+    /// representation ever written to settings.json. Written by
+    /// <see cref="Save"/>; restored (best-effort, empty on any failure) by
+    /// <see cref="RestoreSecrets"/>. Not for direct use.
+    /// </summary>
+    [JsonPropertyName("ProtectedServerApiKey")]
+    public string ProtectedServerApiKey { get; set; } = "";
 
     /// <summary>
     /// Seconds of idleness after which the llama server unloads the model from
@@ -249,6 +268,27 @@ public sealed class Settings
                 if (plaintext.Length > 0)
                     s.HuggingFaceToken = plaintext;
             }
+
+            // The server API key: same legacy-plaintext-then-blob order as the
+            // token above. The plaintext "ServerApiKey" property predates
+            // DPAPI protection; it is adopted only when no protected form
+            // exists, and disappears from the file on the next Save (the
+            // property is [JsonIgnore]).
+            if (root.TryGetProperty("ServerApiKey", out var legacyKey) &&
+                legacyKey.ValueKind == JsonValueKind.String)
+            {
+                var plaintext = legacyKey.GetString() ?? "";
+                if (plaintext.Length > 0 && string.IsNullOrWhiteSpace(s.ProtectedServerApiKey))
+                    s.ServerApiKey = plaintext;
+            }
+
+            if (root.TryGetProperty("ProtectedServerApiKey", out var keyBlob) &&
+                keyBlob.ValueKind == JsonValueKind.String)
+            {
+                var plaintext = Common.SecretProtector.Unprotect(keyBlob.GetString());
+                if (plaintext.Length > 0)
+                    s.ServerApiKey = plaintext;
+            }
         }
         catch (JsonException)
         {
@@ -258,14 +298,16 @@ public sealed class Settings
 
     /// <summary>
     /// Persists the current values to <c>settings.json</c> with the Hugging
-    /// Face token DPAPI-protected. Best-effort: a failure (e.g. disk full) is
-    /// swallowed and returns false rather than surfacing in the UI flow.
+    /// Face token and the server API key DPAPI-protected. Best-effort: a
+    /// failure (e.g. disk full) is swallowed and returns false rather than
+    /// surfacing in the UI flow.
     /// </summary>
     public bool Save()
     {
         try
         {
             ProtectedHuggingFaceToken = Common.SecretProtector.Protect(HuggingFaceToken);
+            ProtectedServerApiKey = Common.SecretProtector.Protect(ServerApiKey);
             var json = JsonSerializer.Serialize(this, new JsonSerializerOptions
             {
                 WriteIndented = true,
