@@ -25,7 +25,7 @@
 
   <Properties>
     <DisplayName>Llama</DisplayName>
-    <PublisherDisplayName>Morgan Funtowicz</PublisherDisplayName>
+    <PublisherDisplayName>Hugging Face Inc.</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
