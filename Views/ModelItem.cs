@@ -702,8 +702,9 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>
     /// Resolves a <see cref="Brand"/> to a bundled brand-logo ImageSource
     /// (Assets/Logos/&lt;logo&gt;.svg), using the brand→logo mapping. Returns
-    /// null when the brand is unknown — the XAML Image then stays empty, and the
-    /// row shows the background tile alone. Instances are cached per brand (see
+    /// null when the brand is unknown — the caller's fallback chain then runs
+    /// (family-name match → author avatar → <see cref="GenericLogo"/>) so a
+    /// row's tile is never empty. Instances are cached per brand (see
     /// <see cref="LogoCache"/>).
     ///
     /// <para>The bundled SVGs fill with <c>currentColor</c>, which
@@ -714,16 +715,33 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public static ImageSource? ResolveLogo(string? brand)
     {
         var logo = BrandToLogo(brand);
-        if (logo is null) return null;
+        // Dark theme → white artwork (the base variants rasterize black).
+        // The theme variant becomes part of the cache key, so both themes'
+        // instances coexist — same rule as GenericLogo below.
+        return logo is null ? null : ResolveLogoFile(logo + (UseLightLogos ? ".light" : ""));
+    }
 
-        // Dark theme → white artwork (the default variant rasterizes black).
-        // The variant suffix becomes part of the cache key, so both themes'
-        // instances coexist in the cache.
-        if (UseLightLogos) logo += ".light";
+    /// <summary>
+    /// The generic model icon (a chip glyph, <c>Assets/Logos/gguf.svg</c>): the
+    /// fallback every logo path bottoms out at, so a row's tile is never
+    /// empty. Theme-aware and cached like a brand logo — a local model with
+    /// no catalog entry, no recognizable family name, and no author avatar
+    /// still shows it. Never null.
+    /// </summary>
+    public static ImageSource GenericLogo =>
+        ResolveLogoFile("gguf" + (UseLightLogos ? ".light" : ""));
 
+    /// <summary>
+    /// The shared rasterization/cache core of <see cref="ResolveLogo"/> and
+    /// <see cref="GenericLogo"/>: loads <paramref name="logoFile"/> from
+    /// Assets/Logos at a bounded 64px width, caching per file (the theme
+    /// variant is part of the key, so both themes' instances coexist).
+    /// </summary>
+    private static ImageSource ResolveLogoFile(string logoFile)
+    {
         lock (LogoCacheLock)
         {
-            if (LogoCache.TryGetValue(logo, out var cached))
+            if (LogoCache.TryGetValue(logoFile, out var cached))
                 return cached;
 
             // Rasterize at a bounded 64px width rather than the SVG's natural
@@ -731,14 +749,24 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             // 200% scale), so a small raster keeps per-image memory down while
             // staying crisp on high-DPI displays. Setting only the width
             // preserves the aspect ratio.
-            var source = new SvgImageSource(new Uri($"ms-appx:///Assets/Logos/{logo}.svg"))
+            var source = new SvgImageSource(new Uri($"ms-appx:///Assets/Logos/{logoFile}.svg"))
             {
                 RasterizePixelWidth = 64,
             };
-            LogoCache[logo] = source;
+            LogoCache[logoFile] = source;
             return source;
         }
     }
+
+    /// <summary>
+    /// Derives a brand for a local model from its file/repo NAME when the
+    /// catalog has no entry for it — delegates to
+    /// <see cref="Common.ModelBrandNames.BrandFromName"/> (the pure mapping).
+    /// Returns null for names that match no known family; the caller then
+    /// falls back to the author avatar / <see cref="GenericLogo"/>.
+    /// </summary>
+    public static string? LocalBrandFromName(string? name) =>
+        Common.ModelBrandNames.BrandFromName(name);
 
     /// <summary>
     /// Brand → logo filename mapping (case-insensitive prefix match). Mirrors

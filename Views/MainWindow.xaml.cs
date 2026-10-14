@@ -456,6 +456,12 @@ namespace LlamaApp.Views
         {
             var (repo, quant) = SplitServerId(sm.Id);
             byRepo.TryGetValue(repo, out var matched);
+            // A local model with no catalog entry still gets its family's logo
+            // when its NAME says the family (gemma-…, Qwen…, GLM-…): a known
+            // model loaded from a folder enrollment or an import, or a Hub
+            // repo outside the catalog. Unknown names fall to the author
+            // avatar / the generic icon — a row's tile is never empty.
+            var brand = matched?.Brand ?? ModelItem.LocalBrandFromName(repo);
             return new ModelItem
             {
                 Name = DeriveDisplayName(repo, quant, byRepo),
@@ -467,8 +473,8 @@ namespace LlamaApp.Views
                 License = matched?.License ?? "",
                 Vision = sm.SupportsImage, // authoritative — from the server
                 Downloadable = false,
-                Brand = matched?.Brand,
-                Logo = ModelItem.ResolveLogo(matched?.Brand),
+                Brand = brand,
+                Logo = ModelItem.ResolveLogo(brand),
                 IsLoaded = sm.IsLoaded,
                 IsDownloading = sm.IsDownloading,
             };
@@ -1902,8 +1908,11 @@ namespace LlamaApp.Views
         /// </summary>
         private void RefreshRowLogos()
         {
+            // Keep the current image when there is no brand logo to re-resolve:
+            // an author avatar or the generic icon is theme-neutral — only a
+            // brand logo (theme-dependent artwork) must be swapped.
             foreach (var item in LocalModels)
-                item.Logo = ModelItem.ResolveLogo(item.Brand);
+                item.Logo = ModelItem.ResolveLogo(item.Brand) ?? item.Logo ?? ModelItem.GenericLogo;
             foreach (var family in Families)
                 family.Logo = ModelItem.ResolveLogo(family.Brand);
         }
@@ -3080,7 +3089,15 @@ namespace LlamaApp.Views
         private async Task AttachCachedItemAvatarAsync(ModelItem item)
         {
             var avatar = await AvatarCache.GetOrFetchAsync(AuthorOf(item.RepoName ?? item.Name));
-            if (avatar is not null) item.Logo = avatar;
+            if (avatar is not null)
+                item.Logo = avatar;
+            else if (item.Logo is null)
+            {
+                // No catalog brand, no recognizable family, no author avatar
+                // (an author-less local import, or the avatar fetch failed) —
+                // the generic model icon, so the tile is never empty.
+                item.Logo = ModelItem.GenericLogo;
+            }
         }
 
         /// <summary>The author/org part of a repo id ("" when there is none).</summary>
