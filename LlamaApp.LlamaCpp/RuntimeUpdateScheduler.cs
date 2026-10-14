@@ -290,7 +290,7 @@ public sealed class RuntimeUpdateScheduler
             // Deliberately NOT a shared client: an internet call, so the
             // system proxy is welcome (same reasoning as the installer).
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("Llama/1.0");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(Common.HttpUserAgent.Value);
             client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
 
             using var resp = await client.GetAsync(LatestReleaseUrl, cancel);
