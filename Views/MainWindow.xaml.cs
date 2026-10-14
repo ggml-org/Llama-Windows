@@ -1527,6 +1527,19 @@ namespace LlamaApp.Views
                 _localByServerId.Remove(((IModel)item).ServerModelId);
                 LocalModels.Remove(item);
                 UpdateEmptyState();
+
+                // The model's settings entries must not outlive it: they render
+                // into the --models-preset INI the router now ALWAYS launches
+                // with, and a section for a deleted model would re-list it as a
+                // loadable ghost. (Lingered as a latent issue for context
+                // lengths while the flag was conditional — pruned here now.)
+                var removed = Settings.Current.ModelContextLengths.Remove(((IModel)item).ServerModelId);
+                removed |= Settings.Current.ModelSpeculativeTypes.Remove(((IModel)item).ServerModelId);
+                if (removed)
+                {
+                    Settings.Current.Save();
+                    _ = LlamaManager.Shared.ReloadModelPresetsAsync();
+                }
                 return true;
             }
 

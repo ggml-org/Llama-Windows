@@ -884,10 +884,10 @@ public sealed class LlamaManager
             args.Add(cacheTypeV);
         }
 
-        // Per-model context lengths. The router's /models/load ignores a ctx
-        // field in the request body (it reads only the model name), so the
-        // chosen sizes are rendered into a --models-preset INI that the router
-        // merges into each model's child args (--ctx-size N).
+        // Per-model context lengths (and spec-decoding types) are merged into
+        // each model's child args via --models-preset (see BuildServeArguments).
+        // Always present — even an empty INI — so mid-session preset reloads
+        // reach the running router.
         if (contextPresetPath is not null)
         {
             args.Add("--models-preset");
@@ -1293,28 +1293,35 @@ public sealed class LlamaManager
     /// <summary>
     /// Writes the <c>--models-preset</c> INI from
     /// <see cref="ModelContextLengths"/> and
-    /// <see cref="ModelSpeculativeTypes"/> and returns its path, or
-    /// <c>null</c> when no model needs an entry (the server then launches
-    /// without <c>--models-preset</c>). Best-effort — a write failure just
-    /// skips the flag.
+    /// <see cref="ModelSpeculativeTypes"/> and returns its path — always,
+    /// even when empty: the server is launched with <c>--models-preset</c>
+    /// unconditionally, so a later <see cref="ReloadModelPresetsAsync"/>
+    /// (a settings entry added mid-session — a context length picked, a draft
+    /// head detected) reaches the RUNNING router. Without the flag at launch,
+    /// the reload endpoint re-reads nothing and the entry would only engage
+    /// after an app restart. An empty INI parses to zero sections server-side.
+    /// Null only when the write fails (the server then launches without the
+    /// flag — best-effort).
     /// </summary>
     private string? WriteContextPresetsIni()
     {
         var contexts = ModelContextLengths;
         var specs = ModelSpeculativeTypes;
-        var hasContexts = contexts is { Count: > 0 };
-        var hasSpecs = specs is { Count: > 0 } && specs.Any(kv => !string.IsNullOrWhiteSpace(kv.Value));
-        if (!hasContexts && !hasSpecs) return null;
 
-        var ini = RenderModelsPresetIni(
-            contexts ?? Enumerable.Empty<KeyValuePair<string, int>>(),
-            specs ?? Enumerable.Empty<KeyValuePair<string, string>>());
-        if (ini.Length == 0) return null;
+        // Snapshot the dictionaries under their locks before rendering: both
+        // are the LIVE settings dictionaries (shared by reference), and the
+        // draft-head detector mutates its dictionary from a poller thread —
+        // an enumeration racing an Add would throw. (A null dictionary has
+        // no entries and no writer.)
+        var contextItems = new List<KeyValuePair<string, int>>();
+        if (contexts is not null) lock (contexts) contextItems.AddRange(contexts);
+        var specItems = new List<KeyValuePair<string, string>>();
+        if (specs is not null) lock (specs) specItems.AddRange(specs);
 
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ContextPresetPath)!);
-            File.WriteAllText(ContextPresetPath, ini);
+            File.WriteAllText(ContextPresetPath, RenderModelsPresetIni(contextItems, specItems));
             return ContextPresetPath;
         }
         catch (Exception ex)

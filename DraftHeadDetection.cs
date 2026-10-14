@@ -20,38 +20,180 @@ namespace LlamaApp;
 /// which the <c>--models-preset</c> INI renders for the router. At the
 /// model's next load the child fetches the sidecar and drafts with it.</para>
 ///
-/// <para><b>When it runs:</b> once per model id at download start (the entry
-/// is ready before the first load), plus a startup backfill for models
-/// already in the HF cache from before the feature existed. Empty-string
-/// entries are a negative cache ("checked, none shipped") so the Hub is not
-/// re-queried every session; an explicit download re-checks. Sidecars beside
-/// imported local models need no help: the server's <c>--models-dir</c> scan
-/// wires them itself (<c>LLAMA_ARG_SPEC_DRAFT_MODEL</c> in
-/// <c>preset.cpp:load_from_models_dir</c>).</para>
+/// <para><b>When it runs:</b> continuously — <see cref="StartWatching"/>
+/// subscribes to the server's models poller, so any model that appears in
+/// the server's list and hasn't been checked yet is detected within a poll
+/// cycle. That covers app-initiated downloads (checked again below), models
+/// downloaded from the WebUI in a browser, models cached before the feature
+/// existed, and models adopted from an already-running server — no restart
+/// needed. At an app-initiated download, the Hub query runs in parallel
+/// with the download and the result is applied only on success (a spec entry
+/// for a model that isn't in the HF cache would list a ghost model the
+/// router can't load). Empty-string entries are a negative cache ("checked,
+/// none shipped") so the Hub is not re-queried; a re-download re-checks.
+/// Sidecars beside imported local models need no help: the server's
+/// <c>--models-dir</c> scan wires them itself (<c>LLAMA_ARG_SPEC_DRAFT_MODEL</c>
+/// in <c>preset.cpp:load_from_models_dir</c>).</para>
+///
+/// <para>A head detected for a model that is <i>already loaded</i> missed
+/// its load — the user is offered a one-click reload (unload + load) that
+/// engages it immediately, instead of silently waiting for the next
+/// load.</para>
 ///
 /// <para>All failures are best-effort and logged: detection must never block
-/// or fault a download, a load, or startup.</para>
+/// or fault the poller, a download, a load, or startup.</para>
 /// </summary>
 internal static class DraftHeadDetection
 {
+    /// <summary>Serializes Hub queries so a burst of unknown models (an
+    /// adopted server with a large cache) doesn't stampede the Hub.</summary>
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+
+    /// <summary>Model ids with a detection in flight (avoid duplicate
+    /// queries when the poller re-fires mid-detection).</summary>
+    private static readonly HashSet<string> InFlight = [];
+
+    /// <summary>Ids whose last detection FAILED (no answer recorded) and
+    /// when — the watcher backs off instead of re-querying the Hub on every
+    /// 500ms poll tick while it's unreachable. A success clears the entry.</summary>
+    private static readonly Dictionary<string, DateTimeOffset> FailedAt = [];
+    private static readonly TimeSpan FailureBackoff = TimeSpan.FromMinutes(10);
+    private static readonly Lock InFlightLock = new();
+
+    private static bool _watching;
+
     /// <summary>
-    /// The repo part of a server model id (see
-    /// <see cref="Common.DraftHeads.RepoFromModelId"/>).
+    /// Subscribes to the server's models poller: every snapshot that carries
+    /// a not-yet-checked model id (an owner/repo shape with no entry in the
+    /// settings — including the empty negative cache) triggers one detection
+    /// for it. Safe to call once per app session; later calls are no-ops.
+    /// The poller fires from a background thread, so the handler must never
+    /// touch UI state directly (the nudge toast is post-safe).
     /// </summary>
-    internal static string RepoFromModelId(string modelId) => Common.DraftHeads.RepoFromModelId(modelId);
+    public static void StartWatching()
+    {
+        if (_watching) return;
+        _watching = true;
+        Llama.LlamaManager.Shared.ModelsChanged += OnModelsChanged;
+    }
+
+    private static async void OnModelsChanged(
+        object? sender, IReadOnlyList<Llama.LlamaManager.ServerModel> snapshot)
+    {
+        try
+        {
+            var unknown = new List<(string Id, bool IsLoaded)>();
+            lock (InFlightLock)
+            {
+                foreach (var model in snapshot)
+                {
+                    if (!model.Id.Contains('/')) continue;       // a models-dir import: sidecars wire themselves
+                    if (model.IsDownloading) continue;            // owned by the download path — it persists the entry only on success (a canceled download must leave no ghost INI section)
+                    if (Settings.Current.ModelSpeculativeTypes.ContainsKey(model.Id)) continue;
+                    if (InFlight.Contains(model.Id)) continue;
+                    if (FailedAt.TryGetValue(model.Id, out var failedAt) &&
+                        DateTimeOffset.UtcNow - failedAt < FailureBackoff) continue;
+                    InFlight.Add(model.Id);
+                    unknown.Add((model.Id, model.IsLoaded));
+                }
+            }
+            if (unknown.Count == 0) return;
+
+            foreach (var (id, _) in unknown)
+            {
+                try
+                {
+                    var specType = await DetectAsync(id);
+                    lock (InFlightLock)
+                    {
+                        if (specType is null)
+                            FailedAt[id] = DateTimeOffset.UtcNow; // retry after the backoff, not the next tick
+                        else
+                            FailedAt.Remove(id);
+                    }
+
+                    // Apply (persist + preset reload) even when the detection
+                    // predates the model's download completing: the model IS
+                    // in the server's list by now (the poller said so), so
+                    // the INI entry can't be a ghost.
+                    if (specType is not null && Apply(id, specType))
+                        await Llama.LlamaManager.Shared.ReloadModelPresetsAsync();
+
+                    // A model that is loaded — or still LOADING, its child
+                    // already spawned without the spec-type — missed the
+                    // head; offer the one-click reload. Re-read the freshest
+                    // snapshot: the detection (a serial Hub query) may have
+                    // taken seconds and the enqueued status is stale.
+                    if (specType is { Length: > 0 } &&
+                        Llama.LlamaManager.Shared.LastModelsSnapshot
+                            .FirstOrDefault(m => m.Id == id) is { } current &&
+                        (current.IsLoaded || current.IsLoading))
+                        NotifyLoadedMissed(id);
+                }
+                finally
+                {
+                    lock (InFlightLock) InFlight.Remove(id);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Common.Log.Warn(ex, "draft-head watcher iteration failed");
+        }
+    }
+
+    /// <summary>
+    /// The one-click reload a "draft head found on a loaded model" nudge
+    /// offers (and that the toast activation routes back to): unloads the
+    /// model and loads it again, so the child respawns with the recorded
+    /// spec-type and the sidecar. A generation in flight is served to
+    /// completion by the server's graceful unload; a reload that fails (the
+    /// server went down mid-way) is logged — the head still engages at the
+    /// model's next ordinary load.
+    /// </summary>
+    public static async Task ReloadForDraftHeadsAsync(string modelId)
+    {
+        try
+        {
+            var mgr = Llama.LlamaManager.Shared;
+            var item = new Views.ModelItem { Name = modelId, RepoName = modelId };
+            Common.Log.Info($"draft heads: reloading '{modelId}' to engage its draft head");
+            await mgr.UnloadModelAsync(item);
+
+            // The router's unload is asynchronous — the child (and its status)
+            // take a moment to go down, and a load issued too soon is rejected
+            // with "model is already running" (verified live). Wait for the
+            // poller to see the model neither loaded nor loading, bounded —
+            // on a timeout the head still engages at the next ordinary load.
+            for (var i = 0; i < 60; i++)
+            {
+                var current = mgr.LastModelsSnapshot.FirstOrDefault(m => m.Id == modelId);
+                if (current is null || !(current.IsLoaded || current.IsLoading))
+                    break;
+                await Task.Delay(TimeSpan.FromMilliseconds(500));
+            }
+
+            if (!await mgr.LoadModelAsync(item))
+                Common.Log.Warn($"draft heads: reload of '{modelId}' was rejected — the head engages at the model's next load");
+        }
+        catch (Exception ex)
+        {
+            Common.Log.Warn(ex, $"draft-head reload failed for '{modelId}'");
+        }
+    }
 
     /// <summary>
     /// Queries the repo's file listing and classifies its draft heads.
     /// Returns the spec-type token (<c>draft-dflash</c>, …), or the empty
     /// string when the repo ships none (the negative cache), or
-    /// <c>null</c> when the listing failed (nothing is recorded — a later
-    /// session retries). Does NOT record anything — callers combine it with
-    /// <see cref="ApplyDetectedAsync"/> so a detection that races a failed or
-    /// canceled download is never persisted (an INI entry for a model that
-    /// isn't in the HF cache would list a ghost model the router can't load).
+    /// <c>null</c> when the listing failed (nothing is recorded — the next
+    /// poller pass or session retries). Does NOT record anything — callers
+    /// combine it with an apply decision, so a detection that races a failed
+    /// or canceled download is never persisted.
     /// </summary>
     public static async Task<string?> DetectAsync(string modelId)
     {
+        await Gate.WaitAsync();
         try
         {
             var repo = Common.DraftHeads.RepoFromModelId(modelId);
@@ -76,6 +218,10 @@ internal static class DraftHeadDetection
         {
             Common.Log.Warn(ex, $"draft-head detection failed for '{modelId}'");
             return null;
+        }
+        finally
+        {
+            Gate.Release();
         }
     }
 
@@ -110,71 +256,37 @@ internal static class DraftHeadDetection
         ApplyDetectedAsync(modelId, DetectAsync(modelId));
 
     /// <summary>
-    /// One-shot per session: detects draft heads for models already known to
-    /// the server (the HF cache) that were never checked — backfills installs
-    /// from before the feature existed. Only ids with an owner/repo shape are
-    /// considered; a checked id (any entry, including the empty negative
-    /// cache) is skipped. A single preset reload at the end if anything
-    /// changed.
-    /// </summary>
-    public static async Task BackfillAsync(CancellationToken cancel = default)
-    {
-        try
-        {
-            var mgr = Llama.LlamaManager.Shared;
-
-            // The server may still be installing/starting when the app
-            // launches; wait (bounded) for a models snapshot to exist.
-            for (var i = 0; i < 60; i++)
-            {
-                if (mgr.ServerStatus == Llama.LlamaManager.ServerState.Running &&
-                    mgr.LastModelsSnapshot.Count > 0)
-                    break;
-                await Task.Delay(TimeSpan.FromSeconds(2), cancel);
-            }
-            if (mgr.ServerStatus != Llama.LlamaManager.ServerState.Running)
-                return;
-
-            var candidates = mgr.LastModelsSnapshot
-                .Select(m => m.Id)
-                .Where(id => id.Contains('/'))
-                .Where(id => !Settings.Current.ModelSpeculativeTypes.ContainsKey(id))
-                .Distinct()
-                .ToList();
-            if (candidates.Count == 0)
-                return;
-
-            Common.Log.Debug($"draft-head backfill: checking {candidates.Count} cached model(s)");
-            var changed = false;
-            foreach (var id in candidates)
-            {
-                var specType = await DetectAsync(id);
-                if (specType is not null && Apply(id, specType))
-                    changed = true;
-            }
-            if (changed)
-                await mgr.ReloadModelPresetsAsync();
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            Common.Log.Warn(ex, "draft-head backfill failed");
-        }
-    }
-
-    /// <summary>
     /// Records the spec type, persisting the settings when it changed.
     /// Returns true when the value is new (the caller reloads the presets).
+    /// The settings dictionary is the same reference the server-launch path
+    /// renders the INI from, so mutations take the dictionary's lock —
+    /// LlamaManager's renderer snapshots under the same lock.
     /// </summary>
     private static bool Apply(string modelId, string specType)
     {
-        if (Settings.Current.ModelSpeculativeTypes.TryGetValue(modelId, out var existing) &&
-            existing == specType)
-            return false;
-        Settings.Current.ModelSpeculativeTypes[modelId] = specType;
+        var dict = Settings.Current.ModelSpeculativeTypes;
+        lock (dict)
+        {
+            if (dict.TryGetValue(modelId, out var existing) && existing == specType)
+                return false;
+            dict[modelId] = specType;
+        }
         Settings.Current.Save();
         return true;
+    }
+
+    /// <summary>
+    /// Tells the user a loaded model's freshly detected draft head needs a
+    /// reload to engage. Toasts are unavailable in some dev registrations —
+    /// the log line carries the same information there.
+    /// </summary>
+    private static void NotifyLoadedMissed(string modelId)
+    {
+        Common.Log.Info($"draft heads: '{modelId}' is loaded without its draft head — a reload engages it");
+        Notifications.Show("Faster drafting available",
+            $"'{modelId}' supports speculative decoding — reload it and generation gets up to ~2x faster.",
+            new ToastAction("Reload now",
+                ("action", "reloadDraftHead"),
+                ("id", modelId)));
     }
 }

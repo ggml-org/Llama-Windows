@@ -318,10 +318,12 @@ namespace LlamaApp
                         : Common.InstanceHandoff.TryConsume()));
             DispatchHandoff(startupRequest);
 
-            // Speculative-decoding draft heads (issue #97): backfill detection
-            // for models already in the HF cache — fire-and-forget, it waits
-            // for the server and never blocks startup.
-            _ = DraftHeadDetection.BackfillAsync();
+            // Speculative-decoding draft heads (issue #97): watch the server's
+            // model list — any model that appears unchecked (downloaded from
+            // the app, from the WebUI in a browser, cached before the feature,
+            // or adopted with the server) is detected within a poll cycle.
+            // Fire-and-forget: the watcher owns its own threading.
+            DraftHeadDetection.StartWatching();
         }
 
         /// <summary>
@@ -821,6 +823,13 @@ namespace LlamaApp
                         return;
                     case "cancelDownload":
                         _window?.CancelDownloadFromToast(id);
+                        return;
+                    case "reloadDraftHead":
+                        // A draft head was detected on a loaded model (issue
+                        // #97); the reload respawns the child with its
+                        // spec-type so the head engages now.
+                        if (!string.IsNullOrWhiteSpace(id))
+                            _ = DraftHeadDetection.ReloadForDraftHeadsAsync(id);
                         return;
                 }
             }
