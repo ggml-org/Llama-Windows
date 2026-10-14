@@ -1069,6 +1069,10 @@ public sealed class LlamaManager
                 FailureMessage = null;
                 ServerStatus = ServerState.Running;
                 _ = ResolveAndReadVersionAsync(cancel);
+                // An adopted server already holds the key in memory; any
+                // materialized copy left behind by a crashed launch is ours
+                // (content-checked) and can go now.
+                DeleteMaterializedApiKeyFile(Path.Combine(SharedLlamaDir, ".llama.apikey"), ApiKey);
                 return true;
             }
             Log.Warn($"managed llama server (pid {managedPid}) never became reachable; killing and relaunching");
@@ -1141,6 +1145,13 @@ public sealed class LlamaManager
             string? apiKeyFilePath = null;
             if (ApiKey is not null)
             {
+                // Materialized for the launch window only: the server parses
+                // --api-key-file into memory at startup and never re-reads it
+                // (verified — auth stays enforced with the file deleted), so
+                // the plaintext copy is removed as soon as the server is up
+                // (see the finally below) instead of resting on disk between
+                // runs. A crash mid-launch leaves it for the next launch to
+                // rewrite and remove.
                 apiKeyFilePath = Path.Combine(SharedLlamaDir, ".llama.apikey");
                 Directory.CreateDirectory(SharedLlamaDir);
                 File.WriteAllText(apiKeyFilePath, ApiKey);
@@ -1203,6 +1214,7 @@ public sealed class LlamaManager
                 Log.Error("llama server process failed to start (proc.Start returned false)");
                 FailureMessage = "The llama server process failed to start.";
                 ServerStatus = ServerState.Failed;
+                DeleteMaterializedApiKeyFile(apiKeyFilePath, ApiKey);
                 return false;
             }
             _serverProcess = proc;
@@ -1221,28 +1233,48 @@ public sealed class LlamaManager
             // We pass `proc` so the wait fast-fails if the process exits before
             // becoming ready (e.g. it couldn't bind the port because a sibling
             // already did) instead of polling for the full 15s timeout.
-            if (await WaitForPortAsync(proc, TimeSpan.FromSeconds(15), cancel))
+            //
+            // The finally removes the materialized API-key file on every exit
+            // from the launch window: on success the server has parsed the key
+            // into memory (it never re-reads the file — verified), on failure
+            // the process is killed below, and on cancellation anything still
+            // starting fails closed ("failed to open file") instead of
+            // lingering with a plaintext secret next to it.
+            try
             {
-                Log.Info("llama server is reachable");
-                FailureMessage = null;
-                ServerStatus = ServerState.Running;
-                return true;
-            }
+                if (await WaitForPortAsync(proc, TimeSpan.FromSeconds(15), cancel))
+                {
+                    Log.Info("llama server is reachable");
+                    FailureMessage = null;
+                    ServerStatus = ServerState.Running;
+                    return true;
+                }
 
-            // Timed out (or the process exited early). DON'T leave the spawned
-            // process running: a prior timeout-then-abandon left the server
-            // alive, and a later app start (or this same retry) spawned a
-            // second on the same port → two servers eating RAM. Kill ours so
-            // the port is free for the next attempt. StopServer sets Stopped
-            // before killing (deliberate intent — the supervisor never leaves
-            // Stopped on its own), then we surface the failure.
-            Log.Error("llama server failed to become ready within 15s (port probe timed out)");
-            // The pipes close when the process exits, so the drain tasks finish
-            // almost immediately in the died-at-startup case; the timeout only
-            // matters for a genuinely hung server, where we surface whatever
-            // stderr arrived before giving up.
-            try { await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromMilliseconds(500)); }
-            catch { /* snapshot whatever arrived */ }
+                // Timed out (or the process exited early). DON'T leave the spawned
+                // process running: a prior timeout-then-abandon left the server
+                // alive, and a later app start (or this same retry) spawned a
+                // second on the same port → two servers eating RAM. Kill ours so
+                // the port is free for the next attempt. StopServer sets Stopped
+                // before killing (deliberate intent — the supervisor never leaves
+                // Stopped on its own), then we surface the failure.
+                Log.Error("llama server failed to become ready within 15s (port probe timed out)");
+                // The pipes close when the process exits, so the drain tasks finish
+                // almost immediately in the died-at-startup case; the timeout only
+                // matters for a genuinely hung server, where we surface whatever
+                // stderr arrived before giving up.
+                try { await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromMilliseconds(500)); }
+                catch { /* snapshot whatever arrived */ }
+            }
+            finally
+            {
+                // The launch window is over: on success the server has parsed
+                // the key into memory (it never re-reads the file — verified),
+                // on failure the process dies below, and on cancellation
+                // anything still starting fails closed ("failed to open
+                // file"). Whatever the outcome, the plaintext copy does not
+                // outlive this call.
+                DeleteMaterializedApiKeyFile(apiKeyFilePath, ApiKey);
+            }
             FailureMessage = FormatStartFailureMessage(stderrTail.Snapshot());
             StopServer();
             ServerStatus = ServerState.Failed;
@@ -1258,6 +1290,32 @@ public sealed class LlamaManager
             FailureMessage = ex.Message;
             ServerStatus = ServerState.Failed;
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Removes the materialized API-key file (<c>--api-key-file</c>'s value)
+    /// once the server has finished starting: llama-server parses the file
+    /// into memory at startup and never re-reads it (verified — auth stays
+    /// enforced with the file deleted), so the plaintext copy only has to
+    /// exist for the launch window. Content-checked before deleting: the file
+    /// is removed only while it still holds <paramref name="expectedKey"/>,
+    /// so a same-named file repurposed by something else is left alone.
+    /// Best-effort and total — a locked or missing file is a no-op.
+    /// </summary>
+    internal static void DeleteMaterializedApiKeyFile(string? path, string? expectedKey)
+    {
+        if (path is null || string.IsNullOrEmpty(expectedKey)) return;
+        try
+        {
+            if (!File.Exists(path)) return;
+            if (File.ReadAllText(path).Trim() != expectedKey) return;
+            File.Delete(path);
+            Log.Debug("materialized API-key file removed after launch");
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"materialized API-key file could not be removed: {ex.Message}");
         }
     }
 
