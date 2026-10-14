@@ -244,6 +244,10 @@ namespace LlamaApp
             // entries (draft-dflash/…) detected from Hub repo listings ride
             // beside the context lengths (see DraftHeadDetection).
             Llama.LlamaManager.Shared.ModelSpeculativeTypes = Settings.Current.ModelSpeculativeTypes;
+            // Enrolled model folders share the same INI channel: the recursive
+            // scan (Settings → General → Model folders) renders a
+            // model = path section per discovery.
+            Llama.LlamaManager.Shared.ModelFolders = Settings.Current.ModelFolders;
             Common.Log.Info($"cache directory: {Settings.Current.CacheDirectory}");
             // Presence only — never log the token itself.
             Common.Log.Info($"HF token: {(string.IsNullOrWhiteSpace(Settings.Current.HuggingFaceToken) ? "not set" : "configured")}");

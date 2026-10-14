@@ -180,6 +180,21 @@ public sealed class Settings
     /// </summary>
     public Dictionary<string, string> ModelSpeculativeTypes { get; set; } = new();
 
+    /// <summary>
+    /// Folders enrolled for model discovery (Settings → General → Model
+    /// folders): places the user already keeps GGUF models — another drive,
+    /// a private stash — scanned recursively and surfaced as loadable models
+    /// without copying or moving anything (each discovery becomes a
+    /// <c>model = path</c> section in the llama server's <c>--models-preset</c>
+    /// INI). Kept strictly separate from <see cref="CacheDirectory"/> — that
+    /// stays where llama downloads its models, and cache contents are never
+    /// scanned from here (enrolling %LOCALAPPDATA% must not duplicate the
+    /// cache). Paths as given by the folder picker; missing folders are
+    /// skipped at scan time. Takes effect at the next server start, and
+    /// immediately (preset reload) when changed while the server runs.
+    /// </summary>
+    public List<string> ModelFolders { get; set; } = [];
+
     private static Settings Load()
     {
         try

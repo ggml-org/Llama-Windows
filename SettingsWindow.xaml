@@ -274,6 +274,75 @@
                                 </StackPanel>
                             </Border>
 
+                            <!-- Model discovery: extra folders scanned for models
+                                 the user already has. Distinct from the cache
+                                 folder above — that stays where downloads go. -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Grid.Column="0"
+                                                Width="36" Height="36"
+                                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                                Background="{StaticResource BrandAccentBrush}"
+                                                VerticalAlignment="Center">
+                                            <FontIcon Glyph="&#xE8E5;"
+                                                      FontSize="16"
+                                                      Foreground="White"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center" />
+                                        </Border>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="Model folders"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                    <TextBlock Text="Folders to look for models you already have — scanned recursively, and nothing is copied or moved. Downloads keep going to the cache folder above; add folders here for models kept elsewhere."
+                                               FontSize="12"
+                                               Opacity="0.6"
+                                               TextWrapping="WrapWholeWords" />
+                                    <ItemsControl x:Name="ModelFolderList"
+                                                  Grid.Row="0">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="x:String">
+                                                <Grid ColumnSpacing="8"
+                                                      Padding="0,3">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{x:Bind}"
+                                                               FontSize="12"
+                                                               VerticalAlignment="Center"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTipService.ToolTip="{x:Bind}" />
+                                                    <Button Grid.Column="1"
+                                                            Content="Remove"
+                                                            FontSize="12"
+                                                            Padding="10,3"
+                                                            Tag="{x:Bind}"
+                                                            Click="RemoveModelFolder_Click"
+                                                            ToolTipService.ToolTip="Stop looking for models in this folder" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Button x:Name="AddModelFolderButton"
+                                            Content="Add a folder…"
+                                            HorizontalAlignment="Left"
+                                            Click="AddModelFolder_Click"
+                                            ToolTipService.ToolTip="Pick a folder to scan for models" />
+                                </StackPanel>
+                            </Border>
+
                             <!-- Logs (informational — where the app writes its
                                  daily log files; the same "Open Folder" button
                                  pattern as the Installation Folder card). -->

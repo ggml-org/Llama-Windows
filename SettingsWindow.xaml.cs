@@ -28,6 +28,11 @@ namespace LlamaApp
         // install).
         private bool _runtimeCheckInFlight;
 
+        // The enrolled model folders as edited in this window — committed
+        // into Settings on Save, discarded otherwise. An observable collection
+        // so add/remove updates the card's list live.
+        private readonly System.Collections.ObjectModel.ObservableCollection<string> _modelFolders = [];
+
         public SettingsWindow()
         {
             InitializeComponent();
@@ -100,6 +105,11 @@ namespace LlamaApp
             var s = Settings.Current;
             TokenBox.Password = s.HuggingFaceToken ?? "";
             CacheBox.Text = s.CacheDirectory ?? "";
+            _modelFolders.Clear();
+            foreach (var folder in s.ModelFolders)
+                if (!_modelFolders.Contains(folder))
+                    _modelFolders.Add(folder);
+            ModelFolderList.ItemsSource = _modelFolders;
             PortBox.Value = s.ServerPort;
             PopulateListenAddressBox();
             SelectComboBoxTag(ListenAddressBox, s.ListenAddress, Common.ListenAddresses.Localhost);
@@ -455,6 +465,37 @@ namespace LlamaApp
             }
         }
 
+        private async void AddModelFolder_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            // Same modern FolderPicker as the cache card (see Browse_Click).
+            var picker = new Microsoft.Windows.Storage.Pickers.FolderPicker(AppWindow.Id)
+            {
+                Title = "Choose a folder to look for models in",
+                SettingsIdentifier = "LlamaModelFolderPicker",
+            };
+
+            try
+            {
+                var folder = await picker.PickSingleFolderAsync();
+                if (folder is null) return; // cancelled
+                var path = folder.Path;
+                if (!_modelFolders.Contains(path))
+                    _modelFolders.Add(path);
+                // A duplicate pick is a no-op: the scan dedupes anyway, and a
+                // silent second entry would just be clutter to remove later.
+            }
+            catch
+            {
+                // Picker failed (e.g. unsupported state) — nothing to add.
+            }
+        }
+
+        private void RemoveModelFolder_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            if (sender is FrameworkElement { Tag: string folder })
+                _modelFolders.Remove(folder);
+        }
+
         private async void Save_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             var s = Settings.Current;
@@ -565,6 +606,20 @@ namespace LlamaApp
             {
                 Common.Log.Warn(ex, "startup shortcut update failed");
             }
+
+            // Commit the enrolled model folders. The settings list is shared BY
+            // REFERENCE with the server-launch path (like the other per-model
+            // dictionaries), so it is mutated in place. A running server picks
+            // the change up via the preset reload — new models appear in the
+            // list within a second (the /models poller), removed folders'
+            // models drop out the same way. Unconditional: the reload is a
+            // no-op when no server is running, and detecting "did the folder
+            // list actually change" would cost more than the reload itself.
+            s.ModelFolders.Clear();
+            foreach (var folder in _modelFolders)
+                s.ModelFolders.Add(folder);
+            try { _ = Llama.LlamaManager.Shared.ReloadModelPresetsAsync(); }
+            catch (Exception ex) { Common.Log.Warn(ex, "model-folder preset reload failed"); }
 
             s.Save();
             Close();

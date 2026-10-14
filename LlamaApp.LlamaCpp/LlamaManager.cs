@@ -437,6 +437,19 @@ public sealed class LlamaManager
     /// </summary>
     public IReadOnlyDictionary<string, string>? ModelSpeculativeTypes { get; set; }
 
+    /// <summary>
+    /// Folders enrolled for model discovery (Settings → General → Model
+    /// folders), shared by reference from
+    /// <c>Settings.Current.ModelFolders</c>: places the user already keeps
+    /// GGUF models, scanned recursively (see <see cref="EnrolledFolderScanner"/>)
+    /// and rendered as <c>model = path</c> sections in the <c>--models-preset</c>
+    /// INI at every server start and preset reload — nothing is copied or
+    /// moved. The HF cache (<see cref="CacheDirectory"/>) and the managed
+    /// models dir are excluded from the scan: llama downloads to the cache,
+    /// discovery is for what the user already has elsewhere.
+    /// </summary>
+    public IReadOnlyList<string>? ModelFolders { get; set; }
+
     private Process? _serverProcess;
 
     // Single-flight guard for EnsureLlamaOrDownloadAsync / StartServerAsync. Called
@@ -1030,7 +1043,7 @@ public sealed class LlamaManager
             // Per-model context lengths are merged into each model's child args
             // via --models-preset (see BuildServeArguments). Written fresh every
             // launch from the current preferences.
-            var contextPresetPath = WriteContextPresetsIni();
+            var contextPresetPath = await WriteContextPresetsIniAsync();
             // Materialize the app-generated key (non-loopback binds) into a
             // per-user file right before launch: the server reads it via
             // --api-key-file, so the key never appears in argv, process
@@ -1297,13 +1310,13 @@ public sealed class LlamaManager
     /// even when empty: the server is launched with <c>--models-preset</c>
     /// unconditionally, so a later <see cref="ReloadModelPresetsAsync"/>
     /// (a settings entry added mid-session — a context length picked, a draft
-    /// head detected) reaches the RUNNING router. Without the flag at launch,
-    /// the reload endpoint re-reads nothing and the entry would only engage
-    /// after an app restart. An empty INI parses to zero sections server-side.
-    /// Null only when the write fails (the server then launches without the
-    /// flag — best-effort).
+    /// head detected, a folder enrolled) reaches the RUNNING router. Without
+    /// the flag at launch, the reload endpoint re-reads nothing and the entry
+    /// would only engage after an app restart. An empty INI parses to zero
+    /// sections server-side. Null only when the write fails (the server then
+    /// launches without the flag — best-effort).
     /// </summary>
-    private string? WriteContextPresetsIni()
+    private async Task<string?> WriteContextPresetsIniAsync()
     {
         var contexts = ModelContextLengths;
         var specs = ModelSpeculativeTypes;
@@ -1318,10 +1331,26 @@ public sealed class LlamaManager
         var specItems = new List<KeyValuePair<string, string>>();
         if (specs is not null) lock (specs) specItems.AddRange(specs);
 
+        // Enrolled model folders (Settings → General → Model folders): a
+        // recursive scan is disk I/O, so it runs off the caller's thread —
+        // the write happens on server start (possibly the UI thread) and on
+        // every preset reload, and a slow folder (network drive) must never
+        // stall either. The HF cache and the managed models dir are excluded:
+        // the server already lists those, and enrolling a parent of the
+        // cache must not duplicate every cached model.
+        var enrolled = ModelFolders is { Count: > 0 }
+            ? await Task.Run(() => EnrolledFolderScanner.Scan(
+                  ModelFolders, [CacheDirectory, ManagedModelsDir]))
+            : [];
+        if (enrolled.Count > 0)
+            Log.Info($"model folders: enrolled {enrolled.Count} model(s) from disk");
+
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ContextPresetPath)!);
-            File.WriteAllText(ContextPresetPath, RenderModelsPresetIni(contextItems, specItems));
+            File.WriteAllText(ContextPresetPath,
+                RenderModelsPresetIni(contextItems, specItems) +
+                EnrolledFolderScanner.RenderSections(enrolled));
             return ContextPresetPath;
         }
         catch (Exception ex)
@@ -1332,18 +1361,21 @@ public sealed class LlamaManager
     }
 
     /// <summary>
-    /// Re-renders the context-preset INI from <see cref="ModelContextLengths"/>
-    /// and asks the running server to re-read its presets
-    /// (<c>GET /models?reload=1</c> re-runs the router's preset load, which
-    /// re-reads the <c>--models-preset</c> file). Called when the user changes a
-    /// model's context length so the next <c>/models/load</c> picks it up.
-    /// Reloading does not disturb already-loaded models. Best-effort: a server
-    /// the app didn't launch (no <c>--models-preset</c> flag) won't read the
-    /// file — the preference then takes effect on the next app-launched start.
+    /// Re-renders the models-preset INI (context lengths, spec types, and the
+    /// user's enrolled model folders — the folder scan runs fresh, so newly
+    /// dropped files are picked up too) and asks the running server to
+    /// re-read its presets (<c>GET /models?reload=1</c> re-runs the router's
+    /// preset load, which re-reads the <c>--models-preset</c> file). Called
+    /// when the user changes a model's context length, enrolls or removes a
+    /// model folder, or when the draft-head detector records a spec type, so
+    /// the next <c>/models/load</c> picks it up. Reloading does not disturb
+    /// already-loaded models. Best-effort: a server the app didn't launch
+    /// (no <c>--models-preset</c> flag) won't read the file — the preference
+    /// then takes effect on the next app-launched start.
     /// </summary>
     public async Task ReloadModelPresetsAsync(CancellationToken cancel = default)
     {
-        WriteContextPresetsIni();
+        await WriteContextPresetsIniAsync();
         if (ServerStatus != ServerState.Running) return;
         try
         {

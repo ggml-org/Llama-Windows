@@ -62,7 +62,9 @@ public static class LocalModelImport
     private static readonly string[] DraftPrefixes = ["mtp-", "dspark-", "dflash-"];
 
     // "-00001-of-00002" style shard markers.
-    private const string ShardMarker = "-of-";
+    /// <summary>llama.cpp's multi-shard marker: <c>base-00001-of-00002.gguf</c> sets carry
+    /// <c>-of-</c> with digit runs on both sides (see <see cref="ShardSetBase"/>).</summary>
+    internal const string ShardMarker = "-of-";
 
     /// <summary>
     /// Links (or, failing that, copies) the opened model into
