@@ -102,15 +102,94 @@ public sealed class LlamaManager
     public static string ManagedInstallDir => ManagedDir;
 
     /// <summary>
+    /// <c>%USERPROFILE%\.llama</c> — the one per-user location MSIX
+    /// file-system virtualization does NOT redirect: the packaged app writes
+    /// here and the out-of-package llama.exe reads the same bytes at the same
+    /// path. Everything the server reads from disk — the models-preset INI,
+    /// the API-key file, the managed models dir — must live under this root:
+    /// a <c>%LOCALAPPDATA%</c> write lands in <c>Packages\…\LocalCache</c>
+    /// where the server cannot open it, and it then refuses to start or
+    /// silently sees no models (issue #107 is the API-key instance of this).
+    /// </summary>
+    private static string SharedLlamaDir =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".llama");
+
+    /// <summary>
     /// The app's local-models directory, passed to the llama server as
-    /// <c>--models-dir</c>: <c>%LOCALAPPDATA%\Llama\models</c>. The router scans
+    /// <c>--models-dir</c>: <c>%USERPROFILE%\.llama\models</c>. The router scans
     /// it on every <c>GET /models</c>, and a <c>.gguf</c> dropped directly in
     /// it becomes a loadable model named after its file — which is how
     /// "Open With → Llama" on a .gguf works: the file is linked in here
     /// (<see cref="LocalModelImport"/>), then loaded by that id.
+    ///
+    /// <para>Under <see cref="SharedLlamaDir"/> and not
+    /// <c>%LOCALAPPDATA%\Llama</c>: the server scans this directory from OUTSIDE
+    /// the package identity, and an MSIX-virtualized write would land where
+    /// the server cannot see it — the exact trap issue #107 hit with the
+    /// API-key file. Content of the pre-fix location migrates on first use
+    /// (see <see cref="EnsureManagedModelsDir"/>).</para>
     /// </summary>
     public static string ManagedModelsDir =>
+        Path.Combine(SharedLlamaDir, "models");
+
+    /// <summary>The pre-fix models dir, under the MSIX-virtualized
+    /// <c>%LOCALAPPDATA%\Llama</c>; found content is moved to
+    /// <see cref="ManagedModelsDir"/> on first use.</summary>
+    private static string LegacyManagedModelsDir =>
         Path.Combine(Common.AppData.Root, "models");
+
+    /// <summary>
+    /// Ensures <see cref="ManagedModelsDir"/> exists, migrating content from
+    /// the pre-fix (virtualized) location first. Idempotent and best-effort;
+    /// a partially migrated dir resumes on the next call.
+    /// </summary>
+    internal static void EnsureManagedModelsDir()
+    {
+        MigrateManagedModelsDir(LegacyManagedModelsDir, ManagedModelsDir);
+        Directory.CreateDirectory(ManagedModelsDir);
+    }
+
+    /// <summary>
+    /// Moves everything under <paramref name="legacyDir"/> into
+    /// <paramref name="targetDir"/> — the pre-fix models dir lived under the
+    /// MSIX-virtualized <c>%LOCALAPPDATA%\Llama</c>, invisible to the
+    /// out-of-package llama server. Per-entry best effort and retry-safe: an
+    /// entry whose target name already exists is skipped (a resumed migration
+    /// completes only what is left), and one that cannot move is logged and
+    /// left behind. Returns the number of entries moved.
+    /// </summary>
+    internal static int MigrateManagedModelsDir(string legacyDir, string targetDir)
+    {
+        var moved = 0;
+        try
+        {
+            if (!Directory.Exists(legacyDir)) return 0;
+            Directory.CreateDirectory(targetDir);
+            foreach (var entry in Directory.EnumerateFileSystemEntries(legacyDir))
+            {
+                var dest = Path.Combine(targetDir, Path.GetFileName(entry));
+                if (File.Exists(dest) || Directory.Exists(dest)) continue;
+                try
+                {
+                    if (Directory.Exists(entry)) Directory.Move(entry, dest);
+                    else File.Move(entry, dest);
+                    moved++;
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn(ex, $"model dir migration: '{entry}' could not move; left behind");
+                }
+            }
+            if (moved > 0)
+                Log.Info($"model dir migration: moved {moved} entr{(moved == 1 ? "y" : "ies")} to '{targetDir}'");
+            try { Directory.Delete(legacyDir); } catch { /* still has left-behind entries */ }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "model dir migration failed; the legacy location is left as-is");
+        }
+        return moved;
+    }
 
     /// <summary>
     /// Brings a model file into <see cref="ManagedModelsDir"/> for the
@@ -119,7 +198,10 @@ public sealed class LlamaManager
     /// <see cref="LocalModelImport.Import"/> for link/copy/no-op semantics.
     /// </summary>
     public static LocalModelImportResult ImportLocalModel(string sourcePath)
-        => LocalModelImport.Import(sourcePath, ManagedModelsDir);
+    {
+        EnsureManagedModelsDir();
+        return LocalModelImport.Import(sourcePath, ManagedModelsDir);
+    }
 
     /// <summary>
     /// File names <c>install.ps1</c> can leave in <see cref="ManagedInstallDir"/>.
@@ -1050,18 +1132,28 @@ public sealed class LlamaManager
             // listings, or WMI queries. Rewritten every launch; the value is
             // stable (persisted in settings.json) so an adopted server keeps
             // accepting it across app restarts.
+            //
+            // Under SharedLlamaDir, never %LOCALAPPDATA%\Llama: the server
+            // opens this file from OUTSIDE the package identity, and an
+            // MSIX-virtualized write lands where it cannot see — the server
+            // then refuses to start on non-loopback binds ("failed to open
+            // file", issue #107). Best-effort cleanup of the pre-fix copy.
             string? apiKeyFilePath = null;
             if (ApiKey is not null)
             {
-                apiKeyFilePath = Path.Combine(Common.AppData.Root, ".llama.apikey");
-                Directory.CreateDirectory(Path.GetDirectoryName(apiKeyFilePath)!);
+                apiKeyFilePath = Path.Combine(SharedLlamaDir, ".llama.apikey");
+                Directory.CreateDirectory(SharedLlamaDir);
                 File.WriteAllText(apiKeyFilePath, ApiKey);
+                try { File.Delete(Path.Combine(Common.AppData.Root, ".llama.apikey")); }
+                catch { /* best-effort cleanup of the stale pre-fix copy */ }
             }
 
             // The local-models dir for the "Open With" flow: the router scans
             // it on every GET /models, and llama.cpp's scan throws (rather than
-            // skipping) on a missing dir, so it must exist before the launch.
-            Directory.CreateDirectory(ManagedModelsDir);
+            // skipping) on a missing dir, so it must exist before the launch
+            // (and content of the pre-fix virtualized location must be
+            // migrated in first — see EnsureManagedModelsDir).
+            EnsureManagedModelsDir();
             foreach (var arg in BuildServeArguments(
                          ServerPort, ListenAddress, IdleUnloadSeconds, MaxLoadedModels,
                          CacheTypeK, CacheTypeV, contextPresetPath, customArguments, apiKeyFilePath,
@@ -1252,18 +1344,12 @@ public sealed class LlamaManager
     /// <c>ctx-size = N</c> per model that has a custom context length. Rewritten
     /// on every server start and preference change.
     ///
-    /// <para>Deliberately NOT under <see cref="AppData.Root"/>: the app is
-    /// MSIX-packaged, so writes to <c>%LOCALAPPDATA%</c> are virtualized (the
-    /// file physically lands under <c>Packages\…\LocalCache</c>) while the path
-    /// string stays the real <c>%LOCALAPPDATA%</c> one — and the non-packaged
-    /// server then reads a path where no file exists (launch fails with
-    /// "preset file does not exist"). The user profile is not virtualized, so
-    /// app and server see the same file there.</para>
+    /// <para>Under <see cref="SharedLlamaDir"/> deliberately — the server
+    /// reads this file from outside the package identity (see the
+    /// virtualization note there).</para>
     /// </summary>
     private static string ContextPresetPath =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".llama", "model-context-presets.ini");
+        Path.Combine(SharedLlamaDir, "model-context-presets.ini");
 
     /// <summary>
     /// Renders the llama.cpp <c>--models-preset</c> INI: one

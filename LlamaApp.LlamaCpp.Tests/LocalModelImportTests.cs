@@ -160,11 +160,18 @@ public sealed class LocalModelImportTests : IDisposable
     }
 
     [Fact]
-    public void ManagedModelsDir_IsUnderTheAppDataRoot()
+    public void ManagedModelsDir_IsWhereTheOutOfPackageServerSeesIt()
     {
+        // NOT %LOCALAPPDATA%\Llama: MSIX virtualization redirects the app's
+        // writes there, while the server (outside the package identity)
+        // scans the real path — the API-key-file instance of this trap
+        // is issue #107. The user profile is never virtualized.
         Assert.Equal(
-            Path.Combine(Common.AppData.Root, "models"),
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".llama", "models"),
             LlamaManager.ManagedModelsDir);
+        Assert.DoesNotContain("LocalAppData", LlamaManager.ManagedModelsDir);
     }
 
     // ---- Sidecars: mmproj / draft / shards (llama.cpp models-dir rules) ----
