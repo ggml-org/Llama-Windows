@@ -12,21 +12,24 @@ namespace LlamaApp.Views
     /// hub's "fits" badge verbatim plus siblings drawn in the same style) —
     /// plus the short name ("Fits" / "Might fit" / "Won't fit") that spells
     /// the level out where color can't reach (accessible names). The visible
-    /// UI shows the badge only. Kept separate from the view models so the
-    /// rules stay unit-testable, mirroring
-    /// <see cref="QuantizationPresentation"/>.
+    /// UI shows the badge only. The palette is the hub's own: its CSS
+    /// defines these badges with the Tailwind v4 tokens green-600,
+    /// yellow-500 and red-600 (oklch), converted to sRGB here and in the
+    /// SVG fills so the badges render identically in both places. Kept
+    /// separate from the view models so the rules stay unit-testable,
+    /// mirroring <see cref="QuantizationPresentation"/>.
     /// </summary>
     public static class HardwareFitPresentation
     {
         /// <summary>Green — comfortably fits this machine (green-600, the
         /// hub badge's fill).</summary>
-        public static readonly Color FitColor = Color.FromArgb(0xFF, 0x16, 0xA3, 0x4A);
+        public static readonly Color FitColor = Color.FromArgb(0xFF, 0x00, 0x99, 0x66);
 
-        /// <summary>Orange — tight, slightly over, or unknown (orange-600).</summary>
-        public static readonly Color MightColor = Color.FromArgb(0xFF, 0xEA, 0x58, 0x0C);
+        /// <summary>Yellow — tight, slightly over, or unknown (yellow-500).</summary>
+        public static readonly Color MightColor = Color.FromArgb(0xFF, 0xFE, 0x9A, 0x00);
 
         /// <summary>Red — won't fit this machine (red-600).</summary>
-        public static readonly Color NoWayColor = Color.FromArgb(0xFF, 0xDC, 0x26, 0x26);
+        public static readonly Color NoWayColor = Color.FromArgb(0xFF, 0xE7, 0x00, 0x0B);
 
         /// <summary>
         /// The short name for a level. The visible UI trusts the badge —
@@ -55,7 +58,7 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// The hub-style badge for a level (Assets/Fit/&lt;badge&gt;.svg):
-        /// the green/orange/red tile with its white check, question mark or
+        /// the green/yellow/red tile with its white check, question mark or
         /// cross.
         /// Created on demand and cached per level (XAML objects — never
         /// exercised by the unit tests, same as the logo pipeline's

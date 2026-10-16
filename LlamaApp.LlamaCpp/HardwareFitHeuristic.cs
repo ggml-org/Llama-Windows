@@ -17,7 +17,7 @@ public enum HardwareFitLevel
 {
     /// <summary>Comfortably within the memory budget — green.</summary>
     Fit,
-    /// <summary>Tight, slightly over, or unknown — orange.</summary>
+    /// <summary>Tight, slightly over, or unknown — yellow.</summary>
     Might,
     /// <summary>Over the budget by more than the error bars — red.</summary>
     NoWay,
@@ -49,7 +49,7 @@ public sealed record HardwareFitVerdict
 }
 
 /// <summary>
-/// The heuristic behind the green/orange/red fit coloring of model
+/// The heuristic behind the green/yellow/red fit coloring of model
 /// variations (f32, q8_0, q4_0, …): from the catalog metadata alone
 /// (params, quant, GGUF size) it says whether a build would fit this
 /// machine — before anything is downloaded or loaded.
@@ -68,7 +68,7 @@ public sealed record HardwareFitVerdict
 /// slack covers the estimator's error bars and headroom for a longer
 /// context. The note says where it will run (full GPU offload when it also
 /// fits free VRAM, otherwise split/CPU).</item>
-/// <item><b>Might</b> (orange): ≤ 125% of the budget. Inside the budget
+/// <item><b>Might</b> (yellow): ≤ 125% of the budget. Inside the budget
 /// it's a tight squeeze (little headroom); just outside it, the footprint
 /// is within the estimator's error bars — a smaller context or closing
 /// background apps can still make it load, and swapping can make it crawl.

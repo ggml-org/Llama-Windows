@@ -58,7 +58,7 @@ public sealed class ContextLengthOption : INotifyPropertyChanged
 
     /// <summary>
     /// The three-level hardware-fit verdict for this option — the cell's
-    /// hub-style green/orange/red badge (see
+    /// hub-style green/yellow/red badge (see
     /// <see cref="HardwareFitPresentation"/>), the same
     /// <see cref="LlamaApp.Llama.HardwareFitHeuristic"/> bands the variant
     /// picker uses: fit (comfortable), might (tight, slightly over, or
@@ -85,7 +85,7 @@ public sealed class ContextLengthOption : INotifyPropertyChanged
         }
     }
 
-    /// <summary>The hub-style fit badge for the cell — the green/orange/red
+    /// <summary>The hub-style fit badge for the cell — the green/yellow/red
     /// tile with its white glyph (null when there is no verdict).</summary>
     public ImageSource? FitBadge => FitLevel is { } level
         ? HardwareFitPresentation.BadgeSource(level)
@@ -93,7 +93,7 @@ public sealed class ContextLengthOption : INotifyPropertyChanged
 
     /// <summary>
     /// Whether the option can be selected — both guards must pass. "Might"
-    /// stays selectable (orange means try it — a smaller context is one tap
+    /// stays selectable (yellow means try it — a smaller context is one tap
     /// away); only "no way" and above-max-context disable the cell.
     /// </summary>
     public bool IsSelectable => IsSupported && FitLevel != HardwareFitLevel.NoWay;

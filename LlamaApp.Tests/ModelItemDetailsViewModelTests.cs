@@ -215,7 +215,7 @@ public sealed class ModelItemDetailsViewModelTests
     }
 
     [Fact]
-    public async Task Context_Cells_Tint_Green_Orange_Red_Against_The_Memory_Budget()
+    public async Task Context_Cells_Tint_Green_Yellow_Red_Against_The_Memory_Budget()
     {
         // A 256k-max model so the context guard stays out of the way: only
         // the memory bands decide. Estimates: 4 GB weights + 128 KiB of KV
@@ -235,19 +235,19 @@ public sealed class ModelItemDetailsViewModelTests
             vm.ContextLengths.Select(o => o.FitLevel).ToArray());
         Assert.All(vm.ContextLengths, o => Assert.True(o.IsSupported));
 
-        // Orange stays selectable ("might" means try it); only red disables.
+        // Yellow stays selectable ("might" means try it); only red disables.
         Assert.True(vm.ContextLengths[3].IsSelectable);
         Assert.False(vm.ContextLengths[4].IsSelectable);
         Assert.False(vm.ContextLengths[5].IsSelectable);
 
-        // Green, orange and red each explain themselves on hover.
+        // Green, yellow and red each explain themselves on hover.
         var green = vm.ContextLengths[0].TooltipText; // 4k
         Assert.StartsWith("Requires ", green);
         Assert.EndsWith(" of memory", green);
 
-        var orange = vm.ContextLengths[3].TooltipText; // 32k
-        Assert.StartsWith("Might not fit: requires ", orange);
-        Assert.Contains("GB", orange);
+        var yellow = vm.ContextLengths[3].TooltipText; // 32k
+        Assert.StartsWith("Might not fit: requires ", yellow);
+        Assert.Contains("GB", yellow);
 
         var red = vm.ContextLengths[4].TooltipText; // 64k
         Assert.StartsWith("Model requires at least ", red);
@@ -257,7 +257,7 @@ public sealed class ModelItemDetailsViewModelTests
         // The accessible name carries the level as text.
         Assert.Equal("32k, might fit", vm.ContextLengths[3].AccessibleName);
 
-        // A red option can't be selected; an orange one can.
+        // A red option can't be selected; an yellow one can.
         vm.SelectContextLength(vm.ContextLengths[4]);
         Assert.Equal(4096, vm.SelectedContextLength?.Tokens);
         vm.SelectContextLength(vm.ContextLengths[3]);
@@ -341,7 +341,7 @@ public sealed class ModelItemDetailsViewModelTests
         await vm.InitializeAsync();
 
         // 4 GB weights + 128 KiB KV/token against a 5 GB budget: 4k (~4.5 GB)
-        // is a tight fit (orange), 8k and 16k orange too, 32k (~8.3 GB) red —
+        // is a tight fit (yellow), 8k and 16k yellow too, 32k (~8.3 GB) red —
         // exactly what the heuristic said before the probe ran.
         Assert.Equal(
             [HardwareFitLevel.Might, HardwareFitLevel.Might, HardwareFitLevel.Might,
@@ -396,7 +396,7 @@ public sealed class ModelItemDetailsViewModelTests
     public async Task RestoreSelection_Skips_A_Memory_Capped_Preference()
     {
         // ~5 GB free: 32k (~8.3 GB) is a hard no — the persisted 32k
-        // preference must fall back to the 4k default (orange at ~4.5 GB,
+        // preference must fall back to the 4k default (yellow at ~4.5 GB,
         // but selectable).
         var prefs = new FakePreferences();
         prefs.Saved["unsloth/Qwen3-4B-GGUF:Q4_K_M"] = 32768;

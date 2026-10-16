@@ -152,7 +152,7 @@
                         <DataTemplate x:DataType="local:ModelFamilyVariantOption">
                             <!-- The hardware-fit heuristic's verdict marks
                                  the variation with the hub-style badge —
-                                 green (fits), orange (might), red (won't
+                                 green (fits), yellow (might), red (won't
                                  fit) — the level is spelled out in the
                                  accessible name, the numbers ride the hover
                                  tooltip. The row stays tappable at every

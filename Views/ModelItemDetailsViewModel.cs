@@ -459,7 +459,7 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     /// Builds the context ladder: the standard token values, each flagged
     /// unsupported above the model's max context, each carrying its memory
     /// estimate (weights + KV cache) and a three-level fit verdict (the
-    /// green/orange/red bands of <see cref="HardwareFitHeuristic"/>) against
+    /// green/yellow/red bands of <see cref="HardwareFitHeuristic"/>) against
     /// the machine's memory budget (<paramref name="budgetBytes"/> — free VRAM
     /// plus the usable share of free RAM, since a load can split across
     /// them). With no GGUF metadata (downloadable rows, unreadable header)

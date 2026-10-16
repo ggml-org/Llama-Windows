@@ -6,7 +6,7 @@ namespace LlamaApp.Tests;
 
 /// <summary>
 /// Unit tests for the fit-level presentation
-/// (<see cref="HardwareFitPresentation"/>) — the green/orange/red mapping
+/// (<see cref="HardwareFitPresentation"/>) — the green/yellow/red mapping
 /// of the three <see cref="HardwareFitLevel"/> verdicts and the short
 /// spoken names that carry the level where color can't reach (the visible
 /// UI shows the badge only). Colors are plain structs and stay testable;
@@ -41,7 +41,7 @@ public class HardwareFitPresentationTests
     }
 
     [Fact]
-    public void The_Three_Levels_Are_Green_Orange_Red()
+    public void The_Three_Levels_Are_Green_Yellow_Red()
     {
         // Distinct hues — a row's level has to be readable at a glance.
         Assert.NotEqual(HardwareFitPresentation.FitColor, HardwareFitPresentation.MightColor);
@@ -49,7 +49,7 @@ public class HardwareFitPresentationTests
         Assert.NotEqual(HardwareFitPresentation.FitColor, HardwareFitPresentation.NoWayColor);
 
         // …and each hue is its color: green with the dominant green
-        // channel, orange (red over green over blue), red with the dominant
+        // channel, yellow (red over green over blue), red with the dominant
         // red channel.
         Assert.True(HardwareFitPresentation.FitColor.G > HardwareFitPresentation.FitColor.R);
         Assert.True(HardwareFitPresentation.FitColor.G > HardwareFitPresentation.FitColor.B);

@@ -5,7 +5,7 @@ namespace LlamaApp.LlamaCpp.Tests;
 
 /// <summary>
 /// Unit tests for the three-level hardware fit heuristic
-/// (<see cref="HardwareFitHeuristic.Classify"/>) — the green/orange/red
+/// (<see cref="HardwareFitHeuristic.Classify"/>) — the green/yellow/red
 /// verdict for a model variation (f32, q8_0, q4_0, …) from catalog metadata
 /// alone: the combined VRAM + RAM budget, the comfort/optimism bands around
 /// it, and the fail-open rules that land unknowns on "might".
@@ -33,7 +33,7 @@ public class HardwareFitHeuristicTests
     private static readonly LlamaDevice[] MidRangeGpu = { Device("CUDA0", "NVIDIA GeForce RTX 4060", 8 << 10) };
 
     [Fact]
-    public void Variations_Of_One_Model_Tint_Green_Orange_Red()
+    public void Variations_Of_One_Model_Tint_Green_Yellow_Red()
     {
         // The flagship use case: the same 20B model in three quants on one
         // machine (8 GiB VRAM + 16 GB RAM → ~20.6 GB combined budget) —

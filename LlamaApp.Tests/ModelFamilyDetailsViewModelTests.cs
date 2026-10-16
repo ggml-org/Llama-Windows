@@ -200,7 +200,7 @@ public sealed class ModelFamilyDetailsViewModelTests
     }
 
     [Fact]
-    public async Task Variant_Rows_Tint_Green_Orange_Red_By_Level()
+    public async Task Variant_Rows_Tint_Green_Yellow_Red_By_Level()
     {
         // One build per level: the row's level must map through to the
         // badge tint (the badges themselves are XAML objects and never

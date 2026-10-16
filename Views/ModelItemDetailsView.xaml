@@ -178,7 +178,7 @@
                      The memory requirement moved to the hover tooltip — carried
                      on the wrapping Grid because a disabled button never shows
                      its own tooltip. The three-level fit heuristic marks each
-                     cell with the hub-style green (fits) / orange (might) /
+                     cell with the hub-style green (fits) / yellow (might) /
                      red (won't fit) badge — the same bands as the variant
                      picker, refined by llama fit-params for on-disk models.
                      Only red (and options beyond the model's max context)

@@ -31,7 +31,7 @@ namespace LlamaApp.Views
 
     /// <summary>
     /// The fit verdict for one variant (size + build): the three-level
-    /// hardware-fit classification — green/orange/red on the row — and the
+    /// hardware-fit classification — green/yellow/red on the row — and the
     /// user-facing note explaining it (same numbers the download preflight
     /// flyout shows — one story everywhere).
     /// <see cref="Fits"/> collapses the levels for the size-cell rule: a
@@ -158,7 +158,7 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// The hardware-fit verdict for this build — the row's hub-style
-        /// green/orange/red badge (null until the probe answers, and for
+        /// green/yellow/red badge (null until the probe answers, and for
         /// installed rows: what's on disk is on disk). The row stays
         /// tappable at every level (the download preflight then shows the
         /// same numbers in its flyout, matching the browse-list rows).
@@ -177,7 +177,7 @@ namespace LlamaApp.Views
             }
         }
 
-        /// <summary>The hub-style fit badge — the green/orange/red tile with
+        /// <summary>The hub-style fit badge — the green/yellow/red tile with
         /// its white glyph (null until a verdict lands, so the binding
         /// shows nothing while the probe runs).</summary>
         public ImageSource? FitBadge => FitLevel is { } level
@@ -358,7 +358,7 @@ namespace LlamaApp.Views
         /// <summary>
         /// Probes every build of every size (sequentially — the probe is
         /// cheap: a cached device list plus pure estimator math) and tints
-        /// the rows by verdict: variant rows green/orange/red individually,
+        /// the rows by verdict: variant rows green/yellow/red individually,
         /// size cells dimmed only when NONE of their builds has any hope
         /// (the same any-build-fits rule the browse list uses for
         /// families). Verdicts are cached per build so a size switch

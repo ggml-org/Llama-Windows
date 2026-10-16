@@ -1873,7 +1873,7 @@ public sealed class LlamaManager
 
     /// <summary>
     /// The three-level counterpart of <see cref="CheckModelFitAsync"/>:
-    /// classifies a model build as fit / might / no way (the green/orange/red
+    /// classifies a model build as fit / might / no way (the green/yellow/red
     /// verdicts the variant picker shows) from the same catalog metadata,
     /// against the same live device + RAM probes. See
     /// <see cref="HardwareFitHeuristic"/> for the decision rules. Never
