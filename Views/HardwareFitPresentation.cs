@@ -55,7 +55,8 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// The hub-style badge for a level (Assets/Fit/&lt;badge&gt;.svg):
-        /// the green/orange/red tile with its white check, bang or cross.
+        /// the green/orange/red tile with its white check, question mark or
+        /// cross.
         /// Created on demand and cached per level (XAML objects — never
         /// exercised by the unit tests, same as the logo pipeline's
         /// <c>SvgImageSource</c>s). Bind it to an Image; a missing verdict

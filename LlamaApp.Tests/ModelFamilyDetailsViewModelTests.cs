@@ -9,11 +9,11 @@ namespace LlamaApp.Tests;
 /// Unit tests for the family details ViewModel
 /// (<see cref="ModelFamilyDetailsViewModel"/>): the size → variant →
 /// download hierarchy. Sizes select in catalog order, variants rebuild per
-/// size with the catalog's first build flagged "Default", installed variants
-/// are marked and can't be re-downloaded, and the download delegates to the
-/// shell's existing workflow via <see cref="IModelFamilyDetailsHost"/>. The
-/// host is faked — no server, no disk. Families use a brand outside the logo
-/// map so no XAML logo pipeline runs.
+/// size, installed variants are marked and can't be re-downloaded, and the
+/// download delegates to the shell's existing workflow via
+/// <see cref="IModelFamilyDetailsHost"/>. The host is faked — no server,
+/// no disk. Families use a brand outside the logo map so no XAML logo
+/// pipeline runs.
 /// </summary>
 public sealed class ModelFamilyDetailsViewModelTests
 {
@@ -76,13 +76,11 @@ public sealed class ModelFamilyDetailsViewModelTests
     }
 
     [Fact]
-    public void Catalogs_First_Build_Is_Flagged_Default()
+    public void Downloadable_Variants_Carry_No_State_Caption()
     {
         var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost());
 
-        Assert.True(vm.Variants[0].IsDefault);
-        Assert.False(vm.Variants[1].IsDefault);
-        Assert.Equal("Default", vm.Variants[0].StateCaption);
+        Assert.Equal("", vm.Variants[0].StateCaption);
         Assert.Equal("", vm.Variants[1].StateCaption);
     }
 

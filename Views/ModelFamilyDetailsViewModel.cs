@@ -133,11 +133,10 @@ namespace LlamaApp.Views
         private string? _fitNote;
 
         public ModelFamilyVariantOption(
-            ModelFamilySize size, ModelFamilyBuild build, bool isDefault, bool isInstalled)
+            ModelFamilySize size, ModelFamilyBuild build, bool isInstalled)
         {
             Size = size;
             Build = build;
-            IsDefault = isDefault;
             IsInstalled = isInstalled;
         }
 
@@ -150,13 +149,6 @@ namespace LlamaApp.Views
         /// <summary>Secondary detail: the raw quant + download size, e.g. "Q4_K_M · 12.1 GB".</summary>
         public string DetailText => string.Join(" · ",
             new[] { Build.Quant, Build.Size }.Where(s => !string.IsNullOrWhiteSpace(s)));
-
-        /// <summary>
-        /// The catalog's first build of the size — marked with a subtle
-        /// "Default" caption so there's an obvious sane pick (no provider
-        /// ranking beyond catalog order).
-        /// </summary>
-        public bool IsDefault { get; }
 
         /// <summary>Installed variants read as such and can't be re-downloaded.</summary>
         public bool IsInstalled { get; }
@@ -209,10 +201,11 @@ namespace LlamaApp.Views
         /// <summary>Row tooltip: the fit note (every level carries one).</summary>
         public string? RowTooltip => FitNote;
 
-        /// <summary>The caption replacing "Default" once the variant is on disk.</summary>
-        public string StateCaption => IsInstalled ? "Installed" : IsDefault ? "Default" : "";
+        /// <summary>The caption shown once the variant is on disk; empty for
+        /// downloadable rows.</summary>
+        public string StateCaption => IsInstalled ? "Installed" : "";
 
-        /// <summary>The row's accessible name, e.g. "Balanced, Q4_K_M · 2.5 GB, default, fits. Download."</summary>
+        /// <summary>The row's accessible name, e.g. "Balanced, Q4_K_M · 2.5 GB, fits. Download."</summary>
         public string AccessibleName
         {
             get
@@ -342,13 +335,11 @@ namespace LlamaApp.Views
                 return;
             }
 
-            var first = true;
             foreach (var build in size.Builds)
             {
                 var option = new ModelFamilyVariantOption(
                     size,
                     build,
-                    isDefault: first,
                     isInstalled: _host.IsVariantInstalled(Family, size, build));
                 // A verdict may already exist from the background evaluation
                 // (switching sizes and back rebuilds rows from scratch).
@@ -358,7 +349,6 @@ namespace LlamaApp.Views
                     option.FitNote = verdict.Note;
                 }
                 Variants.Add(option);
-                first = false;
             }
             OnPropertyChanged(nameof(HasVariants));
         }
