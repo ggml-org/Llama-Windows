@@ -49,8 +49,9 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// The resolved brand logo (theme-dependent — see
-        /// <see cref="ModelItem.ResolveLogo"/>). Notifies so the shell can
-        /// re-resolve logos when the OS theme flips.
+        /// <see cref="ModelItem.ResolveLogo"/>), or the provider's fetched
+        /// Hub avatar (see <see cref="AttachAvatar"/>). Notifies so the shell
+        /// can re-resolve logos when the OS theme flips.
         /// </summary>
         public ImageSource? Logo
         {
@@ -61,6 +62,30 @@ namespace LlamaApp.Views
                 _logo = value;
                 OnPropertyChanged();
             }
+        }
+
+        private bool _logoIsAvatar;
+
+        /// <summary>
+        /// Sets the row's logo to the provider's Hub avatar (a bitmap —
+        /// theme-independent, so <see cref="RefreshLogo"/> keeps it).
+        /// </summary>
+        public void AttachAvatar(ImageSource avatar)
+        {
+            _logoIsAvatar = true;
+            Logo = avatar;
+        }
+
+        /// <summary>
+        /// Re-resolves the logo after a theme change: a fetched avatar is
+        /// theme-independent and stays; a bundled brand mark must be swapped
+        /// for the new theme's variant (the resolver's own fallback chain
+        /// runs — brand mark → generic icon — so the tile is never empty).
+        /// </summary>
+        public void RefreshLogo(Func<string?, ImageSource?> resolver)
+        {
+            if (_logoIsAvatar) return;
+            Logo = resolver(Brand);
         }
 
         /// <summary>

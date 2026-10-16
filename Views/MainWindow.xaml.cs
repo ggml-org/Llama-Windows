@@ -474,7 +474,7 @@ namespace LlamaApp.Views
                 Vision = sm.SupportsImage, // authoritative — from the server
                 Downloadable = false,
                 Brand = brand,
-                Logo = ModelItem.ResolveLogo(brand),
+                Logo = ModelItem.ResolveLogoOrGeneric(brand),
                 IsLoaded = sm.IsLoaded,
                 IsDownloading = sm.IsDownloading,
             };
@@ -538,7 +538,14 @@ namespace LlamaApp.Views
             // catalog's own ordering is the deterministic display policy —
             // no quality ranking or provider endorsement).
             foreach (var family in RecommendedFiltering.FilterFamiliesForDisplay(families))
-                Families.Add(new ModelFamilyViewModel(family, ModelItem.ResolveLogo));
+            {
+                var row = new ModelFamilyViewModel(family, ModelItem.ResolveLogoOrGeneric);
+                Families.Add(row);
+                // A provider without a bundled brand mark (Liquid AI & co.)
+                // shows the generic icon now and gets the org's Hub avatar
+                // attached once it lands — fire-and-forget.
+                _ = AttachFamilyAvatarAsync(row);
+            }
 
             BrowseStatusPanel.Visibility = Visibility.Collapsed;
             RebuildBrowseTail();
@@ -1638,6 +1645,7 @@ namespace LlamaApp.Views
             DetailsView.Visibility = Visibility.Collapsed;
             FamilyDetailsView.Visibility = Visibility.Visible;
             FamilyDetailsView.FocusFirst();
+            _ = AttachFamilyDetailsAvatarAsync(vm, family.Family);
         }
 
         /// <summary>Back row in the details view: return to the models list.</summary>
@@ -1804,7 +1812,7 @@ namespace LlamaApp.Views
                 Quant = build.Quant,
                 Downloadable = true,
                 Brand = family.Brand,
-                Logo = ModelItem.ResolveLogo(family.Brand),
+                Logo = ModelItem.ResolveLogoOrGeneric(family.Brand),
             };
             _ = StartVariantDownloadAsync(item);
 
@@ -1915,7 +1923,7 @@ namespace LlamaApp.Views
             foreach (var item in LocalModels)
                 item.Logo = ModelItem.ResolveLogo(item.Brand) ?? item.Logo ?? ModelItem.GenericLogo;
             foreach (var family in Families)
-                family.Logo = ModelItem.ResolveLogo(family.Brand);
+                family.RefreshLogo(ModelItem.ResolveLogoOrGeneric);
         }
 
         /// <summary>
@@ -3076,7 +3084,7 @@ namespace LlamaApp.Views
         /// </summary>
         private async Task AttachItemAvatarAsync(ModelItem item)
         {
-            var avatar = await AvatarCache.GetOrFetchAsync(AuthorOf(item.RepoName ?? item.Name));
+            var avatar = await AvatarForAsync(item);
             if (avatar is not null) item.Logo = avatar;
         }
 
@@ -3089,16 +3097,58 @@ namespace LlamaApp.Views
         /// </summary>
         private async Task AttachCachedItemAvatarAsync(ModelItem item)
         {
-            var avatar = await AvatarCache.GetOrFetchAsync(AuthorOf(item.RepoName ?? item.Name));
+            var avatar = await AvatarForAsync(item);
             if (avatar is not null)
                 item.Logo = avatar;
             else if (item.Logo is null)
             {
-                // No catalog brand, no recognizable family, no author avatar
-                // (an author-less local import, or the avatar fetch failed) —
-                // the generic model icon, so the tile is never empty.
+                // No catalog brand, no recognizable family, no org or author
+                // avatar (an author-less local import, or the avatar fetch
+                // failed) — the generic model icon, so the tile is never
+                // empty.
                 item.Logo = ModelItem.GenericLogo;
             }
+        }
+
+        /// <summary>
+        /// The Hub avatar for a model row: the provider's ("org's") avatar
+        /// first — a catalog model downloaded from a GGUF mirror (ggml-org/…)
+        /// is still its maker's model — then the repo author's. Only brands
+        /// without a bundled logo mark go looking: Gemma & co. keep theirs.
+        /// </summary>
+        private static async Task<Microsoft.UI.Xaml.Media.ImageSource?> AvatarForAsync(ModelItem item)
+        {
+            if (!string.IsNullOrWhiteSpace(item.Brand) && !ModelItem.HasBrandLogo(item.Brand))
+            {
+                var byBrand = await AvatarCache.GetOrFetchForBrandAsync(item.Brand);
+                if (byBrand is not null) return byBrand;
+            }
+            return await AvatarCache.GetOrFetchAsync(AuthorOf(item.RepoName ?? item.Name));
+        }
+
+        /// <summary>
+        /// Attaches the provider's Hub avatar to a family row the brand-logo
+        /// mapping can't fill (LFM 2.5 → Liquid AI's mark). Decorative: a
+        /// failure just leaves the generic icon the row already shows.
+        /// </summary>
+        private async Task AttachFamilyAvatarAsync(ModelFamilyViewModel row)
+        {
+            if (ModelItem.HasBrandLogo(row.Brand)) return;
+            var avatar = await AvatarCache.GetOrFetchForBrandAsync(row.Brand);
+            if (avatar is not null && Families.Contains(row)) row.AttachAvatar(avatar);
+        }
+
+        /// <summary>
+        /// The family-details header counterpart of
+        /// <see cref="AttachFamilyAvatarAsync"/>: the same org lookup, applied
+        /// only while this details view is still the one on screen.
+        /// </summary>
+        private async Task AttachFamilyDetailsAvatarAsync(ModelFamilyDetailsViewModel vm, ModelFamily family)
+        {
+            if (ModelItem.HasBrandLogo(family.Brand)) return;
+            var avatar = await AvatarCache.GetOrFetchForBrandAsync(family.Brand);
+            if (avatar is not null && ReferenceEquals(_familyDetailsViewModel, vm))
+                vm.AttachAvatar(avatar);
         }
 
         /// <summary>The author/org part of a repo id ("" when there is none).</summary>

@@ -280,8 +280,24 @@ namespace LlamaApp.Views
         public string Description => Family.Description;
         public bool HasDescription => !string.IsNullOrWhiteSpace(Family.Description);
 
-        /// <summary>The resolved brand logo for the header (theme-dependent).</summary>
-        public ImageSource? Logo => ModelItem.ResolveLogo(Family.Brand);
+        private ImageSource? _logo;
+
+        /// <summary>
+        /// The header logo: the resolved brand mark, the provider's fetched
+        /// Hub avatar (see <see cref="AttachAvatar"/>), or the generic model
+        /// icon — the tile is never empty.
+        /// </summary>
+        public ImageSource Logo => _logo ?? ModelItem.ResolveLogoOrGeneric(Family.Brand);
+
+        /// <summary>
+        /// Sets the header logo to the provider's Hub avatar (e.g. Liquid
+        /// AI's mark for LFM 2.5 — brands without a bundled logo).
+        /// </summary>
+        public void AttachAvatar(ImageSource avatar)
+        {
+            _logo = avatar;
+            OnPropertyChanged(nameof(Logo));
+        }
 
         // ---- Technical details (secondary — below the actions) ----
 

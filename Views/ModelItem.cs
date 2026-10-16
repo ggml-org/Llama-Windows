@@ -721,6 +721,17 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
         return logo is null ? null : ResolveLogoFile(logo + (UseLightLogos ? ".light" : ""));
     }
 
+    /// <summary>True when the brand has a bundled logo mark (see <see cref="ResolveLogo"/>).</summary>
+    public static bool HasBrandLogo(string? brand) => BrandToLogo(brand) is not null;
+
+    /// <summary>
+    /// The brand logo, or the generic model icon when the brand has no
+    /// bundled mark — the never-empty resolver for surfaces without an
+    /// avatar fallback chain of their own.
+    /// </summary>
+    public static ImageSource ResolveLogoOrGeneric(string? brand) =>
+        ResolveLogo(brand) ?? GenericLogo;
+
     /// <summary>
     /// The generic model icon (a chip glyph, <c>Assets/Logos/gguf.svg</c>): the
     /// fallback every logo path bottoms out at, so a row's tile is never

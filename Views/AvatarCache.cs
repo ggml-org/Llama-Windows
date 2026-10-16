@@ -82,6 +82,46 @@ public static class AvatarCache
         return image;
     }
 
+    /// <summary>
+    /// Returns the cached avatar for a brand label ("Liquid AI"), fetching
+    /// it from the Hub on first use — the provider's ("org's") avatar, not a
+    /// repo author's. Brand labels are human display names, not Hub slugs,
+    /// so the lookup tries the plausible slug forms in order (see
+    /// <see cref="BrandSlugs"/>), each through the usual coalesced fetch.
+    /// Null when no candidate actor exists or has an avatar.
+    /// </summary>
+    public static async Task<ImageSource?> GetOrFetchForBrandAsync(string brand)
+    {
+        foreach (var slug in BrandSlugs(brand))
+        {
+            var image = await GetOrFetchAsync(slug);
+            if (image is not null) return image;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The Hub actor slugs to try for a brand label, in order, without
+    /// duplicates (the Hub resolves slugs case-insensitively). Most org/user
+    /// slugs are simply the name without spaces ("Liquid AI" → "LiquidAI",
+    /// "Jared Palmer" → "jaredpalmer" — verified against the live Hub); the
+    /// hyphenated and as-is forms cover the rest of the shape space.
+    /// Pure — unit-tested.
+    /// </summary>
+    internal static string[] BrandSlugs(string brand)
+    {
+        if (string.IsNullOrWhiteSpace(brand)) return [];
+        var trimmed = brand.Trim();
+        string[] candidates =
+        [
+            trimmed.Replace(" ", ""),
+            string.Join('-', trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant(),
+            trimmed,
+        ];
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return [.. candidates.Where(c => c.Length > 0 && seen.Add(c))];
+    }
+
     // Runs inside the coalesced gate task: N rows racing for the same author
     // share one Hub fetch and one file write, then each reads via LoadAsync.
     private static async Task<byte[]?> FetchAndStoreAsync(string author)
