@@ -150,15 +150,15 @@
                 <ItemsControl ItemsSource="{x:Bind ViewModel.Variants, Mode=OneWay}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="local:ModelFamilyVariantOption">
-                            <!-- The hardware-fit heuristic's verdict tints
-                                 the variation green (fits), orange (might)
-                                 or red (won't fit) — the color alone shows
-                                 the level (spelled out in the accessible
-                                 name), the numbers ride the hover tooltip.
-                                 The row stays tappable at every level (the
-                                 download preflight shows the same numbers
-                                 in a flyout, same as the browse rows).
-                                 Verdicts land after render — OneWay
+                            <!-- The hardware-fit heuristic's verdict marks
+                                 the variation with the hub-style badge —
+                                 green (fits), orange (might), red (won't
+                                 fit) — the level is spelled out in the
+                                 accessible name, the numbers ride the hover
+                                 tooltip. The row stays tappable at every
+                                 level (the download preflight shows the same
+                                 numbers in a flyout, same as the browse
+                                 rows). Verdicts land after render — OneWay
                                  bindings. -->
                             <Button Click="Variant_Click"
                                     Tag="{x:Bind}"
@@ -178,17 +178,16 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <FontIcon Grid.Column="0"
                                               Glyph="&#xE896;"
                                               FontSize="16"
                                               Opacity="0.7"
-                                              Foreground="{x:Bind FitBrush, Mode=OneWay}"
                                               VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="1"
                                                Text="{x:Bind FriendlyName}"
                                                FontSize="13"
-                                               Foreground="{x:Bind FitBrush, Mode=OneWay}"
                                                TextTrimming="CharacterEllipsis"
                                                VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="2"
@@ -197,7 +196,12 @@
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                TextTrimming="CharacterEllipsis"
                                                VerticalAlignment="Center" />
-                                    <TextBlock Grid.Column="3"
+                                    <Image Grid.Column="3"
+                                           Source="{x:Bind FitBadge, Mode=OneWay}"
+                                           Width="16" Height="16"
+                                           Stretch="Uniform"
+                                           VerticalAlignment="Center" />
+                                    <TextBlock Grid.Column="4"
                                                Text="{x:Bind StateCaption}"
                                                FontSize="11"
                                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"

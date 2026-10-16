@@ -58,11 +58,12 @@ public sealed class ContextLengthOption : INotifyPropertyChanged
 
     /// <summary>
     /// The three-level hardware-fit verdict for this option — the cell's
-    /// green/orange/red tint (<see cref="FitBrush"/>), the same
+    /// hub-style green/orange/red badge (see
+    /// <see cref="HardwareFitPresentation"/>), the same
     /// <see cref="LlamaApp.Llama.HardwareFitHeuristic"/> bands the variant
     /// picker uses: fit (comfortable), might (tight, slightly over, or
     /// unknown), no way (past the optimism band). Null = no verdict yet —
-    /// the cell renders untinted and stays selectable (fail open).
+    /// the cell shows no badge and stays selectable (fail open).
     ///
     /// <para>Settable, not init-only: the picker first tints from the fast
     /// weights + KV heuristic, then <c>llama fit-params</c> verdicts land
@@ -77,18 +78,18 @@ public sealed class ContextLengthOption : INotifyPropertyChanged
             if (_fitLevel == value) return;
             _fitLevel = value;
             OnPropertyChanged();
-            OnPropertyChanged(nameof(FitBrush));
+            OnPropertyChanged(nameof(FitBadge));
             OnPropertyChanged(nameof(IsSelectable));
             OnPropertyChanged(nameof(TooltipText));
             OnPropertyChanged(nameof(AccessibleName));
         }
     }
 
-    /// <summary>The cell tint: green/orange/red once a verdict lands, the
-    /// theme's default text brush before that.</summary>
-    public Brush FitBrush => FitLevel is { } level
-        ? HardwareFitPresentation.BrushFor(level)
-        : HardwareFitPresentation.DefaultTextBrush;
+    /// <summary>The hub-style fit badge for the cell — the green/orange/red
+    /// tile with its white glyph (null when there is no verdict).</summary>
+    public ImageSource? FitBadge => FitLevel is { } level
+        ? HardwareFitPresentation.BadgeSource(level)
+        : null;
 
     /// <summary>
     /// Whether the option can be selected — both guards must pass. "Might"

@@ -165,8 +165,8 @@ namespace LlamaApp.Views
         public bool IsSelectable => !IsInstalled;
 
         /// <summary>
-        /// The hardware-fit verdict for this build — the row's
-        /// green/orange/red tint (null until the probe answers, and for
+        /// The hardware-fit verdict for this build — the row's hub-style
+        /// green/orange/red badge (null until the probe answers, and for
         /// installed rows: what's on disk is on disk). The row stays
         /// tappable at every level (the download preflight then shows the
         /// same numbers in its flyout, matching the browse-list rows).
@@ -180,16 +180,17 @@ namespace LlamaApp.Views
                 if (_fitLevel == value) return;
                 _fitLevel = value;
                 OnPropertyChanged();
-                OnPropertyChanged(nameof(FitBrush));
+                OnPropertyChanged(nameof(FitBadge));
                 OnPropertyChanged(nameof(AccessibleName));
             }
         }
 
-        /// <summary>The row tint: green/orange/red once a verdict lands,
-        /// the theme's default text brush before that.</summary>
-        public Brush FitBrush => FitLevel is { } level
-            ? HardwareFitPresentation.BrushFor(level)
-            : HardwareFitPresentation.DefaultTextBrush;
+        /// <summary>The hub-style fit badge — the green/orange/red tile with
+        /// its white glyph (null until a verdict lands, so the binding
+        /// shows nothing while the probe runs).</summary>
+        public ImageSource? FitBadge => FitLevel is { } level
+            ? HardwareFitPresentation.BadgeSource(level)
+            : null;
 
         /// <summary>Why the variant fits or doesn't (null until the probe
         /// answers) — row tooltip.</summary>

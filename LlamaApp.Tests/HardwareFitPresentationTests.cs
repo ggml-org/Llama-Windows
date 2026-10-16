@@ -9,10 +9,11 @@ namespace LlamaApp.Tests;
 /// (<see cref="HardwareFitPresentation"/>) — the green/orange/red mapping
 /// of the three <see cref="HardwareFitLevel"/> verdicts and the short
 /// spoken names that carry the level where color can't reach (the visible
-/// UI shows the tint only). Colors are plain structs and stay testable;
-/// the brushes built from them are XAML objects and never instantiate here
-/// (the test host runs without the Windows App SDK runtime — see
-/// LlamaApp.Tests.csproj), mirroring <see cref="QuantizationPresentationTests"/>.
+/// UI shows the badge only). Colors are plain structs and stay testable;
+/// the badges built from the SVG assets are XAML objects and never
+/// instantiate here (the test host runs without the Windows App SDK
+/// runtime — see LlamaApp.Tests.csproj), mirroring
+/// <see cref="QuantizationPresentationTests"/>.
 /// </summary>
 public class HardwareFitPresentationTests
 {

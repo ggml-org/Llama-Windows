@@ -177,12 +177,12 @@
                      (7 × 50 = 350 ≤ the 370 content width, scrollbar included).
                      The memory requirement moved to the hover tooltip — carried
                      on the wrapping Grid because a disabled button never shows
-                     its own tooltip. The three-level fit heuristic tints each
-                     cell green (fits) / orange (might) / red (won't fit) — the
-                     same bands as the variant picker, refined by llama
-                     fit-params for on-disk models. Only red (and options beyond
-                     the model's max context) disable. The accent ring marks
-                     the selection. -->
+                     its own tooltip. The three-level fit heuristic marks each
+                     cell with the hub-style green (fits) / orange (might) /
+                     red (won't fit) badge — the same bands as the variant
+                     picker, refined by llama fit-params for on-disk models.
+                     Only red (and options beyond the model's max context)
+                     disable. The accent ring marks the selection. -->
                 <ItemsControl ItemsSource="{x:Bind ViewModel.ContextLengths, Mode=OneWay}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -209,9 +209,14 @@
                                         <TextBlock Text="{x:Bind Label}"
                                                    FontSize="12"
                                                    FontWeight="SemiBold"
-                                                   Foreground="{x:Bind FitBrush, Mode=OneWay}"
                                                    HorizontalAlignment="Center"
                                                    VerticalAlignment="Center" />
+                                        <Image Source="{x:Bind FitBadge, Mode=OneWay}"
+                                               Width="12" Height="12"
+                                               Stretch="Uniform"
+                                               HorizontalAlignment="Right"
+                                               VerticalAlignment="Top"
+                                               Margin="0,2,2,0" />
                                         <Border CornerRadius="{ThemeResource ControlCornerRadius}"
                                                 BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
                                                 BorderThickness="1.5"

@@ -204,9 +204,9 @@ public sealed class ModelFamilyDetailsViewModelTests
     [Fact]
     public async Task Variant_Rows_Tint_Green_Orange_Red_By_Level()
     {
-        // One build per level: the row's level must map through to the tint
-        // (the brushes themselves are XAML objects and never instantiate
-        // here — the color mapping is covered in HardwareFitPresentationTests).
+        // One build per level: the row's level must map through to the
+        // badge tint (the badges themselves are XAML objects and never
+        // instantiate here — the color mapping is covered in HardwareFitPresentationTests).
         var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost(),
             variantFitProbe: (size, build, _) => Task.FromResult(new VariantFitVerdict(
                 build == Q4 ? HardwareFitLevel.Fit

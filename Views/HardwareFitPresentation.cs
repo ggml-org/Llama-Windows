@@ -1,33 +1,35 @@
 using LlamaApp.Llama;
-using Microsoft.UI;
-using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.UI;
 
 namespace LlamaApp.Views
 {
     /// <summary>
     /// Pure mapping from a <see cref="HardwareFitLevel"/> verdict to its UI
-    /// skin: the green/orange/red brush a model variation is tinted with —
-    /// the color alone shows the level on screen — plus the short name
-    /// ("Fits" / "Might fit" / "Won't fit") that spells it out for
-    /// accessible names and narration. Kept separate from the view models
-    /// so the rules stay unit-testable, mirroring
+    /// skin: the badge the Hugging Face Hub shows for hardware compatibility
+    /// — a colored tile with a white glyph (Assets/Fit/&lt;badge&gt;.svg, the
+    /// hub's "fits" badge verbatim plus siblings drawn in the same style) —
+    /// plus the short name ("Fits" / "Might fit" / "Won't fit") that spells
+    /// the level out where color can't reach (accessible names). The visible
+    /// UI shows the badge only. Kept separate from the view models so the
+    /// rules stay unit-testable, mirroring
     /// <see cref="QuantizationPresentation"/>.
     /// </summary>
     public static class HardwareFitPresentation
     {
-        /// <summary>Green — comfortably fits this machine.</summary>
-        public static readonly Color FitColor = Color.FromArgb(0xFF, 0x2B, 0x9A, 0x46);
+        /// <summary>Green — comfortably fits this machine (green-600, the
+        /// hub badge's fill).</summary>
+        public static readonly Color FitColor = Color.FromArgb(0xFF, 0x16, 0xA3, 0x4A);
 
-        /// <summary>Orange — tight, slightly over, or unknown.</summary>
-        public static readonly Color MightColor = Color.FromArgb(0xFF, 0xD0, 0x7C, 0x10);
+        /// <summary>Orange — tight, slightly over, or unknown (orange-600).</summary>
+        public static readonly Color MightColor = Color.FromArgb(0xFF, 0xEA, 0x58, 0x0C);
 
-        /// <summary>Red — won't fit this machine.</summary>
-        public static readonly Color NoWayColor = Color.FromArgb(0xFF, 0xD9, 0x3B, 0x30);
+        /// <summary>Red — won't fit this machine (red-600).</summary>
+        public static readonly Color NoWayColor = Color.FromArgb(0xFF, 0xDC, 0x26, 0x26);
 
         /// <summary>
-        /// The short name for a level. The visible UI trusts the color —
+        /// The short name for a level. The visible UI trusts the badge —
         /// this name spells the level out where color can't reach:
         /// accessible names and narration. Plain wording on purpose; the
         /// quant row already carries the technical detail.
@@ -41,8 +43,7 @@ namespace LlamaApp.Views
         };
 
         /// <summary>
-        /// The row tint for a level. Mid-saturation values that read as
-        /// green/orange/red on both the light and the dark Mica surface.
+        /// The level's color — the palette the badge SVGs are filled with.
         /// </summary>
         public static Color ColorFor(HardwareFitLevel level) => level switch
         {
@@ -52,32 +53,38 @@ namespace LlamaApp.Views
             _ => MightColor,
         };
 
-        /// <summary>The row tint brush for a level.</summary>
-        public static Brush BrushFor(HardwareFitLevel level) =>
-            new SolidColorBrush(ColorFor(level));
-
         /// <summary>
-        /// The text brush to fall back to when no verdict has landed yet
-        /// (rows render before the fit probe answers): the theme's primary
-        /// text color so an unverdicted row looks like any other row.
-        /// Resolved per call — the app's theme dictionaries swap their
-        /// brushes when the OS theme flips. Outside a XAML application
-        /// (unit tests) this is just a placeholder; brush construction is
-        /// never exercised by the tests.
+        /// The hub-style badge for a level (Assets/Fit/&lt;badge&gt;.svg):
+        /// the green/orange/red tile with its white check, bang or cross.
+        /// Created on demand and cached per level (XAML objects — never
+        /// exercised by the unit tests, same as the logo pipeline's
+        /// <c>SvgImageSource</c>s). Bind it to an Image; a missing verdict
+        /// is the caller's null and shows nothing.
         /// </summary>
-        public static Brush DefaultTextBrush
+        public static ImageSource BadgeSource(HardwareFitLevel level)
         {
-            get
+            lock (BadgeCacheLock)
             {
-                var app = Application.Current;
-                if (app is null)
-                    return new SolidColorBrush(Colors.White);
-                if (app.Resources.TryGetValue("TextFillColorPrimaryBrush", out var resource)
-                    && resource is Brush brush)
-                    return brush;
-                return new SolidColorBrush(
-                    app.RequestedTheme == ApplicationTheme.Dark ? Colors.White : Colors.Black);
+                if (BadgeCache.TryGetValue(level, out var cached))
+                    return cached;
+
+                var source = new SvgImageSource(new Uri($"ms-appx:///Assets/Fit/{BadgeFile(level)}.svg"))
+                {
+                    RasterizePixelWidth = 32,
+                };
+                BadgeCache[level] = source;
+                return source;
             }
         }
+
+        private static string BadgeFile(HardwareFitLevel level) => level switch
+        {
+            HardwareFitLevel.Fit => "fit",
+            HardwareFitLevel.Might => "might-fit",
+            _ => "no-way",
+        };
+
+        private static readonly Dictionary<HardwareFitLevel, ImageSource> BadgeCache = new();
+        private static readonly object BadgeCacheLock = new();
     }
 }
