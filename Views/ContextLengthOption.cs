@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using LlamaApp.Llama;
+using Microsoft.UI.Xaml.Media;
 
 namespace LlamaApp.Views;
 
@@ -16,7 +18,7 @@ namespace LlamaApp.Views;
 public sealed class ContextLengthOption : INotifyPropertyChanged
 {
     private bool _isSelected;
-    private bool _fitsInMemory = true;
+    private HardwareFitLevel? _fitLevel;
 
     /// <summary>The context length in tokens (e.g. 32768).</summary>
     public int Tokens { get; init; }
@@ -55,38 +57,51 @@ public sealed class ContextLengthOption : INotifyPropertyChanged
     public bool IsSupported { get; init; } = true;
 
     /// <summary>
-    /// False when the estimated memory at this context length exceeds the
-    /// machine's memory budget (free VRAM across all accelerator devices
-    /// plus the usable share of free RAM) — the cell shows disabled rather
-    /// than offering a configuration that can't load. True when the
-    /// estimate is unknown (never gray out on a guess).
+    /// The three-level hardware-fit verdict for this option — the cell's
+    /// green/orange/red tint (<see cref="FitBrush"/>), the same
+    /// <see cref="LlamaApp.Llama.HardwareFitHeuristic"/> bands the variant
+    /// picker uses: fit (comfortable), might (tight, slightly over, or
+    /// unknown), no way (past the optimism band). Null = no verdict yet —
+    /// the cell renders untinted and stays selectable (fail open).
     ///
-    /// <para>Settable, not init-only: the picker first grays from the fast
+    /// <para>Settable, not init-only: the picker first tints from the fast
     /// weights + KV heuristic, then <c>llama fit-params</c> verdicts land
     /// per option (for on-disk models) and flip this in place — raising
     /// <see cref="IsSelectable"/>/<see cref="TooltipText"/> with it.</para>
     /// </summary>
-    public bool FitsInMemory
+    public HardwareFitLevel? FitLevel
     {
-        get => _fitsInMemory;
+        get => _fitLevel;
         set
         {
-            if (_fitsInMemory == value) return;
-            _fitsInMemory = value;
+            if (_fitLevel == value) return;
+            _fitLevel = value;
             OnPropertyChanged();
+            OnPropertyChanged(nameof(FitBrush));
             OnPropertyChanged(nameof(IsSelectable));
             OnPropertyChanged(nameof(TooltipText));
+            OnPropertyChanged(nameof(AccessibleName));
         }
     }
 
-    /// <summary>Whether the option can be selected — both guards must pass.</summary>
-    public bool IsSelectable => IsSupported && FitsInMemory;
+    /// <summary>The cell tint: green/orange/red once a verdict lands, the
+    /// theme's default text brush before that.</summary>
+    public Brush FitBrush => FitLevel is { } level
+        ? HardwareFitPresentation.BrushFor(level)
+        : HardwareFitPresentation.DefaultTextBrush;
+
+    /// <summary>
+    /// Whether the option can be selected — both guards must pass. "Might"
+    /// stays selectable (orange means try it — a smaller context is one tap
+    /// away); only "no way" and above-max-context disable the cell.
+    /// </summary>
+    public bool IsSelectable => IsSupported && FitLevel != HardwareFitLevel.NoWay;
 
     /// <summary>
     /// Hover text for the cell (carried on an enabled wrapper — a disabled
-    /// button never shows its own tooltip): the memory requirement for
-    /// selectable options, otherwise the reason the option is unavailable.
-    /// Empty when nothing is known.
+    /// button never shows its own tooltip): the memory requirement behind
+    /// the fit tint for selectable options, otherwise the reason the option
+    /// is unavailable. Empty when nothing is known.
     /// </summary>
     public string TooltipText
     {
@@ -94,13 +109,24 @@ public sealed class ContextLengthOption : INotifyPropertyChanged
         {
             if (!IsSupported)
                 return $"This model supports up to {FormatTokenCount(MaxContextTokens)} of context";
-            if (!FitsInMemory)
-                return $"Model requires at least {EstimatedMemoryDisplay} of memory";
-            return EstimatedMemoryBytes > 0
-                ? $"Requires {EstimatedMemoryDisplay} of memory"
-                : "";
+            var hasEstimate = EstimatedMemoryBytes > 0;
+            return FitLevel switch
+            {
+                HardwareFitLevel.NoWay => hasEstimate
+                    ? $"Model requires at least {EstimatedMemoryDisplay} of memory"
+                    : "Won't fit in this machine's memory",
+                HardwareFitLevel.Might => hasEstimate
+                    ? $"Might not fit: requires {EstimatedMemoryDisplay} of memory"
+                    : "Memory requirement unknown — might fit",
+                _ => hasEstimate ? $"Requires {EstimatedMemoryDisplay} of memory" : "",
+            };
         }
     }
+
+    /// <summary>The cell's accessible name, e.g. "32k, might fit".</summary>
+    public string AccessibleName => FitLevel is { } level
+        ? $"{Label}, {HardwareFitPresentation.Label(level).ToLowerInvariant()}"
+        : Label;
 
     /// <summary>View-state: whether this is the selected option.</summary>
     public bool IsSelected

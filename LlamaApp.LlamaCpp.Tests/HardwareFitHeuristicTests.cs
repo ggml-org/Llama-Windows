@@ -150,4 +150,24 @@ public class HardwareFitHeuristicTests
         Assert.NotEmpty(result.Note);
         Assert.Single(result.Devices);
     }
+
+    // ---- Byte-based bands (shared with the context-length ladder) ----
+
+    [Theory]
+    [InlineData(90, HardwareFitLevel.Fit)]     // at the comfort line
+    [InlineData(91, HardwareFitLevel.Might)]   // tight inside the budget
+    [InlineData(125, HardwareFitLevel.Might)]  // at the optimism line
+    [InlineData(126, HardwareFitLevel.NoWay)]
+    public void Byte_Bands_Share_One_Threshold_Set(int percentOfBudget, HardwareFitLevel level)
+    {
+        Assert.Equal(level,
+            HardwareFitHeuristic.Classify((ulong)percentOfBudget * 1_000_000UL, 100_000_000UL));
+    }
+
+    [Fact]
+    public void Unknown_Requirement_Or_Budget_Is_Might_Never_NoWay()
+    {
+        Assert.Equal(HardwareFitLevel.Might, HardwareFitHeuristic.Classify(0, 100));
+        Assert.Equal(HardwareFitLevel.Might, HardwareFitHeuristic.Classify(100, 0));
+    }
 }

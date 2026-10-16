@@ -96,7 +96,7 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     private readonly Action<string, int> _saveContextPreference;
     private readonly Func<string, CancellationToken, Task<ModelRuntimeDetails?>> _runtimeDetailsLoader;
     private readonly Func<CancellationToken, Task<ulong>> _memoryBudgetProbe;
-    private readonly Func<string, int, CancellationToken, Task<bool?>> _fitParamsProbe;
+    private readonly Func<string, int, CancellationToken, Task<HardwareFitLevel?>> _fitParamsProbe;
     private readonly Action<Action>? _dispatchToUi;
 
     private CancellationTokenSource? _loadCts;
@@ -116,7 +116,7 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
         Action<string, int> saveContextPreference,
         Func<string, CancellationToken, Task<ModelRuntimeDetails?>>? runtimeDetailsLoader = null,
         Func<CancellationToken, Task<ulong>>? memoryBudgetProbe = null,
-        Func<string, int, CancellationToken, Task<bool?>>? fitParamsProbe = null,
+        Func<string, int, CancellationToken, Task<HardwareFitLevel?>>? fitParamsProbe = null,
         Action<Action>? dispatchToUi = null)
     {
         Model = model;
@@ -314,10 +314,10 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     ///
     /// <para>Downloadable rows take the same path with no local file: the
     /// loader is skipped, the ladder falls back to the catalog size, and the
-    /// options are grayed purely from the memory budget. Once the options
+    /// options are tinted purely from the memory budget. Once the options
     /// are visible, an on-disk model's fit is re-checked per option with
     /// <c>llama fit-params</c> (which knows the real devices and free
-    /// memory), refining the heuristic graying in place as verdicts land.</para>
+    /// memory), refining the heuristic tints in place as verdicts land.</para>
     /// </summary>
     public async Task InitializeAsync(CancellationToken cancel = default)
     {
@@ -368,7 +368,7 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
             }
             catch (OperationCanceledException)
             {
-                // Navigated away mid-refinement — the heuristic graying stands.
+                // Navigated away mid-refinement — the heuristic tints stand.
             }
             catch (Exception ex)
             {
@@ -378,9 +378,9 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     }
 
     /// <summary>
-    /// The memory budget the ladder is grayed against (free VRAM + usable
+    /// The memory budget the ladder is tinted against (free VRAM + usable
     /// free RAM — see <see cref="LlamaManager.ContextMemoryBudgetAsync"/>).
-    /// Fails open: an unknown budget grays nothing out, matching every other
+    /// Fails open: an unknown budget tints nothing, matching every other
     /// probe in the app.
     /// </summary>
     private async Task<ulong> ProbeMemoryBudgetAsync(CancellationToken token)
@@ -399,12 +399,13 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     /// <summary>
     /// The default fit-params probe: the manager's cached
     /// <c>llama fit-params</c> estimate for the model at
-    /// <paramref name="contextTokens"/>, compared against the same memory
-    /// budget the ladder used. Tri-state: <c>null</c> when the tool has no
-    /// verdict (missing binary, CPU-era build, unreadable model) — the
-    /// option keeps its heuristic graying then.
+    /// <paramref name="contextTokens"/>, run through the SAME bands as the
+    /// heuristic against the same memory budget — a better estimate, not a
+    /// different story. Tri-state: <c>null</c> when the tool has no verdict
+    /// (missing binary, CPU-era build, unreadable model) — the option keeps
+    /// its heuristic tint then.
     /// </summary>
-    private static async Task<bool?> DefaultFitParamsProbe(
+    private static async Task<HardwareFitLevel?> DefaultFitParamsProbe(
         string modelPath, int contextTokens, CancellationToken token)
     {
         var manager = LlamaManager.Shared;
@@ -412,18 +413,18 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
         if (estimate is null) return null;
 
         var budget = await manager.ContextMemoryBudgetAsync(token);
-        return budget == ulong.MaxValue || estimate.TotalBytes <= budget;
+        return HardwareFitHeuristic.Classify(estimate.TotalBytes, budget);
     }
 
     /// <summary>
     /// Runs the fit-params probe for every supported option of an on-disk
     /// model, sequentially (each probe spawns a short-lived CLI process;
     /// a burst of seven is fine, a burst of seven-at-once is not), flipping
-    /// <see cref="ContextLengthOption.FitsInMemory"/> where llama.cpp's own
+    /// <see cref="ContextLengthOption.FitLevel"/> where llama.cpp's own
     /// accounting disagrees with the heuristic. Unsupported options
     /// (beyond the model's max context) are skipped — that guard wins
     /// regardless of memory. A probe failure or a missing verdict leaves
-    /// the option's heuristic state untouched.
+    /// the option's heuristic tint untouched.
     /// </summary>
     private async Task RefineContextFitsAsync(string modelPath, CancellationToken token)
     {
@@ -432,10 +433,10 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
             token.ThrowIfCancellationRequested();
             if (!option.IsSupported) continue;
 
-            bool? fits;
+            HardwareFitLevel? level;
             try
             {
-                fits = await _fitParamsProbe(modelPath, option.Tokens, token);
+                level = await _fitParamsProbe(modelPath, option.Tokens, token);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -443,26 +444,27 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
                 continue;
             }
 
-            if (fits is not { } verdict || option.FitsInMemory == verdict) continue;
+            if (level is not { } verdict || option.FitLevel == verdict) continue;
 
             // The probe awaits a child process; the continuation can land on
             // a thread-pool thread — flip the bound property on the UI thread.
             if (_dispatchToUi is null)
-                option.FitsInMemory = verdict;
+                option.FitLevel = verdict;
             else
-                _dispatchToUi(() => option.FitsInMemory = verdict);
+                _dispatchToUi(() => option.FitLevel = verdict);
         }
     }
 
     /// <summary>
     /// Builds the context ladder: the standard token values, each flagged
     /// unsupported above the model's max context, each carrying its memory
-    /// estimate (weights + KV cache) and a fit check against the machine's
-    /// memory budget (<paramref name="budgetBytes"/> — free VRAM plus the
-    /// usable share of free RAM, since a load can split across them). With
-    /// no GGUF metadata (downloadable rows, unreadable header) every option
-    /// is supported and shows the bare model size — the graying then answers
-    /// "can the weights even load".
+    /// estimate (weights + KV cache) and a three-level fit verdict (the
+    /// green/orange/red bands of <see cref="HardwareFitHeuristic"/>) against
+    /// the machine's memory budget (<paramref name="budgetBytes"/> — free VRAM
+    /// plus the usable share of free RAM, since a load can split across
+    /// them). With no GGUF metadata (downloadable rows, unreadable header)
+    /// every option is supported and shows the bare model size — the tint
+    /// then answers "can the weights even load".
     /// </summary>
     internal static List<ContextLengthOption> BuildOptions(
         ModelRuntimeDetails? details, long modelSizeBytes, ulong budgetBytes = ulong.MaxValue)
@@ -481,7 +483,8 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
                 MaxContextTokens = info?.ContextLength ?? 0,
                 EstimatedMemoryBytes = estimate,
                 IsSupported = info is null || tokens <= info.ContextLength,
-                FitsInMemory = estimate <= 0 || (ulong)estimate <= budgetBytes,
+                FitLevel = HardwareFitHeuristic.Classify(
+                    estimate > 0 ? (ulong)estimate : 0UL, budgetBytes),
             };
         }).ToList();
     }

@@ -104,6 +104,25 @@ public static class HardwareFitHeuristic
     public const double OptimismFactor = 1.25;
 
     /// <summary>
+    /// The band decision itself: <paramref name="requiredBytes"/> against
+    /// <paramref name="budgetBytes"/> — one place for the thresholds, shared
+    /// by the catalog-metadata check and the context-length ladder (whose
+    /// estimates are per-context). An unknown requirement (0) or an unknown
+    /// budget (0) lands on <see cref="HardwareFitLevel.Might"/>: never a hard
+    /// "no way" on a guess we don't have.
+    /// </summary>
+    public static HardwareFitLevel Classify(ulong requiredBytes, ulong budgetBytes)
+    {
+        if (requiredBytes == 0 || budgetBytes == 0)
+            return HardwareFitLevel.Might;
+        if (requiredBytes <= budgetBytes * ComfortFactor)
+            return HardwareFitLevel.Fit;
+        if (requiredBytes <= budgetBytes * OptimismFactor)
+            return HardwareFitLevel.Might;
+        return HardwareFitLevel.NoWay;
+    }
+
+    /// <summary>
     /// Classifies <paramref name="estimate"/> against
     /// <paramref name="devices"/> (accelerator probe) and
     /// <paramref name="availableSystemBytes"/> (null when the RAM probe
@@ -147,8 +166,9 @@ public static class HardwareFitHeuristic
         }
 
         var required = estimate.TotalBytes;
+        var level = Classify(required, budget);
 
-        if (required <= budget * ComfortFactor)
+        if (level == HardwareFitLevel.Fit)
         {
             var where = devices.Count > 0 && required <= vram
                 ? $"runs fully in {MemoryFit.FormatBytes(vram)} of GPU memory"
@@ -165,7 +185,7 @@ public static class HardwareFitHeuristic
             };
         }
 
-        if (required <= budget * OptimismFactor)
+        if (level == HardwareFitLevel.Might)
         {
             var tight = required <= budget;
             return new HardwareFitVerdict

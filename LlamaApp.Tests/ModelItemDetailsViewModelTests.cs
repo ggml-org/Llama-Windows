@@ -84,7 +84,7 @@ public sealed class ModelItemDetailsViewModelTests
         FakePreferences prefs,
         ModelRuntimeDetails? details,
         Func<ulong>? memoryBudget = null,
-        Func<string, int, CancellationToken, Task<bool?>>? fitParamsProbe = null,
+        Func<string, int, CancellationToken, Task<HardwareFitLevel?>>? fitParamsProbe = null,
         Action<Action>? dispatchToUi = null)
         => new(item, host, prefs.Load, prefs.Save,
             runtimeDetailsLoader: (_, _) => Task.FromResult(details),
@@ -200,23 +200,27 @@ public sealed class ModelItemDetailsViewModelTests
     }
 
     [Fact]
-    public async Task InitializeAsync_Without_Metadata_Offers_The_Full_Ladder_Unconstrained()
+    public async Task InitializeAsync_Without_Metadata_Tints_Every_Option_Might()
     {
+        // Nothing is known about the size — "might fit" is the honest
+        // verdict, and every option stays selectable (fail open).
         var vm = MakeVm(InstalledItem(), new FakeHost(), new FakePreferences(), details: null);
         await vm.InitializeAsync();
 
         Assert.All(vm.ContextLengths, o => Assert.True(o.IsSupported));
-        Assert.All(vm.ContextLengths, o => Assert.True(o.FitsInMemory));
-        Assert.All(vm.ContextLengths, o => Assert.Equal("", o.TooltipText));
+        Assert.All(vm.ContextLengths, o => Assert.Equal(HardwareFitLevel.Might, o.FitLevel));
+        Assert.All(vm.ContextLengths, o => Assert.True(o.IsSelectable));
+        Assert.All(vm.ContextLengths, o => Assert.Equal("Memory requirement unknown — might fit", o.TooltipText));
         Assert.Equal(4096, vm.SelectedContextLength?.Tokens);
     }
 
     [Fact]
-    public async Task Options_That_Exceed_Available_Memory_Are_Disabled_With_A_Requires_Memory_Tooltip()
+    public async Task Context_Cells_Tint_Green_Orange_Red_Against_The_Memory_Budget()
     {
         // A 256k-max model so the context guard stays out of the way: only
-        // the memory guard can disable. Estimates: 4 GB weights + 128 KiB of
-        // KV per token — 32k needs ~8.3 GB, 64k ~12.6 GB.
+        // the memory bands decide. Estimates: 4 GB weights + 128 KiB of KV
+        // per token — 32k needs ~8.3 GB, 64k ~12.6 GB. Budget 9 GB →
+        // fit ≤ 8.1 GB, might ≤ 11.25 GB, no way beyond.
         var details256K = new ModelRuntimeDetails(
             ModelSizeBytes: 4_000_000_000L,
             ContextInfo: new GgufContextInfo("llama", 262144, 32, 4096, 32, 8, 128));
@@ -225,34 +229,48 @@ public sealed class ModelItemDetailsViewModelTests
         await vm.InitializeAsync();
 
         Assert.Equal(
-            [true, true, true, true, false, false, false],
-            vm.ContextLengths.Select(o => o.FitsInMemory).ToArray());
-        Assert.Equal(
-            [true, true, true, true, false, false, false],
-            vm.ContextLengths.Select(o => o.IsSelectable).ToArray());
+            [HardwareFitLevel.Fit, HardwareFitLevel.Fit, HardwareFitLevel.Fit,
+             HardwareFitLevel.Might, HardwareFitLevel.NoWay,
+             HardwareFitLevel.NoWay, HardwareFitLevel.NoWay],
+            vm.ContextLengths.Select(o => o.FitLevel).ToArray());
         Assert.All(vm.ContextLengths, o => Assert.True(o.IsSupported));
 
-        var tooltip = vm.ContextLengths[4].TooltipText; // 64k
-        Assert.StartsWith("Model requires at least ", tooltip);
-        Assert.EndsWith(" of memory", tooltip);
-        Assert.Contains("GB", tooltip);
+        // Orange stays selectable ("might" means try it); only red disables.
+        Assert.True(vm.ContextLengths[3].IsSelectable);
+        Assert.False(vm.ContextLengths[4].IsSelectable);
+        Assert.False(vm.ContextLengths[5].IsSelectable);
 
-        var enabled = vm.ContextLengths[0].TooltipText; // 4k fits
-        Assert.StartsWith("Requires ", enabled);
-        Assert.EndsWith(" of memory", enabled);
+        // Green, orange and red each explain themselves on hover.
+        var green = vm.ContextLengths[0].TooltipText; // 4k
+        Assert.StartsWith("Requires ", green);
+        Assert.EndsWith(" of memory", green);
 
-        // And a memory-capped option can't be selected.
+        var orange = vm.ContextLengths[3].TooltipText; // 32k
+        Assert.StartsWith("Might not fit: requires ", orange);
+        Assert.Contains("GB", orange);
+
+        var red = vm.ContextLengths[4].TooltipText; // 64k
+        Assert.StartsWith("Model requires at least ", red);
+        Assert.EndsWith(" of memory", red);
+        Assert.Contains("GB", red);
+
+        // The accessible name carries the level as text.
+        Assert.Equal("32k, might fit", vm.ContextLengths[3].AccessibleName);
+
+        // A red option can't be selected; an orange one can.
         vm.SelectContextLength(vm.ContextLengths[4]);
         Assert.Equal(4096, vm.SelectedContextLength?.Tokens);
+        vm.SelectContextLength(vm.ContextLengths[3]);
+        Assert.Equal(32768, vm.SelectedContextLength?.Tokens);
     }
 
     [Fact]
-    public async Task Downloadable_Models_Show_The_Ladder_Grayed_From_The_Catalog_Size()
+    public async Task Downloadable_Models_Tint_The_Ladder_From_The_Catalog_Size()
     {
         // A Hub row with a known size gets the ladder (no GGUF header yet —
-        // every option shows the bare weights) and is grayed out of the box
-        // when the weights fit nowhere: the budget is VRAM + usable RAM, so
-        // a 20 GB model is fine on a 16 GB GPU + 8 GB usable RAM machine…
+        // every option shows the bare weights) and is tinted out of the box
+        // from whether the weights fit: the budget is VRAM + usable RAM, so
+        // a 20 GB model is a fit on a 16 GB GPU + 8 GB usable RAM machine…
         var hub = HubItem();
         hub.SizeBytes = 20_000_000_000UL;
         var vm = MakeVm(hub, new FakeHost(), new FakePreferences(),
@@ -262,15 +280,16 @@ public sealed class ModelItemDetailsViewModelTests
         Assert.True(vm.ContextSectionVisible);
         Assert.Equal(7, vm.ContextLengths.Count);
         Assert.All(vm.ContextLengths, o => Assert.True(o.IsSupported));
-        Assert.All(vm.ContextLengths, o => Assert.True(o.FitsInMemory));
+        Assert.All(vm.ContextLengths, o => Assert.Equal(HardwareFitLevel.Fit, o.FitLevel));
         Assert.All(vm.ContextLengths, o => Assert.Equal(20_000_000_000L, o.EstimatedMemoryBytes));
     }
 
     [Fact]
-    public async Task Downloadable_Models_Whose_Weights_Fit_Nowhere_Gray_Every_Option()
+    public async Task Downloadable_Models_Whose_Weights_Fit_Nowhere_Turn_Every_Option_Red()
     {
-        // …but grayed entirely when the weights alone exceed the budget —
-        // "can this model even load here", answered before the download.
+        // …but red across the board when the weights alone blow past the
+        // optimism band — "can this model even load here", answered before
+        // the download.
         var hub = HubItem();
         hub.SizeBytes = 40_000_000_000UL;
         var vm = MakeVm(hub, new FakeHost(), new FakePreferences(),
@@ -278,7 +297,7 @@ public sealed class ModelItemDetailsViewModelTests
         await vm.InitializeAsync();
 
         Assert.True(vm.ContextSectionVisible);
-        Assert.All(vm.ContextLengths, o => Assert.False(o.FitsInMemory));
+        Assert.All(vm.ContextLengths, o => Assert.Equal(HardwareFitLevel.NoWay, o.FitLevel));
         Assert.All(vm.ContextLengths, o => Assert.False(o.IsSelectable));
         Assert.All(vm.ContextLengths, o => Assert.StartsWith("Model requires at least ", o.TooltipText));
     }
@@ -286,43 +305,49 @@ public sealed class ModelItemDetailsViewModelTests
     [Fact]
     public async Task InitializeAsync_Refines_Option_Fit_With_FitParams_Verdicts()
     {
-        // Heuristic budget is unbounded (everything fits), then fit-params
-        // says only 16k and below actually fit — the 32k option must flip
-        // to grayed. Unsupported options (64k+, above the 32k max) are
-        // never probed.
+        // Heuristic budget is unbounded (everything is green), then
+        // fit-params says only 16k and below actually fit — the 32k option
+        // must flip to red. Unsupported options (64k+, above the 32k max)
+        // are never probed.
         var probed = new List<int>();
         var vm = MakeVm(InstalledItem(), new FakeHost(), new FakePreferences(),
             details: Details32K with { FilePath = "/fake/model.gguf" },
             fitParamsProbe: (_, tokens, _) =>
             {
                 probed.Add(tokens);
-                return Task.FromResult<bool?>(tokens <= 16384);
+                return Task.FromResult<HardwareFitLevel?>(
+                    tokens <= 16384 ? HardwareFitLevel.Fit : HardwareFitLevel.NoWay);
             });
         await vm.InitializeAsync();
 
         Assert.Equal([4096, 8192, 16384, 32768], probed);
         Assert.Equal(
-            [true, true, true, false, true, true, true],
-            vm.ContextLengths.Select(o => o.FitsInMemory).ToArray());
+            [HardwareFitLevel.Fit, HardwareFitLevel.Fit, HardwareFitLevel.Fit,
+             HardwareFitLevel.NoWay, HardwareFitLevel.Fit,
+             HardwareFitLevel.Fit, HardwareFitLevel.Fit],
+            vm.ContextLengths.Select(o => o.FitLevel).ToArray());
         Assert.False(vm.ContextLengths[3].IsSelectable);
     }
 
     [Fact]
-    public async Task InitializeAsync_Keeps_Heuristic_Graying_When_FitParams_Has_No_Verdict()
+    public async Task InitializeAsync_Keeps_Heuristic_Tints_When_FitParams_Has_No_Verdict()
     {
         // A null verdict (no binary, CPU-era build, unreadable model) keeps
-        // the heuristic: a budget-grayed option stays grayed, a fitting one
-        // stays enabled — fit-params never overrides with "unknown".
+        // the heuristic: fit-params never overrides with "unknown".
         var vm = MakeVm(InstalledItem(), new FakeHost(), new FakePreferences(),
             details: Details32K with { FilePath = "/fake/model.gguf" },
             memoryBudget: () => 5_000_000_000UL,
-            fitParamsProbe: (_, _, _) => Task.FromResult<bool?>(null));
+            fitParamsProbe: (_, _, _) => Task.FromResult<HardwareFitLevel?>(null));
         await vm.InitializeAsync();
 
-        // 4k (~4.5 GB) fits the 5 GB budget, 8k (~5.1 GB) and up don't.
+        // 4 GB weights + 128 KiB KV/token against a 5 GB budget: 4k (~4.5 GB)
+        // is a tight fit (orange), 8k and 16k orange too, 32k (~8.3 GB) red —
+        // exactly what the heuristic said before the probe ran.
         Assert.Equal(
-            [true, false, false, false, false, false, false],
-            vm.ContextLengths.Select(o => o.FitsInMemory).ToArray());
+            [HardwareFitLevel.Might, HardwareFitLevel.Might, HardwareFitLevel.Might,
+             HardwareFitLevel.NoWay, HardwareFitLevel.NoWay,
+             HardwareFitLevel.NoWay, HardwareFitLevel.NoWay],
+            vm.ContextLengths.Select(o => o.FitLevel).ToArray());
     }
 
     [Fact]
@@ -334,21 +359,22 @@ public sealed class ModelItemDetailsViewModelTests
         var dispatched = new List<Action>();
         var vm = MakeVm(InstalledItem(), new FakeHost(), new FakePreferences(),
             details: Details32K with { FilePath = "/fake/model.gguf" },
-            fitParamsProbe: (_, tokens, _) => Task.FromResult<bool?>(tokens <= 8192),
+            fitParamsProbe: (_, tokens, _) => Task.FromResult<HardwareFitLevel?>(
+                tokens <= 8192 ? HardwareFitLevel.Fit : HardwareFitLevel.NoWay),
             dispatchToUi: dispatched.Add);
         await vm.InitializeAsync();
 
-        var option = vm.ContextLengths[2]; // 16k — fits the heuristic, fails fit-params
-        Assert.True(option.FitsInMemory); // queued, not applied yet
+        var option = vm.ContextLengths[2]; // 16k — green from the heuristic, red from fit-params
+        Assert.Equal(HardwareFitLevel.Fit, option.FitLevel); // queued, not applied yet
         Assert.NotEmpty(dispatched);
 
         var raised = new List<string?>();
         option.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
         dispatched.ForEach(a => a());
 
-        Assert.False(option.FitsInMemory);
+        Assert.Equal(HardwareFitLevel.NoWay, option.FitLevel);
         Assert.False(option.IsSelectable);
-        Assert.Contains("FitsInMemory", raised);
+        Assert.Contains("FitLevel", raised);
         Assert.Contains("IsSelectable", raised);
         Assert.Contains("TooltipText", raised);
     }
@@ -361,7 +387,7 @@ public sealed class ModelItemDetailsViewModelTests
 
         var capped = vm.ContextLengths[4]; // 64k > the model's 32k max
         Assert.False(capped.IsSupported);
-        Assert.True(capped.FitsInMemory);
+        Assert.Equal(HardwareFitLevel.Fit, capped.FitLevel); // memory is fine — the cap still wins
         Assert.False(capped.IsSelectable);
         Assert.Equal("This model supports up to 32k of context", capped.TooltipText);
     }
@@ -369,10 +395,11 @@ public sealed class ModelItemDetailsViewModelTests
     [Fact]
     public async Task RestoreSelection_Skips_A_Memory_Capped_Preference()
     {
-        // ~5 GB free: 4k fits (~4.5 GB), 8k (~5.1 GB) and up don't — the
-        // persisted 16k preference must fall back to the 4k default.
+        // ~5 GB free: 32k (~8.3 GB) is a hard no — the persisted 32k
+        // preference must fall back to the 4k default (orange at ~4.5 GB,
+        // but selectable).
         var prefs = new FakePreferences();
-        prefs.Saved["unsloth/Qwen3-4B-GGUF:Q4_K_M"] = 16384;
+        prefs.Saved["unsloth/Qwen3-4B-GGUF:Q4_K_M"] = 32768;
         var vm = MakeVm(InstalledItem(), new FakeHost(), prefs,
             memoryBudget: () => 5_000_000_000UL);
         await vm.InitializeAsync();
