@@ -8,12 +8,12 @@ namespace LlamaApp.Views
 {
     /// <summary>
     /// Pure mapping from a <see cref="HardwareFitLevel"/> verdict to its UI
-    /// skin: the short label ("Fits" / "Might fit" / "Won't fit") and the
-    /// green/orange/red brush a model variation is tinted with in the
-    /// variant picker — the three levels of
-    /// <see cref="LlamaApp.Llama.HardwareFitHeuristic"/> made visible.
-    /// Kept separate from the view models so the rules stay unit-testable,
-    /// mirroring <see cref="QuantizationPresentation"/>.
+    /// skin: the green/orange/red brush a model variation is tinted with —
+    /// the color alone shows the level on screen — plus the short name
+    /// ("Fits" / "Might fit" / "Won't fit") that spells it out for
+    /// accessible names and narration. Kept separate from the view models
+    /// so the rules stay unit-testable, mirroring
+    /// <see cref="QuantizationPresentation"/>.
     /// </summary>
     public static class HardwareFitPresentation
     {
@@ -27,8 +27,10 @@ namespace LlamaApp.Views
         public static readonly Color NoWayColor = Color.FromArgb(0xFF, 0xD9, 0x3B, 0x30);
 
         /// <summary>
-        /// The short row label for a level. The wording is plain on purpose
-        /// — the quant row already carries the technical detail.
+        /// The short name for a level. The visible UI trusts the color —
+        /// this name spells the level out where color can't reach:
+        /// accessible names and narration. Plain wording on purpose; the
+        /// quant row already carries the technical detail.
         /// </summary>
         public static string Label(HardwareFitLevel level) => level switch
         {

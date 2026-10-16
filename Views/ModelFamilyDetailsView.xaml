@@ -152,12 +152,14 @@
                         <DataTemplate x:DataType="local:ModelFamilyVariantOption">
                             <!-- The hardware-fit heuristic's verdict tints
                                  the variation green (fits), orange (might)
-                                 or red (won't fit), with the short label in
-                                 the row and the numbers on hover — the row
-                                 stays tappable at every level (the download
-                                 preflight shows the same numbers in a
-                                 flyout, same as the browse rows). Verdicts
-                                 land after render — OneWay bindings. -->
+                                 or red (won't fit) — the color alone shows
+                                 the level (spelled out in the accessible
+                                 name), the numbers ride the hover tooltip.
+                                 The row stays tappable at every level (the
+                                 download preflight shows the same numbers
+                                 in a flyout, same as the browse rows).
+                                 Verdicts land after render — OneWay
+                                 bindings. -->
                             <Button Click="Variant_Click"
                                     Tag="{x:Bind}"
                                     IsEnabled="{x:Bind IsSelectable}"
@@ -174,7 +176,6 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
@@ -197,12 +198,6 @@
                                                TextTrimming="CharacterEllipsis"
                                                VerticalAlignment="Center" />
                                     <TextBlock Grid.Column="3"
-                                               Text="{x:Bind FitLabel, Mode=OneWay}"
-                                               FontSize="11"
-                                               FontWeight="SemiBold"
-                                               Foreground="{x:Bind FitBrush, Mode=OneWay}"
-                                               VerticalAlignment="Center" />
-                                    <TextBlock Grid.Column="4"
                                                Text="{x:Bind StateCaption}"
                                                FontSize="11"
                                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"

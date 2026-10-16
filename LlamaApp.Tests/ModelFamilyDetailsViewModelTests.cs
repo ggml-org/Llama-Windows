@@ -192,23 +192,21 @@ public sealed class ModelFamilyDetailsViewModelTests
 
         var (fits, unfit) = (vm.Variants[0], vm.Variants[1]);
         Assert.Equal(HardwareFitLevel.Fit, fits.FitLevel);
-        Assert.Equal("Fits", fits.FitLabel);
         Assert.Null(fits.RowTooltip); // no note from the probe → no tooltip
 
         Assert.Equal(HardwareFitLevel.NoWay, unfit.FitLevel);
-        Assert.Equal("Won't fit", unfit.FitLabel);
         Assert.Equal("Won't fit: needs about 99 GB.", unfit.RowTooltip);
         Assert.True(unfit.IsSelectable); // red, not disabled
+        // The color shows the level on screen; the accessible name words it.
         Assert.Contains("won't fit", unfit.AccessibleName);
     }
 
     [Fact]
     public async Task Variant_Rows_Tint_Green_Orange_Red_By_Level()
     {
-        // One build per level: the row's level + label must map through to
-        // the tint (the brushes themselves are XAML objects and never
-        // instantiate here — the color mapping is covered in
-        // HardwareFitPresentationTests).
+        // One build per level: the row's level must map through to the tint
+        // (the brushes themselves are XAML objects and never instantiate
+        // here — the color mapping is covered in HardwareFitPresentationTests).
         var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost(),
             variantFitProbe: (size, build, _) => Task.FromResult(new VariantFitVerdict(
                 build == Q4 ? HardwareFitLevel.Fit
@@ -218,14 +216,12 @@ public sealed class ModelFamilyDetailsViewModelTests
         await vm.FitEvaluation;
 
         Assert.Equal(HardwareFitLevel.Fit, vm.Variants[0].FitLevel);
-        Assert.Equal("Fits", vm.Variants[0].FitLabel);
         Assert.Equal(HardwareFitLevel.Might, vm.Variants[1].FitLevel);
-        Assert.Equal("Might fit", vm.Variants[1].FitLabel);
+        Assert.Contains("might fit", vm.Variants[1].AccessibleName);
 
         vm.SelectSize(vm.Sizes[1]);
         var red = Assert.Single(vm.Variants);
         Assert.Equal(HardwareFitLevel.NoWay, red.FitLevel);
-        Assert.Equal("Won't fit", red.FitLabel);
     }
 
     [Fact]

@@ -7,11 +7,12 @@ namespace LlamaApp.Tests;
 /// <summary>
 /// Unit tests for the fit-level presentation
 /// (<see cref="HardwareFitPresentation"/>) — the green/orange/red mapping
-/// of the three <see cref="HardwareFitLevel"/> verdicts and the short row
-/// labels. Colors are plain structs and stay testable; the brushes built
-/// from them are XAML objects and never instantiate here (the test host
-/// runs without the Windows App SDK runtime — see LlamaApp.Tests.csproj),
-/// mirroring <see cref="QuantizationPresentationTests"/>.
+/// of the three <see cref="HardwareFitLevel"/> verdicts and the short
+/// spoken names that carry the level where color can't reach (the visible
+/// UI shows the tint only). Colors are plain structs and stay testable;
+/// the brushes built from them are XAML objects and never instantiate here
+/// (the test host runs without the Windows App SDK runtime — see
+/// LlamaApp.Tests.csproj), mirroring <see cref="QuantizationPresentationTests"/>.
 /// </summary>
 public class HardwareFitPresentationTests
 {
@@ -19,9 +20,9 @@ public class HardwareFitPresentationTests
     [InlineData(HardwareFitLevel.Fit, "Fits")]
     [InlineData(HardwareFitLevel.Might, "Might fit")]
     [InlineData(HardwareFitLevel.NoWay, "Won't fit")]
-    public void Every_Level_Has_A_Short_Row_Label(HardwareFitLevel level, string label)
+    public void Every_Level_Has_A_Short_Spoken_Name(HardwareFitLevel level, string name)
     {
-        Assert.Equal(label, HardwareFitPresentation.Label(level));
+        Assert.Equal(name, HardwareFitPresentation.Label(level));
     }
 
     [Theory]

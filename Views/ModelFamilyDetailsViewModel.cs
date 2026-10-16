@@ -181,7 +181,6 @@ namespace LlamaApp.Views
                 _fitLevel = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(FitBrush));
-                OnPropertyChanged(nameof(FitLabel));
                 OnPropertyChanged(nameof(AccessibleName));
             }
         }
@@ -191,12 +190,6 @@ namespace LlamaApp.Views
         public Brush FitBrush => FitLevel is { } level
             ? HardwareFitPresentation.BrushFor(level)
             : HardwareFitPresentation.DefaultTextBrush;
-
-        /// <summary>The short fit label ("Fits" / "Might fit" / "Won't fit"),
-        /// empty until a verdict lands.</summary>
-        public string FitLabel => FitLevel is { } level
-            ? HardwareFitPresentation.Label(level)
-            : "";
 
         /// <summary>Why the variant fits or doesn't (null until the probe
         /// answers) — row tooltip.</summary>
