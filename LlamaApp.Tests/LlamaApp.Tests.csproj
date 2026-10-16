@@ -10,12 +10,16 @@
         <Nullable>enable</Nullable>
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
-        <Platforms>x64</Platforms>
+        <!-- x64 is the CI default; ARM64 runs natively on ARM64 Windows
+             (no emulation, no separate toolchain). -->
+        <Platforms>x64;ARM64</Platforms>
     </PropertyGroup>
 
     <!-- The referenced app project is MSIX-packaged and cannot build as
-         AnyCPU — coerce to x64 (mirrors the app's own Platform coercion). -->
-    <PropertyGroup Condition="'$(Platform)' != 'x64'">
+         AnyCPU — a neutral build coerces to x64 (mirrors the app's own
+         Platform coercion). An explicit platform (x64 or ARM64) passes
+         through unchanged. -->
+    <PropertyGroup Condition="'$(Platform)' == 'AnyCPU' Or '$(Platform)' == ''">
         <Platform>x64</Platform>
     </PropertyGroup>
 
@@ -30,12 +34,14 @@
 
     <ItemGroup>
         <!-- SetPlatform: the app is MSIX-packaged and rejects neutral builds;
-             build the reference as x64 regardless of this project's platform.
+             build the reference as the SAME concrete platform as this project
+             (x64 tests ↔ x64 app, ARM64 tests ↔ ARM64 app — an arm64 test host
+             cannot load an x64 LlamaApp.dll and vice versa).
              AdditionalProperties: the test host is unpackaged, so the WindowsAppRuntime
              auto-initializer baked into the app assembly would fail at module load —
              disable it for this reference build (the tests only exercise managed logic). -->
         <ProjectReference Include="..\LlamaApp.csproj"
-                          SetPlatform="Platform=x64"
+                          SetPlatform="Platform=$(Platform)"
                           AdditionalProperties="WindowsAppSdkBootstrapInitialize=false;WindowsAppSdkDeploymentManagerInitialize=false;WindowsAppSdkUndockedRegFreeWinRTInitialize=false;WindowsAppSdkCompatibilityInitialize=false" />
         <ProjectReference Include="..\LlamaApp.HuggingFace\LlamaApp.HuggingFace.csproj" />
     </ItemGroup>
