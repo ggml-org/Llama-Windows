@@ -1,4 +1,5 @@
 using LlamaApp.HuggingFace;
+using LlamaApp.Llama;
 using LlamaApp.Views;
 using Xunit;
 
@@ -172,32 +173,59 @@ public sealed class ModelFamilyDetailsViewModelTests
 
     // ---- Fit evaluation ----
 
-    /// <summary>Probe that fits builds below a size threshold.</summary>
+    /// <summary>Probe that fits builds below a size threshold — the rest
+    /// get a "won't fit" verdict and its note.</summary>
     private static Func<ModelFamilySize, ModelFamilyBuild, CancellationToken, Task<VariantFitVerdict>>
         FitBelow(ulong thresholdBytes) =>
         (_, build, _) => Task.FromResult(new VariantFitVerdict(
-            build.SizeBytes < thresholdBytes,
-            "May not fit: needs about 99 GB."));
+            build.SizeBytes < thresholdBytes ? HardwareFitLevel.Fit : HardwareFitLevel.NoWay,
+            build.SizeBytes < thresholdBytes ? null : "Won't fit: needs about 99 GB."));
 
     [Fact]
-    public async Task Unfit_Variants_Dim_And_Carry_The_Fit_Note()
+    public async Task Unfit_Variants_Tint_Red_And_Carry_The_Fit_Note()
     {
-        // Only the 2.5 GB build fits: the 4.9 GB one must dim (but stay
-        // tappable — the preflight flyout owns the explanation).
+        // Only the 2.5 GB build fits: the 4.9 GB one must turn red (but
+        // stay tappable — the preflight flyout owns the explanation).
         var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost(),
             variantFitProbe: FitBelow(4_000_000_000UL));
         await vm.FitEvaluation;
 
         var (fits, unfit) = (vm.Variants[0], vm.Variants[1]);
-        Assert.True(fits.FitsOnDevice);
-        Assert.Equal(1.0, fits.RowOpacity);
-        Assert.Null(fits.RowTooltip);
+        Assert.Equal(HardwareFitLevel.Fit, fits.FitLevel);
+        Assert.Equal("Fits", fits.FitLabel);
+        Assert.Null(fits.RowTooltip); // no note from the probe → no tooltip
 
-        Assert.False(unfit.FitsOnDevice);
-        Assert.Equal(0.4, unfit.RowOpacity);
-        Assert.Equal("May not fit: needs about 99 GB.", unfit.RowTooltip);
-        Assert.True(unfit.IsSelectable); // dimmed, not disabled
-        Assert.Contains("May not fit", unfit.AccessibleName);
+        Assert.Equal(HardwareFitLevel.NoWay, unfit.FitLevel);
+        Assert.Equal("Won't fit", unfit.FitLabel);
+        Assert.Equal("Won't fit: needs about 99 GB.", unfit.RowTooltip);
+        Assert.True(unfit.IsSelectable); // red, not disabled
+        Assert.Contains("won't fit", unfit.AccessibleName);
+    }
+
+    [Fact]
+    public async Task Variant_Rows_Tint_Green_Orange_Red_By_Level()
+    {
+        // One build per level: the row's level + label must map through to
+        // the tint (the brushes themselves are XAML objects and never
+        // instantiate here — the color mapping is covered in
+        // HardwareFitPresentationTests).
+        var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost(),
+            variantFitProbe: (size, build, _) => Task.FromResult(new VariantFitVerdict(
+                build == Q4 ? HardwareFitLevel.Fit
+                : build == Q8 ? HardwareFitLevel.Might
+                : HardwareFitLevel.NoWay,
+                "note")));
+        await vm.FitEvaluation;
+
+        Assert.Equal(HardwareFitLevel.Fit, vm.Variants[0].FitLevel);
+        Assert.Equal("Fits", vm.Variants[0].FitLabel);
+        Assert.Equal(HardwareFitLevel.Might, vm.Variants[1].FitLevel);
+        Assert.Equal("Might fit", vm.Variants[1].FitLabel);
+
+        vm.SelectSize(vm.Sizes[1]);
+        var red = Assert.Single(vm.Variants);
+        Assert.Equal(HardwareFitLevel.NoWay, red.FitLevel);
+        Assert.Equal("Won't fit", red.FitLabel);
     }
 
     [Fact]
@@ -214,7 +242,7 @@ public sealed class ModelFamilyDetailsViewModelTests
 
         Assert.False(vm.Sizes[1].FitsOnDevice);
         Assert.Equal(0.4, vm.Sizes[1].CellOpacity);
-        Assert.StartsWith("May not fit", vm.Sizes[1].CellTooltip);
+        Assert.StartsWith("Won't fit", vm.Sizes[1].CellTooltip);
     }
 
     [Fact]
@@ -227,43 +255,45 @@ public sealed class ModelFamilyDetailsViewModelTests
             variantFitProbe: (size, build, _) =>
             {
                 probeCalls++;
-                return Task.FromResult(new VariantFitVerdict(build.SizeBytes < 4_000_000_000UL, "note"));
+                return Task.FromResult(new VariantFitVerdict(
+                    build.SizeBytes < 4_000_000_000UL ? HardwareFitLevel.Fit : HardwareFitLevel.NoWay,
+                    "note"));
             });
         await vm.FitEvaluation;
 
         vm.SelectSize(vm.Sizes[1]); // 12B
 
         var variant = Assert.Single(vm.Variants);
-        Assert.False(variant.FitsOnDevice);
+        Assert.Equal(HardwareFitLevel.NoWay, variant.FitLevel);
         Assert.Equal("note", variant.FitNote);
         Assert.Equal(3, probeCalls); // 3 builds total, no second pass
     }
 
     [Fact]
-    public async Task Failed_Probes_Never_Dim()
+    public async Task Failed_Probes_Never_Tint()
     {
         var vm = new ModelFamilyDetailsViewModel(Gemma(), new FakeHost(),
             variantFitProbe: (_, _, _) => throw new InvalidOperationException("probe died"));
         await vm.FitEvaluation;
 
-        Assert.All(vm.Variants, v => Assert.True(v.FitsOnDevice));
+        Assert.All(vm.Variants, v => Assert.Null(v.FitLevel));
         Assert.All(vm.Sizes, s => Assert.True(s.FitsOnDevice));
     }
 
     [Fact]
-    public async Task Installed_Variants_Are_Not_Dimmed_By_Fit_Verdicts()
+    public async Task Installed_Variants_Are_Not_Tinted_By_Fit_Verdicts()
     {
-        // What's on disk is on disk — an installed build keeps full opacity
-        // even when the probe says it wouldn't fit now.
+        // What's on disk is on disk — an installed build keeps its neutral
+        // row even when the probe says it wouldn't fit now.
         var host = new FakeHost();
         host.InstalledIds.Add("ggml-org/gemma-3-4b-it-GGUF:Q8_0");
         var vm = new ModelFamilyDetailsViewModel(Gemma(), host,
             variantFitProbe: FitBelow(1UL)); // nothing fits
         await vm.FitEvaluation;
 
-        Assert.False(vm.Variants[0].FitsOnDevice); // Q4 dimmed
+        Assert.Equal(HardwareFitLevel.NoWay, vm.Variants[0].FitLevel); // Q4 red
         Assert.True(vm.Variants[1].IsInstalled);
-        Assert.Equal(1.0, vm.Variants[1].RowOpacity); // installed stays lit
+        Assert.Null(vm.Variants[1].FitLevel); // installed stays untinted
     }
 
     [Fact]
@@ -275,11 +305,11 @@ public sealed class ModelFamilyDetailsViewModelTests
             variantFitProbe: (_, _, _) => gate.Task);
 
         vm.Dispose();
-        gate.SetResult(new VariantFitVerdict(false, "too big"));
+        gate.SetResult(new VariantFitVerdict(HardwareFitLevel.NoWay, "too big"));
         await vm.FitEvaluation;
 
         // The verdict arrived after cancellation — nothing was applied.
-        Assert.All(vm.Variants, v => Assert.True(v.FitsOnDevice));
+        Assert.All(vm.Variants, v => Assert.Null(v.FitLevel));
         Assert.All(vm.Sizes, s => Assert.True(s.FitsOnDevice));
     }
 }

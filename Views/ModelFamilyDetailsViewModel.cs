@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using LlamaApp.HuggingFace;
+using LlamaApp.Llama;
 using Microsoft.UI.Xaml.Media;
 
 namespace LlamaApp.Views
@@ -29,12 +30,18 @@ namespace LlamaApp.Views
     }
 
     /// <summary>
-    /// The fit verdict for one variant (size + build): whether the build is
-    /// estimated to fit this machine, and the user-facing reason when it
-    /// doesn't (same wording the browse-list dimming and the download
-    /// preflight flyout use — one story everywhere).
+    /// The fit verdict for one variant (size + build): the three-level
+    /// hardware-fit classification — green/orange/red on the row — and the
+    /// user-facing note explaining it (same numbers the download preflight
+    /// flyout shows — one story everywhere).
+    /// <see cref="Fits"/> collapses the levels for the size-cell rule: a
+    /// size stays lit while any of its builds is not a "won't fit".
     /// </summary>
-    public sealed record VariantFitVerdict(bool Fits, string? Note);
+    public sealed record VariantFitVerdict(HardwareFitLevel Level, string? Note)
+    {
+        /// <summary>True unless the build is a "no way" — a "might" still fits.</summary>
+        public bool Fits => Level != HardwareFitLevel.NoWay;
+    };
 
     /// <summary>A selectable parameter size of the family (the "context ladder" cells).</summary>
     public sealed class ModelFamilySizeOption : INotifyPropertyChanged
@@ -122,7 +129,7 @@ namespace LlamaApp.Views
     /// </summary>
     public sealed class ModelFamilyVariantOption : INotifyPropertyChanged
     {
-        private bool _fitsOnDevice = true;
+        private HardwareFitLevel? _fitLevel;
         private string? _fitNote;
 
         public ModelFamilyVariantOption(
@@ -158,26 +165,41 @@ namespace LlamaApp.Views
         public bool IsSelectable => !IsInstalled;
 
         /// <summary>
-        /// False when this build is estimated not to fit this machine — the
-        /// row dims (but stays tappable: the download preflight then shows
-        /// the same numbers in its flyout, matching the browse-list rows).
-        /// Default-true until the fit probe says otherwise; a failed or
-        /// missing probe never dims (fail open).
+        /// The hardware-fit verdict for this build — the row's
+        /// green/orange/red tint (null until the probe answers, and for
+        /// installed rows: what's on disk is on disk). The row stays
+        /// tappable at every level (the download preflight then shows the
+        /// same numbers in its flyout, matching the browse-list rows).
+        /// A failed or missing probe leaves it null (fail open).
         /// </summary>
-        public bool FitsOnDevice
+        public HardwareFitLevel? FitLevel
         {
-            get => _fitsOnDevice;
+            get => _fitLevel;
             set
             {
-                if (_fitsOnDevice == value) return;
-                _fitsOnDevice = value;
+                if (_fitLevel == value) return;
+                _fitLevel = value;
                 OnPropertyChanged();
-                OnPropertyChanged(nameof(RowOpacity));
+                OnPropertyChanged(nameof(FitBrush));
+                OnPropertyChanged(nameof(FitLabel));
                 OnPropertyChanged(nameof(AccessibleName));
             }
         }
 
-        /// <summary>Why the variant doesn't fit (null when it does) — row tooltip.</summary>
+        /// <summary>The row tint: green/orange/red once a verdict lands,
+        /// the theme's default text brush before that.</summary>
+        public Brush FitBrush => FitLevel is { } level
+            ? HardwareFitPresentation.BrushFor(level)
+            : HardwareFitPresentation.DefaultTextBrush;
+
+        /// <summary>The short fit label ("Fits" / "Might fit" / "Won't fit"),
+        /// empty until a verdict lands.</summary>
+        public string FitLabel => FitLevel is { } level
+            ? HardwareFitPresentation.Label(level)
+            : "";
+
+        /// <summary>Why the variant fits or doesn't (null until the probe
+        /// answers) — row tooltip.</summary>
         public string? FitNote
         {
             get => _fitNote;
@@ -190,17 +212,13 @@ namespace LlamaApp.Views
             }
         }
 
-        /// <summary>Row opacity: dimmed when the build fits nowhere (installed
-        /// rows stay lit — what's on disk is on disk).</summary>
-        public double RowOpacity => IsInstalled || FitsOnDevice ? 1.0 : 0.4;
-
-        /// <summary>Row tooltip: the fit note, or nothing when the build fits.</summary>
-        public string? RowTooltip => FitsOnDevice ? null : FitNote;
+        /// <summary>Row tooltip: the fit note (every level carries one).</summary>
+        public string? RowTooltip => FitNote;
 
         /// <summary>The caption replacing "Default" once the variant is on disk.</summary>
         public string StateCaption => IsInstalled ? "Installed" : IsDefault ? "Default" : "";
 
-        /// <summary>The row's accessible name, e.g. "Balanced, Q4_K_M · 2.5 GB, default. Download."</summary>
+        /// <summary>The row's accessible name, e.g. "Balanced, Q4_K_M · 2.5 GB, default, fits. Download."</summary>
         public string AccessibleName
         {
             get
@@ -208,7 +226,8 @@ namespace LlamaApp.Views
                 var parts = new List<string> { FriendlyName };
                 if (!string.IsNullOrEmpty(DetailText)) parts.Add(DetailText);
                 if (StateCaption.Length > 0) parts.Add(StateCaption.ToLowerInvariant());
-                if (!IsInstalled && !FitsOnDevice) parts.Add("May not fit on this machine.");
+                if (!IsInstalled && FitLevel is { } level)
+                    parts.Add(HardwareFitPresentation.Label(level).ToLowerInvariant());
                 parts.Add(IsInstalled ? "Already installed." : "Download.");
                 return string.Join(", ", parts);
             }
@@ -252,7 +271,7 @@ namespace LlamaApp.Views
             SelectedSize = Sizes.FirstOrDefault();
 
             // Fit verdicts land after the rows render (the probe awaits the
-            // cached device list) — rows start lit and dim in place.
+            // cached device list) — rows start untinted and get colored in place.
             if (variantFitProbe is not null)
             {
                 _fitCts = new CancellationTokenSource();
@@ -341,7 +360,7 @@ namespace LlamaApp.Views
                 // (switching sizes and back rebuilds rows from scratch).
                 if (!option.IsInstalled && _fitVerdicts.TryGetValue(build, out var verdict))
                 {
-                    option.FitsOnDevice = verdict.Fits;
+                    option.FitLevel = verdict.Level;
                     option.FitNote = verdict.Note;
                 }
                 Variants.Add(option);
@@ -354,13 +373,14 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// Probes every build of every size (sequentially — the probe is
-        /// cheap: a cached device list plus pure estimator math) and dims the
-        /// rows a build doesn't fit: variant rows individually, size cells
-        /// when NONE of their builds fits (the same any-build-fits rule the
-        /// browse list uses for families). Verdicts are cached per build so a
-        /// size switch rebuilds rows with the verdicts already applied. A
-        /// failed probe counts as "unknown" and never dims (fail open),
-        /// matching every other fit surface in the app.
+        /// cheap: a cached device list plus pure estimator math) and tints
+        /// the rows by verdict: variant rows green/orange/red individually,
+        /// size cells dimmed only when NONE of their builds has any hope
+        /// (the same any-build-fits rule the browse list uses for
+        /// families). Verdicts are cached per build so a size switch
+        /// rebuilds rows with the verdicts already applied. A failed probe
+        /// counts as "unknown" and never tints (fail open), matching every
+        /// other fit surface in the app.
         /// </summary>
         private async Task EvaluateAllFitsAsync(CancellationToken token)
         {
@@ -424,7 +444,7 @@ namespace LlamaApp.Views
                     var visible = Variants.FirstOrDefault(v => v.Build == build);
                     if (visible is { IsInstalled: false })
                     {
-                        visible.FitsOnDevice = verdict.Fits;
+                        visible.FitLevel = verdict.Level;
                         visible.FitNote = verdict.Note;
                     }
                 }

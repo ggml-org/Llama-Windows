@@ -1872,6 +1872,33 @@ public sealed class LlamaManager
     }
 
     /// <summary>
+    /// The three-level counterpart of <see cref="CheckModelFitAsync"/>:
+    /// classifies a model build as fit / might / no way (the green/orange/red
+    /// verdicts the variant picker shows) from the same catalog metadata,
+    /// against the same live device + RAM probes. See
+    /// <see cref="HardwareFitHeuristic"/> for the decision rules. Never
+    /// throws; unknown inputs land on "might", never block.
+    /// </summary>
+    /// <param name="parameterCount">Catalog params label, e.g. <c>"20B"</c>,
+    /// <c>"26B-A4B"</c>, <c>"E4B"</c> — empty/null when unknown.</param>
+    /// <param name="quant">Quant label, e.g. <c>"Q4_K_M"</c>, <c>"mxfp4"</c>.</param>
+    /// <param name="fileSizeBytes">GGUF size in bytes (0 when unknown) — the
+    /// best weight-size signal when present.</param>
+    public async Task<HardwareFitVerdict> CheckHardwareFitAsync(
+        string? parameterCount, string? quant, ulong fileSizeBytes,
+        CancellationToken cancel = default)
+    {
+        var devices = await ListDevicesAsync(cancel);
+        ulong? availableRam = SystemMemory.TryGet(out _, out var avail) ? avail : null;
+        var estimate = ModelMemoryEstimator.Estimate(parameterCount, quant, fileSizeBytes);
+        var result = HardwareFitHeuristic.Classify(estimate, devices, availableRam);
+        Log.Info($"hardware fit: params={parameterCount ?? "<none>"} quant={quant ?? "<none>"} " +
+            $"file={fileSizeBytes}B → level={result.Level} " +
+            $"(needs {result.RequiredBytes}B of {result.BudgetBytes}B: {result.Note})");
+        return result;
+    }
+
+    /// <summary>
     /// Cached fit-params probe results + timestamps, keyed by (model path,
     /// context tokens) — see <see cref="QueryFitParamsAsync"/>.
     /// </summary>

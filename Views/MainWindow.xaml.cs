@@ -1622,14 +1622,15 @@ namespace LlamaApp.Views
         {
             DisposeDetails(); // the two details views are mutually exclusive
             var vm = new ModelFamilyDetailsViewModel(family.Family, host: this,
-                // Same math the browse-list dimming and the download preflight
-                // use (estimator + device/RAM probe), so a dimmed variant,
-                // a dimmed family row, and a blocked download always agree.
+                // The three-level hardware-fit heuristic (estimator +
+                // device/RAM probe) — the same math the download preflight
+                // uses, so a red variant, a dimmed family row, and a blocked
+                // download always agree.
                 variantFitProbe: async (size, build, token) =>
                 {
-                    var fit = await LlamaManager.Shared.CheckModelFitAsync(
+                    var verdict = await LlamaManager.Shared.CheckHardwareFitAsync(
                         size.Params, build.Quant, build.SizeBytes, token);
-                    return new VariantFitVerdict(fit.Fits, fit.Fits ? null : DescribeFitFailure(fit));
+                    return new VariantFitVerdict(verdict.Level, verdict.Note);
                 });
             _familyDetailsViewModel = vm;
             FamilyDetailsView.SetViewModel(vm);
