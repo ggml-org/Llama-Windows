@@ -1384,20 +1384,24 @@ public sealed class LlamaManager
     /// <c>[repo:quant]</c> section per model that has a custom context length
     /// and/or a speculative-decoding spec type, as
     /// <c>ctx-size = N</c> / <c>spec-type = draft-…</c> lines. A model with
-    /// both appears once with both lines. Pure so the exact shape — the
-    /// section spelling and key names the router's INI parser accepts
-    /// (<c>rm_leading_dashes</c> of the CLI long options) — is unit-testable.
+    /// both appears once with both lines. Ids that can't head a section
+    /// safely (brackets, control characters) and values that can't sit on a
+    /// line safely are dropped rather than rendered — see
+    /// <see cref="IsSafeSectionId"/>/<see cref="IsSafeIniValue"/>. Pure so the
+    /// exact shape — the section spelling and key names the router's INI
+    /// parser accepts (<c>rm_leading_dashes</c> of the CLI long options) — is
+    /// unit-testable.
     /// </summary>
     internal static string RenderModelsPresetIni(
         IEnumerable<KeyValuePair<string, int>> contextLengths,
         IEnumerable<KeyValuePair<string, string>>? speculativeTypes = null)
     {
-        var spec = speculativeTypes?.Where(kv => !string.IsNullOrWhiteSpace(kv.Value)).ToDictionary() ?? [];
+        var spec = speculativeTypes?.Where(kv => IsSafeIniValue(kv.Value)).ToDictionary() ?? [];
 
         var sb = new StringBuilder();
         foreach (var (id, ctx) in contextLengths)
         {
-            if (ctx <= 0 || string.IsNullOrWhiteSpace(id)) continue;
+            if (ctx <= 0 || !IsSafeSectionId(id)) continue;
             sb.Append('[').Append(id).Append(']').Append('\n');
             sb.Append("ctx-size = ").Append(ctx).Append('\n');
             if (spec.TryGetValue(id, out var specType))
@@ -1410,12 +1414,35 @@ public sealed class LlamaManager
         // Models with only a spec type (no custom context length).
         foreach (var (id, specType) in spec)
         {
-            if (string.IsNullOrWhiteSpace(id)) continue;
+            if (!IsSafeSectionId(id)) continue;
             sb.Append('[').Append(id).Append(']').Append('\n');
             sb.Append("spec-type = ").Append(specType).Append('\n').Append('\n');
         }
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Whether a model id can head a preset INI section: non-empty, no
+    /// <c>[</c>/<c>]</c> (either would end the section early — a filename may
+    /// legally contain them, and <c>[x]junk]</c> silently misapplies the
+    /// preset to the wrong model) and no control characters (CR/LF would
+    /// inject whole lines). Mirrors <c>EnrolledFolderScanner.StemOf</c>, which
+    /// already rejects <c>]</c> — this is the sink the other renderer's guard
+    /// was missing. Ids arrive from server-reported model lists, Open-With
+    /// file stems and hand-edited settings, so the sink validates even though
+    /// Windows filenames can't carry CR/LF.
+    /// </summary>
+    private static bool IsSafeSectionId(string id)
+        => !string.IsNullOrWhiteSpace(id)
+           && id.All(c => c is not ('[' or ']') && !char.IsControl(c));
+
+    /// <summary>
+    /// Whether a value can follow a preset INI key: non-empty, no control
+    /// characters (CR/LF would inject whole lines — a hand-edited settings
+    /// entry must not be able to append arbitrary keys).
+    /// </summary>
+    private static bool IsSafeIniValue(string value)
+        => !string.IsNullOrWhiteSpace(value) && value.All(c => !char.IsControl(c));
 
     /// <summary>
     /// Writes the <c>--models-preset</c> INI from

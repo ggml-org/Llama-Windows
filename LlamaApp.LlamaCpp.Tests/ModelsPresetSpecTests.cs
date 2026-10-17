@@ -91,6 +91,53 @@ public sealed class ModelsPresetSpecTests
             ini);
     }
 
+    [Fact]
+    public void SectionNamesWithBrackets_AreSkipped()
+    {
+        // A .gguf filename may legally contain ']' / '[' — rendering one raw
+        // would end the section early ("[x]junk]") and silently apply the
+        // preset to the wrong model. The whole entry is dropped instead.
+        var ini = Render(
+            contexts: new Dictionary<string, int>
+            {
+                ["org/x]y:Q4_0"] = 8192,
+                ["org/[z:Q4_0"] = 4096,
+            },
+            specs: new Dictionary<string, string> { ["org/x]y:Q4_0"] = "draft-mtp" });
+
+        Assert.Equal("", ini);
+    }
+
+    [Fact]
+    public void SectionNamesWithControlCharacters_AreSkipped()
+    {
+        // A newline would inject whole INI lines — settings entries are
+        // hand-editable even though filenames can't carry CR/LF.
+        var ini = Render(
+            contexts: new Dictionary<string, int> { ["org/x\ny:Q4_0"] = 8192 },
+            specs: new Dictionary<string, string> { ["org/x\r\ny:Q4_0"] = "draft-mtp" });
+
+        Assert.Equal("", ini);
+    }
+
+    [Fact]
+    public void SpecValuesWithControlCharacters_AreDroppedButContextKept()
+    {
+        // The value must not be able to append arbitrary keys; the model's
+        // ctx-size entry is still rendered, just without the spec line.
+        var ini = Render(
+            contexts: new Dictionary<string, int> { ["org/repo:Q4_0"] = 4096 },
+            specs: new Dictionary<string, string>
+            {
+                ["org/repo:Q4_0"] = "draft-mtp\nctx-size = 999999",
+            });
+
+        Assert.Equal(
+            "[org/repo:Q4_0]\n" +
+            "ctx-size = 4096\n\n",
+            ini);
+    }
+
     private static string Render(
         IReadOnlyDictionary<string, int> contexts,
         IReadOnlyDictionary<string, string> specs) =>
