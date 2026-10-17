@@ -222,10 +222,13 @@ public sealed class Settings
             if (File.Exists(SettingsPath))
             {
                 var json = File.ReadAllText(SettingsPath);
-                var s = JsonSerializer.Deserialize<Settings>(json);
+                // One parse: deserialization and the legacy-secret migration
+                // read from the same JsonDocument.
+                using var doc = JsonDocument.Parse(json);
+                var s = doc.RootElement.Deserialize(SettingsJsonContext.Default.Settings);
                 if (s != null)
                 {
-                    RestoreSecrets(s, json);
+                    RestoreSecrets(s, doc.RootElement);
                     return s;
                 }
             }
@@ -252,9 +255,23 @@ public sealed class Settings
         try
         {
             using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
+            RestoreSecrets(s, doc.RootElement);
+        }
+        catch (JsonException)
+        {
+            // Handled by Load's caller path — keep whatever deserialized.
+        }
+    }
 
-            if (root.TryGetProperty("HuggingFaceToken", out var legacy) &&
+    /// <summary>
+    /// <see cref="RestoreSecrets(Settings, string)"/> against an already
+    /// parsed document, so the settings load parses settings.json once.
+    /// </summary>
+    internal static void RestoreSecrets(Settings s, JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return;
+
+        if (root.TryGetProperty("HuggingFaceToken", out var legacy) &&
                 legacy.ValueKind == JsonValueKind.String)
             {
                 var plaintext = legacy.GetString() ?? "";
@@ -290,11 +307,6 @@ public sealed class Settings
                 if (plaintext.Length > 0)
                     s.ServerApiKey = plaintext;
             }
-        }
-        catch (JsonException)
-        {
-            // Handled by Load's caller path — keep whatever deserialized.
-        }
     }
 
     /// <summary>
@@ -322,10 +334,7 @@ public sealed class Settings
             lock (ModelContextLengths)
             lock (ModelSpeculativeTypes)
             lock (ModelFolders)
-                json = JsonSerializer.Serialize(this, new JsonSerializerOptions
-                {
-                    WriteIndented = true,
-                });
+                json = JsonSerializer.Serialize(this, SettingsJsonContext.Default.Settings);
             File.WriteAllText(SettingsPath, json);
             return true;
         }

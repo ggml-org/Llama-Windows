@@ -122,7 +122,7 @@ public class HubClient(string? token)
         {
             try
             {
-                var dto = JsonSerializer.Deserialize<UserInfoDto>(json);
+                var dto = JsonSerializer.Deserialize(json, HubJsonContext.Default.UserInfoDto);
                 return dto is null ? null : new UserInfo
                 {
                     Id = dto.Id ?? "",
@@ -287,7 +287,7 @@ public class HubClient(string? token)
     {
         try
         {
-            var entries = JsonSerializer.Deserialize<List<RepoTreeEntryDto>>(json);
+            var entries = JsonSerializer.Deserialize(json, HubJsonContext.Default.RepoTreeEntryList);
             return entries?
                 .Where(e => e?.Type == "file" && !string.IsNullOrEmpty(e.Path))
                 .Select(e => e.Path!)
@@ -368,7 +368,7 @@ public class HubClient(string? token)
             if (!resp.IsSuccessStatusCode) return null;
 
             var json = await resp.Content.ReadAsStringAsync(cancel);
-            var avatarUrl = JsonSerializer.Deserialize<UserAvatarDto>(json)?.AvatarUrl;
+            var avatarUrl = JsonSerializer.Deserialize(json, HubJsonContext.Default.UserAvatarDto)?.AvatarUrl;
             // The URL comes from the API but is fetched by this app — treat it
             // as untrusted input (see IsTrustedAvatarUrl).
             return IsTrustedAvatarUrl(avatarUrl) ? avatarUrl : null;
@@ -454,7 +454,7 @@ public class HubClient(string? token)
     {
         try
         {
-            var dtos = JsonSerializer.Deserialize<HubModelDto[]>(json);
+            var dtos = JsonSerializer.Deserialize(json, HubJsonContext.Default.HubModelArray);
             return dtos is null ? [] : [.. dtos.Select(ParseModel)];
         }
         catch (JsonException)

@@ -333,7 +333,7 @@ public sealed class RuntimeUpdateScheduler
     internal static uint? ParseLatestReleaseBuild(string? json)
     {
         if (string.IsNullOrWhiteSpace(json)) return null;
-        var release = JsonSerializer.Deserialize<LatestReleaseDto>(json);
+        var release = JsonSerializer.Deserialize(json, LlamaJsonContext.Default.LatestReleaseDto);
         return ParseReleaseBuild(release?.TagName);
     }
 

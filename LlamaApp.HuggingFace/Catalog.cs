@@ -16,10 +16,6 @@ public sealed class Catalog : IModelSource
 {
     /// <summary>Remote catalog endpoint.</summary>
     private static readonly Uri CatalogUrl = new("https://llama.app/v1/catalog.json");
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
 
     /// <summary>
     /// Fetches the catalog and returns the family → size → build hierarchy as
@@ -59,7 +55,7 @@ public sealed class Catalog : IModelSource
         response.EnsureSuccessStatusCode();
 
         var stream = await response.Content.ReadAsStreamAsync(cancel);
-        return await JsonSerializer.DeserializeAsync<CatalogFamily[]>(stream, JsonOptions, cancel) ?? [];
+        return await JsonSerializer.DeserializeAsync(stream, HubJsonContext.Default.CatalogFamilyArray, cancel) ?? [];
     }
 
     /// <summary>Maps one internal DTO family onto the public <see cref="ModelFamily"/> shape.</summary>

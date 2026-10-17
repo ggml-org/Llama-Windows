@@ -77,7 +77,7 @@ public static class UpdateChecker
             if (!resp.IsSuccessStatusCode) return null;
 
             var json = await resp.Content.ReadAsStringAsync(cancel);
-            var release = JsonSerializer.Deserialize<LatestReleaseDto>(json);
+            var release = JsonSerializer.Deserialize(json, CommonJsonContext.Default.LatestReleaseDto);
             update = Evaluate(release, current);
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or OperationCanceledException or TaskCanceledException)

@@ -2694,7 +2694,7 @@ public sealed class LlamaManager
     {
         try
         {
-            var dto = await JsonSerializer.DeserializeAsync<ModelsResponseDto>(body, cancellationToken: cancel);
+            var dto = await JsonSerializer.DeserializeAsync(body, LlamaJsonContext.Default.ModelsResponseDto, cancellationToken: cancel);
             return dto?.Data is { } data ? data.Select(Map).ToList() : null;
         }
         catch (JsonException)
