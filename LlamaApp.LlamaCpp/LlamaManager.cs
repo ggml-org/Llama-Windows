@@ -1821,12 +1821,17 @@ public sealed class LlamaManager
                 {
                     case ServerState.Running:
                     {
-                        IReadOnlyList<ServerModel> snapshot = [];
-                        var fetchOk = false;
-                        try { snapshot = await GetModelsAsync(CancellationToken.None); fetchOk = true; }
+                        // null = the fetch FAILED (request error, non-success
+                        // status, or an unparseable body) — a real signal, now
+                        // distinct from a valid-but-empty model list. A failed
+                        // fetch is confirmed with a /health probe below before
+                        // declaring death, so a transient /models hiccup on a
+                        // living server doesn't flip the state.
+                        IReadOnlyList<ServerModel>? snapshot = null;
+                        try { snapshot = await FetchModelsAsync(reload: false, CancellationToken.None); }
                         catch (Exception ex) { Log.Debug($"model poll fetch failed: {ex.Message}"); /* confirmed via /health below */ }
 
-                        if (fetchOk)
+                        if (snapshot is not null)
                         {
                             // Publish only when something observable changed — or on
                             // the first tick after entering Running (rows need a fresh
@@ -2600,10 +2605,12 @@ public sealed class LlamaManager
     /// Fetches the server's model list (<c>GET /models</c>) — the authoritative
     /// set of locally available (cached) models, with each model's load state and
     /// architecture (vision capability). Returns an empty list when the server
-    /// isn't running or the request fails.
+    /// isn't running or the request fails — see <see cref="FetchModelsAsync"/>
+    /// for the failure-vs-empty distinction the supervisor's liveness logic
+    /// needs but callers don't.
     /// </summary>
     public async Task<IReadOnlyList<ServerModel>> GetModelsAsync(CancellationToken cancel = default)
-        => await FetchModelsAsync(reload: false, cancel);
+        => await FetchModelsAsync(reload: false, cancel) ?? [];
 
     /// <summary>
     /// <see cref="GetModelsAsync"/>, but first tells the router to rescan its
@@ -2614,9 +2621,18 @@ public sealed class LlamaManager
     /// loadable without restarting the server.
     /// </summary>
     public async Task<IReadOnlyList<ServerModel>> RefreshModelsAsync(CancellationToken cancel = default)
-        => await FetchModelsAsync(reload: true, cancel);
+        => await FetchModelsAsync(reload: true, cancel) ?? [];
 
-    private async Task<IReadOnlyList<ServerModel>> FetchModelsAsync(bool reload, CancellationToken cancel)
+    /// <summary>
+    /// One <c>GET /models</c> round-trip with the failure-vs-empty distinction
+    /// the supervisor's death detection needs: <c>null</c> means the fetch
+    /// FAILED (request error, non-success status, or an unparseable body — e.g.
+    /// a proxy error page or a zombie listener), while a list — possibly empty —
+    /// is a valid answer from a living server. Not running is not a failure:
+    /// callers get a valid empty list. Public callers keep the non-throwing
+    /// empty-list-on-anything contract via <see cref="GetModelsAsync"/>.
+    /// </summary>
+    private async Task<IReadOnlyList<ServerModel>?> FetchModelsAsync(bool reload, CancellationToken cancel)
     {
         if (ServerStatus != ServerState.Running)
             return [];
@@ -2627,12 +2643,31 @@ public sealed class LlamaManager
             using var resp = await _http.GetAsync(reload ? "/models?reload=1" : "/models", budget.Token);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
-            var dto = await JsonSerializer.DeserializeAsync<ModelsResponseDto>(stream, cancellationToken: cancel);
-            return dto?.Data?.Select(Map).ToList() ?? [];
+            return await ParseModelsAsync(stream, cancel);
         }
         catch
         {
-            return [];
+            return null; // failed fetch — deliberately distinct from an empty model list
+        }
+    }
+
+    /// <summary>
+    /// Parses a <c>GET /models</c> body into a snapshot. <c>null</c> means the
+    /// body was not a valid models response (malformed JSON, or no
+    /// <c>data</c> array) — an error, deliberately distinct from a valid
+    /// response with an empty <c>data</c> array (genuinely no models). Internal
+    /// for tests.
+    /// </summary>
+    internal static async Task<IReadOnlyList<ServerModel>?> ParseModelsAsync(Stream body, CancellationToken cancel = default)
+    {
+        try
+        {
+            var dto = await JsonSerializer.DeserializeAsync<ModelsResponseDto>(body, cancellationToken: cancel);
+            return dto?.Data is { } data ? data.Select(Map).ToList() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
