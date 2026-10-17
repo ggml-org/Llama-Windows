@@ -166,6 +166,32 @@ public class UpdateCheckerTests
         Assert.Equal(1, calls);
     }
 
+    [Theory]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("file:///C:/Windows/notepad.exe")]
+    [InlineData("http://github.com/ggml-org/llama-windows/releases/tag/v0.11.0")] // right host, wrong scheme
+    [InlineData("https://evil.com/llama-windows/releases/tag/v0.11.0")]           // right scheme, wrong host
+    [InlineData("https://evilgithub.com/releases/tag/v0.11.0")]                   // suffix trick
+    [InlineData("https://github.com.evil.com/releases/tag/v0.11.0")]              // prefix trick
+    [InlineData("not a url")]
+    public async Task ReturnsNull_WhenReleasePageIsNotATrustedHttpsGithubUrl(string htmlUrl)
+    {
+        var client = ClientReturning(ReleaseJson("v0.11.0", htmlUrl));
+
+        var update = await UpdateChecker.GetLatestUpdateAsync(client, Version.Parse("0.10.0.0"));
+
+        Assert.Null(update);
+    }
+
+    [Theory]
+    [InlineData("https://github.com/ggml-org/llama-windows/releases/tag/v0.11.0", true)]
+    [InlineData("https://www.github.com/ggml-org/llama-windows/releases/tag/v0.11.0", true)]
+    [InlineData("https://sub.github.com/x", true)]
+    [InlineData("http://github.com/x", false)]
+    [InlineData("https://github.com.evil.com/x", false)]
+    public void ReleasePagePolicy_RequiresHttpsOnGithub(string url, bool trusted)
+        => Assert.Equal(trusted, UpdateChecker.IsTrustedReleasePage(new Uri(url)));
+
     /// <summary>Minimal HttpMessageHandler stub: returns a canned response.</summary>
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
         : HttpMessageHandler

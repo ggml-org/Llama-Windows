@@ -124,7 +124,8 @@ public static class UpdateChecker
         // /releases/latest already excludes these, but trust nothing.
         if (release.Prerelease || release.Draft) return null;
         if (string.IsNullOrWhiteSpace(release.TagName)) return null;
-        if (!Uri.TryCreate(release.HtmlUrl, UriKind.Absolute, out var pageUrl))
+        if (!Uri.TryCreate(release.HtmlUrl, UriKind.Absolute, out var pageUrl) ||
+            !IsTrustedReleasePage(pageUrl))
         {
             Log.Warn($"release {release.TagName} has no usable html_url ({release.HtmlUrl}); banner stays hidden");
             return null;
@@ -140,6 +141,18 @@ public static class UpdateChecker
 
         return new AppUpdate(release.TagName.Trim(), pageUrl);
     }
+
+    /// <summary>
+    /// The release page is handed to a <c>HyperlinkButton</c> (system browser
+    /// / registered scheme handlers), so it is treated as untrusted input
+    /// even though the GitHub API generates it: HTTPS on github.com only — a
+    /// crafted <c>html_url</c> must not launch an arbitrary scheme handler or
+    /// send the user off-site. Internal for tests.
+    /// </summary>
+    internal static bool IsTrustedReleasePage(Uri url)
+        => url.Scheme == Uri.UriSchemeHttps
+           && (url.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+               || url.Host.EndsWith(".github.com", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Parses a release tag like "v0.11.0" (leading v optional) into a
