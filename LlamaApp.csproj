@@ -25,6 +25,11 @@
         <Nullable>enable</Nullable>
         <LangVersion>latest</LangVersion>
 
+        <!-- Ship only English satellite resources: the ~40 locale folders
+             add file count (and some MB) for strings this app doesn't
+             localize. -->
+        <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
         <!-- WinAppSDK 2.3.1+ XAML performance opt-ins (compiled into the
              generated entry point via XamlOptionalChanges.EnableChange). These
              two are behaviorally neutral: FontIcon/BitmapIcon drop a decorative
@@ -96,7 +101,17 @@
         <!-- Exact pins (no floating major ranges): a restore must never
              silently pick up a newly published or hijacked minor/patch. Bump
              these deliberately, as a reviewed change. -->
-        <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+        <!-- WinAppSDK components instead of the kitchen-sink metapackage: the
+             meta pulls WindowsAppSDK.ML (ONNX Runtime + DirectML + SemanticIndex,
+             ~43 MB), .Search and .Widgets — none of which this app uses (it runs
+             llama.cpp, and the shell services are unused). Versions match what
+             the metapackage resolved transitively. -->
+        <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
+        <!-- The WindowsAppRuntime payload + bootstrap: required by name when
+             not using the metapackage (self-contained unpackaged runs depend
+             on it — see the WindowsAppSDKSelfContained note above). -->
+        <PackageReference Include="Microsoft.WindowsAppSDK.Runtime" Version="2.5.1" />
+        <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.12" />
         <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31"/>
         <PackageReference Include="H.NotifyIcon" Version="2.4.1"/>
         <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705"/>

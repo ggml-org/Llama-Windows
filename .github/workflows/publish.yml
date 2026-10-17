@@ -77,18 +77,20 @@ jobs:
             -p:RestoreLockedMode=true `
             -p:PublishReadyToRun=false `
             -p:PublishTrimmed=true `
-            -p:PublishSingleFile=false `
             -p:TrimmerSingleWarn=false `
             -o publish/${{ matrix.rid }} 2>&1
           $output | ForEach-Object { Write-Host $_ }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # CsWinRT's generated WinRT projection emits IL2081 annotation gaps
-          # in its generic ABI fallbacks (ABI.*/WinRT.* — platform interop
-          # code, not actionable from app code). Everything else must be
-          # clean: app-code reflection/dynamic would show up here and break
-          # the trimmed build at runtime.
+          # CsWinRT's generated WinRT projection emits trim warnings in its
+          # generic ABI fallbacks (IL2081 in ABI.*/WinRT.*) plus IL2104
+          # assembly rollups naming Microsoft.Windows.SDK.NET / WinRT.Runtime
+          # — platform interop code, not actionable from app code. Everything
+          # else must be clean: app-code reflection/dynamic shows up with its
+          # own IL2xxx code (and its IL2104 rollup would name the app
+          # assembly) and breaks the trimmed build at runtime.
           $trimWarnings = @($output | Where-Object {
-              $_ -match 'warning IL\d+' -and $_ -notmatch 'ABI\.(System|Windows)\.|WinRT\.'
+              $_ -match 'warning IL\d+' -and
+              $_ -notmatch 'ABI\.(System|Windows)\.|WinRT\.|IL2104'
           })
           if ($trimWarnings.Count -gt 0) {
             $trimWarnings | ForEach-Object { Write-Host "::error::$_" }
