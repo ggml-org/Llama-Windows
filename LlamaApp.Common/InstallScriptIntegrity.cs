@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 
 namespace LlamaApp.Common;
 
@@ -28,11 +29,12 @@ public enum InstallScriptVerdict
 }
 
 /// <summary>
-/// Provenance policy for the downloaded <c>install.ps1</c>. The app runs that
-/// script with <c>-ExecutionPolicy Bypass</c>, so a compromised endpoint,
-/// DNS answer, or system-trusted TLS-inspection proxy would otherwise be
-/// arbitrary code execution. This type centralizes the checks in one pure,
-/// unit-testable place:
+/// Provenance policy for the downloaded <c>install.ps1</c>. The app executes
+/// that script straight from memory (PowerShell <c>-EncodedCommand</c> — it is
+/// never written to disk), so a compromised endpoint, DNS answer, or
+/// system-trusted TLS-inspection proxy would otherwise be arbitrary code
+/// execution. This type centralizes the checks in one pure, unit-testable
+/// place:
 ///
 /// <list type="bullet">
 /// <item>the response must be a direct <c>200</c> from exactly
@@ -65,6 +67,17 @@ public static class InstallScriptIntegrity
     /// larger is either an attack or an endpoint error.
     /// </summary>
     public const int MaxBytes = 1 * 1024 * 1024;
+
+    /// <summary>
+    /// Maximum base64 payload characters that may ride on the PowerShell
+    /// command line. Windows caps a process command line (exe + arguments) at
+    /// 32,767 characters (<c>CreateProcess</c>), and the payload expands to
+    /// ~2.67 chars per script character (UTF-16 → base64), so this bounds the
+    /// script to roughly 11,000 characters — comfortably above the real
+    /// install.ps1 (a few KB). A larger script is refused rather than
+    /// spilled to disk: the app never persists the script anywhere.
+    /// </summary>
+    public const int MaxEncodedCommandChars = 30_000;
 
     /// <summary>
     /// Lower-case hex SHA-256 the script must match for <b>unattended</b>
@@ -122,6 +135,36 @@ public static class InstallScriptIntegrity
     /// <summary>Lower-case hex SHA-256 of <paramref name="data"/>.</summary>
     public static string Sha256Hex(byte[] data)
         => Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
+
+    /// <summary>
+    /// Prepares the downloaded script bytes for fileless execution: decodes
+    /// them to text (BOM-aware UTF-8 — the encoding the script is published
+    /// in) and returns the base64-encoded UTF-16LE form that PowerShell's
+    /// <c>-EncodedCommand</c> expects. The script therefore never touches the
+    /// disk — it travels from the validated response through memory into the
+    /// interpreter — and every install fetches a fresh copy (nothing is
+    /// cached between runs). Throws <see cref="InvalidDataException"/> when
+    /// the encoded payload would exceed <see cref="MaxEncodedCommandChars"/>
+    /// (the Windows command-line limit) rather than falling back to a temp
+    /// file: refusing oversized input is safer than materializing it.
+    /// </summary>
+    public static string EncodeCommand(byte[] scriptBytes)
+    {
+        string script;
+        using (var reader = new StreamReader(
+                   new MemoryStream(scriptBytes), Encoding.UTF8,
+                   detectEncodingFromByteOrderMarks: true))
+        {
+            script = reader.ReadToEnd();
+        }
+
+        var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+        if (encoded.Length > MaxEncodedCommandChars)
+            throw new InvalidDataException(
+                $"install.ps1 is too large to execute in memory ({encoded.Length} > {MaxEncodedCommandChars} encoded characters). " +
+                "Refusing to write it to disk.");
+        return encoded;
+    }
 
     /// <summary>
     /// Reads <paramref name="stream"/> into memory, refusing to buffer more

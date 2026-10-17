@@ -167,4 +167,47 @@ public class InstallScriptIntegrityTests
         await Assert.ThrowsAsync<InvalidDataException>(
             () => InstallScriptIntegrity.ReadBoundedAsync(stream, maxBytes: 1024));
     }
+
+    // ---- EncodeCommand (fileless -EncodedCommand payload) ----
+
+    [Fact]
+    public void EncodeCommand_Round_Trips_Through_PowerShell_Decoding()
+    {
+        // -EncodedCommand expects base64(UTF-16LE(script)); decoding the
+        // payload the way powershell.exe does must return the exact script
+        // text — no BOM, no encoding drift for non-ASCII content.
+        const string script = "Write-Output 'h\u00e9llo'\r\nexit 0";
+        var payload = InstallScriptIntegrity.EncodeCommand(Encoding.UTF8.GetBytes(script));
+        var decoded = Encoding.Unicode.GetString(Convert.FromBase64String(payload));
+        Assert.Equal(script, decoded);
+    }
+
+    [Fact]
+    public void EncodeCommand_Honors_Utf8_Bom()
+    {
+        var withBom = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes("exit 0")).ToArray();
+        var payload = InstallScriptIntegrity.EncodeCommand(withBom);
+        Assert.Equal("exit 0", Encoding.Unicode.GetString(Convert.FromBase64String(payload)));
+    }
+
+    [Fact]
+    public void EncodeCommand_Refuses_Oversized_Script()
+    {
+        // Well under MaxBytes (the transport cap) but far past what a
+        // CreateProcess command line can carry — the refusal must be a
+        // clean error, never a silent temp-file fallback.
+        var oversize = Encoding.ASCII.GetBytes(new string('x', 20_000));
+        Assert.Throws<InvalidDataException>(
+            () => InstallScriptIntegrity.EncodeCommand(oversize));
+    }
+
+    [Fact]
+    public void EncodeCommand_Accepts_Realistic_Install_Script_Size()
+    {
+        // The real install.ps1 is a few KB — that must always fit.
+        var typical = Encoding.ASCII.GetBytes(new string('x', 4_000));
+        Assert.True(
+            InstallScriptIntegrity.EncodeCommand(typical).Length <=
+            InstallScriptIntegrity.MaxEncodedCommandChars);
+    }
 }

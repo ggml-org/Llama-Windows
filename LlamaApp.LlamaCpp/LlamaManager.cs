@@ -3104,118 +3104,121 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Downloads <see cref="InstallScriptUrl"/> and runs it with PowerShell
-    /// (<c>-ExecutionPolicy Bypass -File</c>). The download is pinned to the
-    /// exact HTTPS URL and bounded in size (see <see cref="InstallScriptIntegrity"/>);
-    /// redirects are refused rather than followed, and the body's SHA-256 is
-    /// logged so an install is auditable after the fact. When
-    /// <paramref name="allowUnpinned"/> is false (the unattended weekly
-    /// update) the script must also match
+    /// — <b>straight from memory</b>: the body is executed via
+    /// <c>-EncodedCommand</c> and is never written to disk, and nothing is
+    /// cached between runs, so every install is a fresh download over HTTPS
+    /// (system certificate store validation, no custom cert callback). The
+    /// download is pinned to the exact HTTPS URL and bounded in size (see
+    /// <see cref="InstallScriptIntegrity"/>); redirects are refused rather
+    /// than followed, and the body's SHA-256 is logged so an install is
+    /// auditable after the fact. When <paramref name="allowUnpinned"/> is
+    /// false (the unattended weekly update) the script must also match
     /// <see cref="InstallScriptIntegrity.PinnedSha256"/> — otherwise it is
     /// refused rather than executed unverified. Throws on any integrity
     /// failure, a non-zero exit code, or a download failure.
     /// </summary>
     private static async Task DownloadAndRunInstallerAsync(bool allowUnpinned, CancellationToken cancel)
     {
-        var scriptPath = Path.Combine(Path.GetTempPath(), $"llama-install-{Guid.NewGuid():N}.ps1");
-        try
+        byte[] scriptBytes;
+
+        // Deliberately NOT the shared _http: this is an internet download
+        // (llama.app), not a loopback call — the system proxy is welcome
+        // here, and the BaseAddress wouldn't apply. Auto-redirect is off
+        // so a 30x is surfaced (and refused) instead of silently followed
+        // to another host.
+        using (var handler = new SocketsHttpHandler { AllowAutoRedirect = false })
+        using (var client = new HttpClient(handler))
         {
-            byte[] scriptBytes;
+            client.Timeout = TimeSpan.FromSeconds(30);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
 
-            // Deliberately NOT the shared _http: this is an internet download
-            // (llama.app), not a loopback call — the system proxy is welcome
-            // here, and the BaseAddress wouldn't apply. Auto-redirect is off
-            // so a 30x is surfaced (and refused) instead of silently followed
-            // to another host.
-            using (var handler = new SocketsHttpHandler { AllowAutoRedirect = false })
-            using (var client = new HttpClient(handler))
-            {
-                client.Timeout = TimeSpan.FromSeconds(30);
-                client.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
+            // One 30s budget across headers AND body: with
+            // ResponseHeadersRead, the HttpClient timeout only covers the
+            // headers, and a hostile trickling endpoint could otherwise
+            // stretch the body read indefinitely (bytes are capped, time
+            // wasn't).
+            using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
+            using var resp = await client.GetAsync(
+                InstallScriptUrl, HttpCompletionOption.ResponseHeadersRead, budget.Token);
 
-                // One 30s budget across headers AND body: with
-                // ResponseHeadersRead, the HttpClient timeout only covers the
-                // headers, and a hostile trickling endpoint could otherwise
-                // stretch the body read indefinitely (bytes are capped, time
-                // wasn't).
-                using var budget = WithTimeout(TimeSpan.FromSeconds(30), cancel);
-                using var resp = await client.GetAsync(
-                    InstallScriptUrl, HttpCompletionOption.ResponseHeadersRead, budget.Token);
-
-                var responseVerdict = InstallScriptIntegrity.ValidateResponse(
-                    (int)resp.StatusCode, resp.RequestMessage?.RequestUri, resp.Content.Headers.ContentLength);
-                if (!InstallScriptIntegrity.IsOk(responseVerdict))
-                    throw new IOException(
-                        $"Refusing to run install.ps1: {InstallScriptIntegrity.Describe(responseVerdict)}.");
-
-                await using var stream = await resp.Content.ReadAsStreamAsync(budget.Token);
-                scriptBytes = await InstallScriptIntegrity.ReadBoundedAsync(stream, cancel: budget.Token);
-            }
-
-            var sha256 = InstallScriptIntegrity.Sha256Hex(scriptBytes);
-            // Logged so a failed install can be correlated with exactly what
-            // ran — the script file itself is deleted on the way out.
-            Log.Info($"install.ps1 downloaded from {InstallScriptUrl}: {scriptBytes.Length} bytes, sha256={sha256}");
-
-            var hashVerdict = InstallScriptIntegrity.ValidateHash(sha256);
-            if (hashVerdict == InstallScriptVerdict.HashMismatch ||
-                (hashVerdict == InstallScriptVerdict.Unpinned && !allowUnpinned))
-            {
+            var responseVerdict = InstallScriptIntegrity.ValidateResponse(
+                (int)resp.StatusCode, resp.RequestMessage?.RequestUri, resp.Content.Headers.ContentLength);
+            if (!InstallScriptIntegrity.IsOk(responseVerdict))
                 throw new IOException(
-                    $"Refusing to run install.ps1: {InstallScriptIntegrity.Describe(hashVerdict)}.");
-            }
+                    $"Refusing to run install.ps1: {InstallScriptIntegrity.Describe(responseVerdict)}.");
 
-            await File.WriteAllBytesAsync(scriptPath, scriptBytes, cancel);
-
-            var psi = new ProcessStartInfo
-            {
-                // Absolute path: with UseShellExecute=false a bare
-                // "powershell.exe" resolves through the CreateProcess search
-                // order (the app's directory and the CWD before %SystemRoot%),
-                // so a planted executable in either would run the install
-                // script regardless of every hash/URL/size check above.
-                FileName = PowerShellExePath,
-                WorkingDirectory = Path.GetTempPath(),
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-
-            // Bypass the per-process execution policy so the downloaded script can
-            // run without changing the machine/user policy. The script is fetched
-            // over HTTPS from the official llama.app endpoint.
-            psi.ArgumentList.Add("-NoProfile");
-            psi.ArgumentList.Add("-ExecutionPolicy");
-            psi.ArgumentList.Add("Bypass");
-            psi.ArgumentList.Add("-File");
-            psi.ArgumentList.Add(scriptPath);
-
-            Log.Info($"running install.ps1 from {InstallScriptUrl}");
-            using var proc = new Process();
-            proc.StartInfo = psi;
-            if (!proc.Start())
-                throw new InvalidOperationException("Could not start the install script.");
-
-            // Stream output to debug traces for diagnostics; not surfaced to the UI.
-            var stdoutTask = proc.StandardOutput.ReadToEndAsync(cancel);
-            var stderrTask = proc.StandardError.ReadToEndAsync(cancel);
-            await proc.WaitForExitAsync(cancel);
-            Log.Debug($"install.ps1 exit code {proc.ExitCode}");
-
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
-            
-            if (stdout.Length > 0) Log.Debug($"install.ps1 stdout: {stdout.Trim()}");
-            if (stderr.Length > 0) Log.Debug($"install.ps1 stderr: {stderr.Trim()}");
-            if (proc.ExitCode != 0)
-                throw new IOException($"install.ps1 exited with code {proc.ExitCode}.\n{stderr}");
-            
+            await using var stream = await resp.Content.ReadAsStreamAsync(budget.Token);
+            scriptBytes = await InstallScriptIntegrity.ReadBoundedAsync(stream, cancel: budget.Token);
         }
-        finally
+
+        var sha256 = InstallScriptIntegrity.Sha256Hex(scriptBytes);
+        // Logged so a failed install can be correlated with exactly what ran.
+        // The script itself never touches the disk — see EncodeCommand.
+        Log.Info($"install.ps1 downloaded from {InstallScriptUrl}: {scriptBytes.Length} bytes, sha256={sha256}");
+
+        var hashVerdict = InstallScriptIntegrity.ValidateHash(sha256);
+        if (hashVerdict == InstallScriptVerdict.HashMismatch ||
+            (hashVerdict == InstallScriptVerdict.Unpinned && !allowUnpinned))
         {
-            try { if (File.Exists(scriptPath)) File.Delete(scriptPath); }
-            catch { /* best-effort temp cleanup */ }
+            throw new IOException(
+                $"Refusing to run install.ps1: {InstallScriptIntegrity.Describe(hashVerdict)}.");
         }
+
+        // Fileless execution: base64(UTF-16LE) of the validated script for
+        // PowerShell's -EncodedCommand. Nothing is written to disk — the
+        // body travels from the (hash-logged, optionally hash-pinned)
+        // response through memory into the interpreter. The payload is
+        // public script content, so its brief visibility on the child's
+        // command line (WMI/process listings) leaks nothing; the size
+        // guard keeps it inside the CreateProcess command-line limit.
+        var encodedScript = InstallScriptIntegrity.EncodeCommand(scriptBytes);
+
+        var psi = new ProcessStartInfo
+        {
+            // Absolute path: with UseShellExecute=false a bare
+            // "powershell.exe" resolves through the CreateProcess search
+            // order (the app's directory and the CWD before %SystemRoot%),
+            // so a planted executable in either would run the install
+            // script regardless of every hash/URL/size check above.
+            FileName = PowerShellExePath,
+            WorkingDirectory = Path.GetTempPath(),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        // -EncodedCommand runs the in-memory payload without a script
+        // file. -ExecutionPolicy Bypass is kept for parity with the old
+        // -File launch (and in case the script ever invokes nested
+        // scripts); it never changes the machine/user policy. -NoProfile
+        // keeps the user's PowerShell profile (which can run arbitrary
+        // code) out of the install.
+        psi.ArgumentList.Add("-NoProfile");
+        psi.ArgumentList.Add("-ExecutionPolicy");
+        psi.ArgumentList.Add("Bypass");
+        psi.ArgumentList.Add("-EncodedCommand");
+        psi.ArgumentList.Add(encodedScript);
+
+        Log.Info($"running install.ps1 from {InstallScriptUrl}");
+        using var proc = new Process();
+        proc.StartInfo = psi;
+        if (!proc.Start())
+            throw new InvalidOperationException("Could not start the install script.");
+
+        // Stream output to debug traces for diagnostics; not surfaced to the UI.
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync(cancel);
+        var stderrTask = proc.StandardError.ReadToEndAsync(cancel);
+        await proc.WaitForExitAsync(cancel);
+        Log.Debug($"install.ps1 exit code {proc.ExitCode}");
+
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+        
+        if (stdout.Length > 0) Log.Debug($"install.ps1 stdout: {stdout.Trim()}");
+        if (stderr.Length > 0) Log.Debug($"install.ps1 stderr: {stderr.Trim()}");
+        if (proc.ExitCode != 0)
+            throw new IOException($"install.ps1 exited with code {proc.ExitCode}.\n{stderr}");
     }
 
     // ---- Version ----
