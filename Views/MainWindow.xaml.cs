@@ -241,8 +241,10 @@ namespace LlamaApp.Views
             LlamaManager.Shared.StateChanged += LlamaManager_StateChanged;
 
             // The model-state poller (started by LlamaManager once the server is
-            // Running) fires ModelsChanged roughly every 1s with a fresh /models
-            // snapshot. We reconcile it into the Available rows in place —
+            // Running) fires ModelsChanged with a fresh /models snapshot whenever
+            // the server's model list or any load state changes — plus a slow
+            // heartbeat while everything is static. We reconcile it into the
+            // Available rows in place —
             // flipping play -> indeterminate load ring -> OpenInNewWindow glyph
             // as the server reports each model's load state.
             LlamaManager.Shared.ModelsChanged += LlamaManager_ModelsChanged;
@@ -2348,7 +2350,8 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Handler for <see cref="LlamaManager.ModelsChanged"/> (the 1s poller):
+        /// Handler for <see cref="LlamaManager.ModelsChanged"/> (the change-gated
+        /// models poller):
         /// marshals the fresh server snapshot to the UI thread and reconciles it
         /// into the Available rows in place. The poller fires on a background
         /// thread, so we never touch the ObservableCollection directly here.

@@ -55,7 +55,7 @@ internal static class DraftHeadDetection
 
     /// <summary>Ids whose last detection FAILED (no answer recorded) and
     /// when — the watcher backs off instead of re-querying the Hub on every
-    /// 500ms poll tick while it's unreachable. A success clears the entry.</summary>
+    /// poll tick while it's unreachable. A success clears the entry.</summary>
     private static readonly Dictionary<string, DateTimeOffset> FailedAt = [];
     private static readonly TimeSpan FailureBackoff = TimeSpan.FromMinutes(10);
     private static readonly Lock InFlightLock = new();
@@ -63,7 +63,9 @@ internal static class DraftHeadDetection
     private static bool _watching;
 
     /// <summary>
-    /// Subscribes to the server's models poller: every snapshot that carries
+    /// Subscribes to the server's models poller: every published snapshot
+    /// (change-gated: the event fires when the model list or a load state
+    /// changes, plus a slow heartbeat) that carries
     /// a not-yet-checked model id (an owner/repo shape with no entry in the
     /// settings — including the empty negative cache) triggers one detection
     /// for it. Safe to call once per app session; later calls are no-ops.

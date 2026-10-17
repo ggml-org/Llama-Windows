@@ -639,8 +639,14 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Raised by the supervisor loop (see <see cref="SupervisorLoopAsync"/>) on a
-    /// background thread roughly every 500ms with a fresh <c>GET /models</c>
-    /// snapshot while the server is <see cref="ServerState.Running"/>.
+    /// background thread with a fresh <c>GET /models</c> snapshot while the server
+    /// is <see cref="ServerState.Running"/>. Publishing is change-gated: the event
+    /// fires when the observable snapshot (ids, load states, paths, …) actually
+    /// changed, once on entering <see cref="ServerState.Running"/> even if the
+    /// snapshot is unchanged, and as a slow heartbeat (see
+    /// <see cref="PublishHeartbeat"/>) so subscribers with their own
+    /// retry/backoff timers still wake up while nothing changes. Steady-state
+    /// ticks do not fire — handlers are expected to be idempotent reconciles.
     /// Handlers should marshal to the UI thread before touching view models.
     /// </summary>
     public event EventHandler<IReadOnlyList<ServerModel>>? ModelsChanged;
@@ -1730,14 +1736,70 @@ public sealed class LlamaManager
         ServerStatus = derived;
     }
 
+    // ---- Supervisor poll pacing / change detection ----
+    //
+    // The poll is the app's always-on heartbeat, but almost every tick changes
+    // nothing: without gating, a tray app idling with a static model list fires
+    // ModelsChanged (→ UI dispatcher hop + reconcile) and builds a debug string
+    // twice a second, forever. The GET /models fetch stays the liveness probe on
+    // every tick; everything downstream of it is change-gated.
+
+    /// <summary>Tick interval while <see cref="ServerState.Running"/> and a
+    /// transition is fresh (a load/download state just flipped) — fast enough
+    /// that the play → load-ring → open-glyph progression feels immediate.</summary>
+    private const int RunningPollFastMs = 500;
+
+    /// <summary>Tick interval while <see cref="ServerState.Running"/> with a
+    /// static snapshot. The fetch still doubles as the liveness probe, so a dead
+    /// server is still noticed within a couple of seconds.</summary>
+    private const int RunningPollSteadyMs = 2000;
+
+    /// <summary>How long after the last observable change the fast interval is
+    /// kept before settling to <see cref="RunningPollSteadyMs"/>.</summary>
+    private static readonly TimeSpan FastPollWindow = TimeSpan.FromSeconds(15);
+
+    /// <summary>Upper bound between <see cref="ModelsChanged"/> publishes even
+    /// when nothing changed, so subscribers with their own retry/backoff timers
+    /// (e.g. <c>DraftHeadDetection</c>'s failure backoff) still get a wake-up.</summary>
+    private static readonly TimeSpan PublishHeartbeat = TimeSpan.FromSeconds(60);
+
+    private IReadOnlyList<ServerModel>? _lastPublishedModels;
+    private DateTime _lastPublishAt = DateTime.MinValue;
+    private DateTime _lastPollChangeAt = DateTime.MinValue;
+    private ServerState _lastTickStatus = ServerState.Stopped;
+
+    /// <summary>
+    /// Change detection for poll publishing: compares the observable fields of
+    /// two <c>GET /models</c> snapshots. Order-sensitive — a reorder at worst
+    /// causes one redundant publish, never a missed change. Internal for tests.
+    /// </summary>
+    internal static bool SnapshotsEqual(IReadOnlyList<ServerModel>? a, IReadOnlyList<ServerModel> b)
+    {
+        if (a is null || a.Count != b.Count) return false;
+        for (var i = 0; i < b.Count; i++)
+        {
+            var x = a[i];
+            var y = b[i];
+            if (!string.Equals(x.Id, y.Id, StringComparison.Ordinal) ||
+                !string.Equals(x.Status, y.Status, StringComparison.Ordinal) ||
+                !string.Equals(x.Path, y.Path, StringComparison.Ordinal) ||
+                !string.Equals(x.Source, y.Source, StringComparison.Ordinal) ||
+                x.CanRemove != y.CanRemove ||
+                x.SupportsImage != y.SupportsImage)
+                return false;
+        }
+        return true;
+    }
+
     /// <summary>
     /// The always-on supervisor loop — started once in the constructor and run
     /// for the app's whole lifetime. It is the single place that turns API
     /// answers into <see cref="ServerStatus"/> transitions:
     /// <list type="bullet">
     /// <item>While <see cref="ServerState.Running"/>: fetch <c>GET /models</c>
-    /// every 500ms — the fetch doubles as the liveness probe AND publishes the
-    /// snapshot via <see cref="ModelsChanged"/>. A failed fetch is confirmed
+    /// every 500ms while transitions are fresh, settling to every 2s while the
+    /// snapshot is static — the fetch doubles as the liveness probe AND publishes the
+    /// snapshot via <see cref="ModelsChanged"/> (change-gated — see the event). A failed fetch is confirmed
     /// with a <c>/health</c> probe before declaring death, so a transient
     /// <c>/models</c> hiccup on a living server doesn't flip the state.</item>
     /// <item>While <see cref="ServerState.Starting"/> or
@@ -1766,10 +1828,29 @@ public sealed class LlamaManager
 
                         if (fetchOk)
                         {
-                            try { _lastModelsSnapshot = snapshot; ModelsChanged?.Invoke(this, snapshot); }
-                            catch (Exception ex) { Log.Warn(ex, "ModelsChanged handler threw"); /* a handler error doesn't take down the supervisor */ }
+                            // Publish only when something observable changed — or on
+                            // the first tick after entering Running (rows need a fresh
+                            // look regardless of the fingerprint) — plus a slow
+                            // heartbeat so backoff-based subscribers still wake up.
+                            // Steady-state ticks (the vast majority) now cost one HTTP
+                            // fetch and nothing else: no event, no dispatcher hop, no
+                            // log-string building.
+                            var now = DateTime.UtcNow;
+                            var changed = !SnapshotsEqual(_lastPublishedModels, snapshot);
+                            var entered = status != _lastTickStatus;
+                            if (changed || entered || now - _lastPublishAt >= PublishHeartbeat)
+                            {
+                                _lastPublishedModels = snapshot;
+                                _lastPublishAt = now;
+                                try { _lastModelsSnapshot = snapshot; ModelsChanged?.Invoke(this, snapshot); }
+                                catch (Exception ex) { Log.Warn(ex, "ModelsChanged handler threw"); /* a handler error doesn't take down the supervisor */ }
+                            }
+                            if (changed || entered) _lastPollChangeAt = now;
 
-                            if (snapshot.Count > 0)
+                            // Level-guarded so Release (Info) builds skip the
+                            // interpolation entirely; Debug sessions keep the
+                            // per-tick heartbeat line.
+                            if (snapshot.Count > 0 && Log.Level <= LogLevel.Debug)
                                 Log.Debug(
                                     $"poll: {snapshot.Count} model(s): {string.Join(", ", snapshot.Select(m => $"{m.Id}={(m.Status ?? "?")}"))}");
                         }
@@ -1788,7 +1869,10 @@ public sealed class LlamaManager
             }
             catch (Exception ex) { Log.Warn(ex, "supervisor tick threw"); /* one bad tick doesn't take down the supervisor */ }
 
-            await Task.Delay(status == ServerState.Running ? 500 : 1000);
+            _lastTickStatus = status;
+            await Task.Delay(status == ServerState.Running
+                ? (DateTime.UtcNow - _lastPollChangeAt < FastPollWindow ? RunningPollFastMs : RunningPollSteadyMs)
+                : 1000);
         }
     }
 
