@@ -78,7 +78,7 @@ namespace LlamaApp.Views
         /// "Browse more" separator, then catalog family rows. Built from
         /// <see cref="LocalModels"/> + <see cref="Families"/> by
         /// <see cref="RebuildItems"/>/<see cref="RebuildBrowseTail"/>; the
-        /// 1s poller never touches it (property updates flow via bindings).
+        /// models poller never touches it (property updates flow via bindings).
         /// </summary>
         public ObservableCollection<ModelListItemViewModel> Items { get; } = [];
 
@@ -218,13 +218,12 @@ namespace LlamaApp.Views
             // The single list mirrors LocalModels membership (installed rows)
             // plus the browse tail (separator + families). Property updates
             // (download progress, load state) flow through bindings without
-            // touching the collection — the 1s poller never rebuilds rows.
-            LocalModels.CollectionChanged += (_, _) =>
-            {
-                RebuildItems();
-                RebuildBrowseTail();
-                UpdateHubRowStates();
-            };
+            // touching the collection — the models poller never rebuilds rows.
+            // Membership changes coalesce into ONE rebuild per dispatcher
+            // slice (see ScheduleListRebuild): a populate or a multi-row
+            // reconcile mutates LocalModels in a synchronous burst, and a
+            // per-Add rebuild was O(N² + N×F) Items mutations per burst.
+            LocalModels.CollectionChanged += (_, _) => ScheduleListRebuild();
 
             LoadModels();
             LoadVersionInfo();
@@ -680,6 +679,43 @@ namespace LlamaApp.Views
             _ = LoadFamiliesAsync();
         }
 
+        // Rebuild coalescing: LocalModels mutations arrive in bursts — a
+        // populate clears + adds N rows, one reconcile can add several — and
+        // each CollectionChanged used to rebuild the whole ListView index
+        // (O(N² + N×F) Items mutations per burst). The handler schedules
+        // instead: queued work runs after the current synchronous burst, so
+        // ONE rebuild covers the whole burst no matter how many mutations it
+        // contains (and one-row adds rebuild exactly once, as before).
+        private bool _listRebuildQueued;
+
+        /// <summary>
+        /// Schedules a single list rebuild on the dispatcher queue; repeated
+        /// calls within one dispatcher slice coalesce into one run. Failures
+        /// are logged and swallowed — a bad rebuild must not crash the
+        /// dispatcher.
+        /// </summary>
+        private void ScheduleListRebuild()
+        {
+            if (_listRebuildQueued) return;
+            _listRebuildQueued = true;
+
+            void Rebuild()
+            {
+                _listRebuildQueued = false;
+                try
+                {
+                    RebuildItems();
+                    RebuildBrowseTail();
+                    UpdateHubRowStates();
+                }
+                catch (Exception ex) { Log.Warn(ex, "model list rebuild failed"); }
+            }
+
+            var queue = DispatcherQueue;
+            if (queue is null) { Rebuild(); return; }
+            if (!queue.TryEnqueue(Rebuild)) _listRebuildQueued = false;
+        }
+
         /// <summary>
         /// Re-syncs the list's installed prefix with <see cref="LocalModels"/>:
         /// wrappers are cached per model so an unchanged row keeps its
@@ -723,22 +759,39 @@ namespace LlamaApp.Views
         /// prefix): the "Browse more" separator (only when there is something
         /// on both sides of it) plus the catalog family rows. The
         /// loading/error status line lives below the ListView, not in it.
+        /// Diff-gated via <see cref="BrowseTailRefresh"/>: when the tail's
+        /// desired content is unchanged — the common case, hit by every
+        /// single-row add/remove — the rows are left in place instead of being
+        /// torn down and re-added.
         /// </summary>
         private void RebuildBrowseTail()
         {
+            var withSeparator = LocalModels.Count > 0 && Families.Count > 0;
+            if (!BrowseTailRefresh.NeedsRebuild(
+                    _tailBuiltFrom, Families, _tailBuiltWithSeparator, withSeparator))
+                return;
+
             for (var i = Items.Count - 1; i >= LocalModels.Count; i--)
                 Items.RemoveAt(i);
 
             if (Families.Count > 0)
             {
-                if (LocalModels.Count > 0)
+                if (withSeparator)
                     Items.Add(new BrowseSeparatorListItemViewModel());
                 foreach (var family in Families)
                     Items.Add(new ModelFamilyListItemViewModel(family));
             }
 
+            _tailBuiltFrom = [.. Families];
+            _tailBuiltWithSeparator = withSeparator;
+
             UpdateRowDividers();
         }
+
+        // What the browse tail was last built from — the diff gate for
+        // RebuildBrowseTail (null until the first build).
+        private IReadOnlyList<ModelFamilyViewModel>? _tailBuiltFrom;
+        private bool _tailBuiltWithSeparator;
 
         /// <summary>
         /// Toggles the subtle row dividers: between content rows only —
