@@ -68,9 +68,9 @@ jobs:
 
       # LlamaApp.Tests: references the WinUI APP project (Windows TFM, x64
       # only), so this is also the step that proves the app itself compiles —
-      # not just the libraries. PublishReadyToRun/PublishTrimmed are forced
-      # off: the app uses reflection-based JsonSerializer and `dynamic`
-      # (StartupHelper), which trim/R2R break (same reason as the MSIX build).
+      # not just the libraries. Trim/R2R stay off for the test build (tests
+      # must run full-fidelity; trimming is only validated on the publish
+      # path — see the MSIX step below).
       - name: Test (app)
         if: matrix.label == 'x64'
         run: >
@@ -170,9 +170,11 @@ jobs:
       # `GenerateMsixPackage` target (which runs MakeAppx via
       # `_GenerateAppxPackageFile`). The legacy `GenerateAppxPackage=true` is a
       # no-op passthrough in WinAppSDK 1.6 and produces NO .msix.
-      # PublishTrimmed/PublishReadyToRun are forced off because the app uses
-      # reflection-based JsonSerializer.Deserialize<TValue> and `dynamic`
-      # (StartupHelper) which trim/R2R would remove -> runtime breakage.
+      # PublishTrimmed=false: ReadyToRun stays off (unvalidated) and the
+      # MSIX is deliberately still UNTRIMMED — the trimmed zip channel
+      # (publish.yml) soaks first; flip this after a smoke pass over the
+      # rarely-exercised paths (startup shortcut toggle, settings, overlay,
+      # download). The zip channel enforces zero IL trim warnings.
       - name: Build & package unsigned MSIX (${{ matrix.rid }})
         run: >
           msbuild LlamaApp.csproj

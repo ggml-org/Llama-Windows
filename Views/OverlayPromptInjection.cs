@@ -27,6 +27,20 @@ public static class OverlayPromptInjection
     internal const string ComposerPlaceholder = "Ask anything...";
 
     /// <summary>
+    /// JSON-encodes a string for embedding in the generated script — never
+    /// interpolate values into JS directly. The serializer's RUC annotation
+    /// is conservative for strings: the built-in string converter is always
+    /// present and never trimmed, so this is safe in <c>PublishTrimmed</c>
+    /// builds (the trim gate in publish.yml still fails on any other IL
+    /// warning). Output is pinned by <c>OverlayPromptInjectionTests</c>.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage(
+        "Trimming", "IL2026",
+        Justification = "JsonSerializer.Serialize(string) uses the always-present built-in string converter; nothing is reflected or trimmed here.")]
+    private static string JsonString(string value)
+        => JsonSerializer.Serialize(value);
+
+    /// <summary>
     /// The script executed in the WebUI to fill the composer with
     /// <paramref name="prompt"/>. The prompt is JSON-embedded (never
     /// interpolated) so quotes, backslashes, newlines and
@@ -37,14 +51,14 @@ public static class OverlayPromptInjection
     /// </summary>
     public static string Build(string prompt)
     {
-        var json = JsonSerializer.Serialize(prompt);
+        var json = JsonString(prompt);
         return $$"""
             (function () {
                 const prompt = {{json}};
                 const textareas = Array.from(document.querySelectorAll('textarea'));
                 if (textareas.length === 0) return false;
                 const composer =
-                    textareas.find(t => t.placeholder === {{JsonSerializer.Serialize(ComposerPlaceholder)}}) ||
+                    textareas.find(t => t.placeholder === {{JsonString(ComposerPlaceholder)}}) ||
                     textareas[textareas.length - 1];
                 const setter = Object.getOwnPropertyDescriptor(
                     window.HTMLTextAreaElement.prototype, 'value').set;
@@ -70,7 +84,7 @@ public static class OverlayPromptInjection
                 const textareas = Array.from(document.querySelectorAll('textarea'));
                 if (textareas.length === 0) return false;
                 const composer =
-                    textareas.find(t => t.placeholder === {{JsonSerializer.Serialize(ComposerPlaceholder)}}) ||
+                    textareas.find(t => t.placeholder === {{JsonString(ComposerPlaceholder)}}) ||
                     textareas[textareas.length - 1];
                 composer.focus();
                 composer.setSelectionRange(composer.value.length, composer.value.length);
@@ -94,13 +108,13 @@ public static class OverlayPromptInjection
     {
         return $$"""
             (function () {
-                const b64 = {{JsonSerializer.Serialize(base64)}};
-                const mime = {{JsonSerializer.Serialize(mimeType)}};
-                const name = {{JsonSerializer.Serialize(fileName)}};
+                const b64 = {{JsonString(base64)}};
+                const mime = {{JsonString(mimeType)}};
+                const name = {{JsonString(fileName)}};
                 const textareas = Array.from(document.querySelectorAll('textarea'));
                 if (textareas.length === 0) return false;
                 const composer =
-                    textareas.find(t => t.placeholder === {{JsonSerializer.Serialize(ComposerPlaceholder)}}) ||
+                    textareas.find(t => t.placeholder === {{JsonString(ComposerPlaceholder)}}) ||
                     textareas[textareas.length - 1];
                 const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
                 const file = new File([bytes], name, { type: mime });

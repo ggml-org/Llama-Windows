@@ -60,23 +60,40 @@ jobs:
           -p:Platform=${{ matrix.platform }}
           -p:RestoreLockedMode=true
 
-      # PublishTrimmed/PublishReadyToRun are forced off (mirroring the MSIX
-      # build in _build.yml): the app uses reflection-based
-      # JsonSerializer.Deserialize<TValue> and `dynamic` (StartupHelper),
-      # which trim/R2R break — and the WindowsAppSDK self-contained defaults
-      # would otherwise switch BOTH on for exactly these zip builds.
+      # PublishTrimmed is ON for the zip channel (the debugging/inspection
+      # artifact — it soaks cheaply; the MSIX flips after a smoke pass).
+      # ReadyToRun stays off (unvalidated). Trim analysis is ENFORCED: any
+      # IL warning fails the step, so reflection/dynamic code can't silently
+      # re-enter and break trimmed builds at runtime. The WindowsAppSDK
+      # self-contained defaults switch trim/R2R on unless told otherwise.
       - name: Publish (${{ matrix.rid }})
-        run: >
-          dotnet publish LlamaApp.csproj
-          -c Release
-          -r ${{ matrix.rid }}
-          --self-contained ${{ inputs.self-contained }}
-          -p:Platform=${{ matrix.platform }}
-          -p:RestoreLockedMode=true
-          -p:PublishReadyToRun=false
-          -p:PublishTrimmed=false
-          -p:PublishSingleFile=false
-          -o publish/${{ matrix.rid }}
+        shell: pwsh
+        run: |
+          $output = & dotnet publish LlamaApp.csproj `
+            -c Release `
+            -r ${{ matrix.rid }} `
+            --self-contained ${{ inputs.self-contained }} `
+            -p:Platform=${{ matrix.platform }} `
+            -p:RestoreLockedMode=true `
+            -p:PublishReadyToRun=false `
+            -p:PublishTrimmed=true `
+            -p:PublishSingleFile=false `
+            -p:TrimmerSingleWarn=false `
+            -o publish/${{ matrix.rid }} 2>&1
+          $output | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # CsWinRT's generated WinRT projection emits IL2081 annotation gaps
+          # in its generic ABI fallbacks (ABI.*/WinRT.* — platform interop
+          # code, not actionable from app code). Everything else must be
+          # clean: app-code reflection/dynamic would show up here and break
+          # the trimmed build at runtime.
+          $trimWarnings = @($output | Where-Object {
+              $_ -match 'warning IL\d+' -and $_ -notmatch 'ABI\.(System|Windows)\.|WinRT\.'
+          })
+          if ($trimWarnings.Count -gt 0) {
+            $trimWarnings | ForEach-Object { Write-Host "::error::$_" }
+            throw "$($trimWarnings.Count) trim-analysis warning(s): reflection or dynamic code is back — the trimmed build would break at runtime."
+          }
 
       - name: Compress artifact
         shell: pwsh

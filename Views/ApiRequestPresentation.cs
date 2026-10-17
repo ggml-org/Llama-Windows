@@ -1,6 +1,7 @@
 namespace LlamaApp.Views;
 
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 /// <summary>
 /// Builds the sample API request shown by the model details view's "Build an
@@ -25,11 +26,15 @@ public static class ApiRequestPresentation
         // Serialize, never interpolate: the id can come from the llama.app
         // catalog, Hub search, or an adopted server, and a quote/backslash/
         // newline in it must not corrupt the body or inject extra JSON fields.
-        var body = JsonSerializer.Serialize(new
-        {
-            model = serverModelId,
-            messages = new[] { new { role = "user", content = "Hello, how are you?" } },
-        });
+        // The DTO keeps the serializer source-generated (trim-safe); its
+        // property order is the documented body shape.
+        var body = JsonSerializer.Serialize(
+            new CurlRequest
+            {
+                Model = serverModelId,
+                Messages = [new CurlMessage { Role = "user", Content = "Hello, how are you?" }],
+            },
+            ViewsJsonContext.Default.CurlRequest);
 
         // Single-quote the payload for a POSIX shell so an id containing
         // $(...) or backticks is never command-substituted on paste; an
@@ -53,4 +58,19 @@ public static class ApiRequestPresentation
     /// </summary>
     public static string BuildWebUiUrl(string serverAddress, int serverPort, string serverModelId)
         => $"http://{serverAddress}:{serverPort}?model={Uri.EscapeDataString(serverModelId)}";
+
+    /// <summary>The <c>POST /v1/chat/completions</c> request body — a named
+    /// DTO (never an anonymous type) so the serializer can be
+    /// source-generated. Internal for the JSON context.</summary>
+    internal sealed class CurlRequest
+    {
+        [JsonPropertyName("model")] public string Model { get; set; } = "";
+        [JsonPropertyName("messages")] public CurlMessage[] Messages { get; set; } = [];
+    }
+
+    internal sealed class CurlMessage
+    {
+        [JsonPropertyName("role")] public string Role { get; set; } = "";
+        [JsonPropertyName("content")] public string Content { get; set; } = "";
+    }
 }
