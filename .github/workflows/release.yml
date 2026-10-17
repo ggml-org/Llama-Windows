@@ -159,3 +159,64 @@ jobs:
           files: |
             artifacts/**/*.msix
             artifacts/**/*.msixbundle
+
+  # Publishes the signed .msixbundle to the Microsoft Store (Partner Center
+  # submission) — "publish to the Store from the GitHub Release": this runs
+  # after the release is created, version tags only. One-time setup is
+  # documented in docs/store-publishing.md (Partner Center app reservation,
+  # Entra app for the submission API, secrets, and the environment gate).
+  store:
+    name: Publish to Microsoft Store
+    needs: release
+    # Version tags only — a manual dispatch from a branch must never submit.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    # Human gate: add required reviewers to the "microsoft-store" environment
+    # in repo settings so every Store submission gets a go-ahead before it
+    # enters certification.
+    environment: microsoft-store
+    steps:
+      - name: Download the signed .msixbundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: LlamaApp-msixbundle-${{ github.sha }}
+          path: store
+
+      # Official setup action for the MSStore Developer CLI — it installs
+      # the CLI the supported way (its own version governs which CLI lands
+      # on the runner). Pinned to a commit SHA like every other action here.
+      - name: Set up the Microsoft Store Developer CLI
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+
+      # msstore's officially supported non-interactive configuration:
+      # reconfigure stores the Partner Center identity and the Entra client
+      # secret for all later msstore commands on this runner.
+      - name: Configure Partner Center credentials
+        shell: pwsh
+        env:
+          PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          PARTNER_CENTER_SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          PARTNER_CENTER_CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          PARTNER_CENTER_CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+        run: |
+          if (-not $env:PARTNER_CENTER_SELLER_ID -or -not $env:PARTNER_CENTER_CLIENT_SECRET) {
+            throw 'PARTNER_CENTER_* secrets are not configured — see docs/store-publishing.md'
+          }
+          msstore reconfigure `
+            --tenantId $env:PARTNER_CENTER_TENANT_ID `
+            --sellerId $env:PARTNER_CENTER_SELLER_ID `
+            --clientId $env:PARTNER_CENTER_CLIENT_ID `
+            --clientSecret $env:PARTNER_CENTER_CLIENT_SECRET
+
+      # Commits the submission to certification. First integrations: set the
+      # repo variable STORE_NO_COMMIT=true to keep the submission as a draft
+      # in Partner Center for review instead (see docs/store-publishing.md).
+      - name: Publish submission to Partner Center
+        shell: pwsh
+        env:
+          PARTNER_CENTER_APP_ID: ${{ secrets.PARTNER_CENTER_APP_ID }}
+        run: |
+          $extra = if ('${{ vars.STORE_NO_COMMIT }}' -eq 'true') { '--noCommit' } else { '' }
+          $bundle = Get-ChildItem store -Filter *.msixbundle | Select-Object -First 1
+          if (-not $bundle) { throw 'signed .msixbundle artifact not found in store/' }
+          msstore publish $bundle.FullName --appId $env:PARTNER_CENTER_APP_ID $extra
