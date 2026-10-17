@@ -140,4 +140,130 @@ public class HubAvatarTests
 
         Assert.Null(bytes);
     }
+
+    [Theory]
+    [InlineData("https://cdn-avatars.huggingface.co/v1/user.jpeg", true)]
+    [InlineData("https://huggingface.co/front/assets/hf.png", true)]
+    [InlineData("https://hf.co/v1/user.jpeg", true)]
+    [InlineData("http://cdn-avatars.huggingface.co/v1/user.jpeg", false)]  // cleartext
+    [InlineData("https://evil.com/avatar.png", false)]                     // off-site
+    [InlineData("https://evilhuggingface.co/avatar.png", false)]           // suffix trick
+    [InlineData("https://huggingface.co.evil.com/a.png", false)]           // prefix trick
+    [InlineData("file:///C:/avatar.png", false)]
+    [InlineData("javascript:alert(1)", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void Avatar_Url_Policy_Allows_Only_Https_HuggingFace_Hosts(string? url, bool trusted)
+        => Assert.Equal(trusted, HubClient.IsTrustedAvatarUrl(url));
+
+    [Fact]
+    public void Who_Am_I_Parses_Only_Trusted_Avatar_Urls()
+    {
+        var trusted = HubClient.HubUserInfoClient.Parse(
+            """{"id":"1","name":"moritz","avatarUrl":"https://cdn-avatars.huggingface.co/v1/user.jpeg"}""");
+        var untrusted = HubClient.HubUserInfoClient.Parse(
+            """{"id":"1","name":"moritz","avatarUrl":"https://evil.com/steal.png"}""");
+
+        Assert.Equal("https://cdn-avatars.huggingface.co/v1/user.jpeg", trusted!.AvatarUrl);
+        Assert.Equal("", untrusted!.AvatarUrl);
+    }
+
+    [Fact]
+    public async Task An_Untrusted_Resolved_Url_Is_Never_Fetched()
+    {
+        var handler = new AvatarStub
+        {
+            Respond = url => url switch
+            {
+                var u when u.Contains("/users/moritz/avatar") => Json("""{"avatarUrl":"https://evil.com/steal"}"""),
+                _ => Bytes(UserBytes), // answers anything — the point is that nothing else is asked
+            }
+        };
+        using var client = new HttpClient(handler);
+
+        var bytes = await new HubClient(null).GetUserAvatarBytesAsync(client, "moritz");
+
+        Assert.Null(bytes);
+        Assert.False(handler.Requested("evil.com"));
+    }
+
+    [Fact]
+    public async Task An_Oversized_Avatar_Is_Rejected_By_The_Declared_Length()
+    {
+        var handler = new AvatarStub
+        {
+            Respond = url => url switch
+            {
+                var u when u.Contains("/users/moritz/avatar") => Json($$"""{"avatarUrl":"{{UserAvatarUrl}}"}"""),
+                var u when u.Contains("cdn-avatars") => Bytes(new byte[2 * 1024 * 1024]),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            }
+        };
+        using var client = new HttpClient(handler);
+
+        var bytes = await new HubClient(null).GetUserAvatarBytesAsync(client, "moritz");
+
+        Assert.Null(bytes);
+    }
+
+    [Fact]
+    public async Task A_Lying_Content_Length_Is_Caught_By_The_Streaming_Cap()
+    {
+        // Content-Length claims "tiny", the body is 2 MB — the streamed cap
+        // must stop the read instead of trusting the header.
+        var handler = new AvatarStub
+        {
+            Respond = url => url switch
+            {
+                var u when u.Contains("/users/moritz/avatar") => Json($$"""{"avatarUrl":"{{UserAvatarUrl}}"}"""),
+                var u when u.Contains("cdn-avatars") => LyingContentLength(),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            }
+        };
+        using var client = new HttpClient(handler);
+
+        var bytes = await new HubClient(null).GetUserAvatarBytesAsync(client, "moritz");
+
+        Assert.Null(bytes);
+    }
+
+    [Fact]
+    public async Task A_Redirect_Escape_Is_Rejected_By_The_Final_Url_Check()
+    {
+        // What a redirect off the trusted set looks like once the handler has
+        // followed it: the response's final request URI points elsewhere, and
+        // not a byte of the body may be read.
+        var handler = new AvatarStub
+        {
+            Respond = url => url switch
+            {
+                var u when u.Contains("/users/moritz/avatar") => Json($$"""{"avatarUrl":"{{UserAvatarUrl}}"}"""),
+                var u when u.Contains("cdn-avatars") => EscapedRedirect(),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            }
+        };
+        using var client = new HttpClient(handler);
+
+        var bytes = await new HubClient(null).GetUserAvatarBytesAsync(client, "moritz");
+
+        Assert.Null(bytes);
+    }
+
+    /// <summary>2 MB body with a Content-Length header claiming 1 byte.</summary>
+    private static HttpResponseMessage LyingContentLength()
+    {
+        var content = new ByteArrayContent(new byte[2 * 1024 * 1024]);
+        content.Headers.ContentLength = 1;
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+    }
+
+    /// <summary>The CDN response of a redirect that escaped to an untrusted
+    /// host: the final request URI is what the fetch validates.</summary>
+    private static HttpResponseMessage EscapedRedirect()
+    {
+        var resp = Bytes(UserBytes);
+        resp.RequestMessage = new HttpRequestMessage(
+            HttpMethod.Get, "http://169.254.169.254/latest/meta-data/");
+        return resp;
+    }
 }

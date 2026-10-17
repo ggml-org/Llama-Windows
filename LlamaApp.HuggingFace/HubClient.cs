@@ -127,7 +127,9 @@ public class HubClient(string? token)
                 {
                     Id = dto.Id ?? "",
                     Name = dto.Name ?? "",
-                    AvatarUrl = dto.AvatarUrl ?? "",
+                    // Only a trusted URL is surfaced — the caller renders it
+                    // directly (see IsTrustedAvatarUrl).
+                    AvatarUrl = IsTrustedAvatarUrl(dto.AvatarUrl) ? dto.AvatarUrl! : "",
                 };
             }
             catch (JsonException)
@@ -322,8 +324,7 @@ public class HubClient(string? token)
         try
         {
             var avatarUrl = await ResolveUserAvatarUrlAsync(client, userName, cancel);
-            if (string.IsNullOrWhiteSpace(avatarUrl)) return null;
-            return await client.GetByteArrayAsync(avatarUrl, cancel);
+            return await FetchAvatarBytesAsync(client, avatarUrl, cancel);
         }
         catch (HttpRequestException)
         {
@@ -367,11 +368,74 @@ public class HubClient(string? token)
             if (!resp.IsSuccessStatusCode) return null;
 
             var json = await resp.Content.ReadAsStringAsync(cancel);
-            return JsonSerializer.Deserialize<UserAvatarDto>(json)?.AvatarUrl;
+            var avatarUrl = JsonSerializer.Deserialize<UserAvatarDto>(json)?.AvatarUrl;
+            // The URL comes from the API but is fetched by this app — treat it
+            // as untrusted input (see IsTrustedAvatarUrl).
+            return IsTrustedAvatarUrl(avatarUrl) ? avatarUrl : null;
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException)
         {
             return null;
+        }
+    }
+
+    /// <summary>Avatars are decoration: never fetch more than this.</summary>
+    private const int MaxAvatarBytes = 1024 * 1024;
+
+    /// <summary>
+    /// Avatar URLs come from the Hub API but are fetched and rendered by the
+    /// app, so they are treated as untrusted input: HTTPS on a Hugging Face
+    /// host only — no cleartext fetch, no custom scheme handlers, no pointing
+    /// the fetch at arbitrary (e.g. intranet) endpoints. Internal for tests.
+    /// </summary>
+    internal static bool IsTrustedAvatarUrl(string? url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri)
+           && uri.Scheme == Uri.UriSchemeHttps
+           && (uri.Host.Equals("huggingface.co", StringComparison.OrdinalIgnoreCase)
+               || uri.Host.EndsWith(".huggingface.co", StringComparison.OrdinalIgnoreCase)
+               || uri.Host.Equals("hf.co", StringComparison.OrdinalIgnoreCase)
+               || uri.Host.EndsWith(".hf.co", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Fetches avatar bytes under the untrusted-URL rules: the URL — and the
+    /// FINAL URL after any redirect — must pass <see cref="IsTrustedAvatarUrl"/>,
+    /// and at most <see cref="MaxAvatarBytes"/> are read (a lying or missing
+    /// Content-Length is caught by the streamed cap). Null on any violation
+    /// or failure: avatars must never fault the caller or become a memory/
+    /// disk sink. Cancellation propagates.
+    /// </summary>
+    internal static async Task<byte[]?> FetchAvatarBytesAsync(
+        HttpClient client, string? avatarUrl, CancellationToken cancel = default)
+    {
+        if (!IsTrustedAvatarUrl(avatarUrl)) return null;
+
+        try
+        {
+            using var resp = await client.GetAsync(
+                avatarUrl!, HttpCompletionOption.ResponseHeadersRead, cancel);
+            if (!resp.IsSuccessStatusCode) return null;
+
+            // Automatic redirects may have left the trusted set — the final
+            // request URI is checked before a single byte is read.
+            var finalUrl = resp.RequestMessage?.RequestUri?.ToString();
+            if (finalUrl is not null && !IsTrustedAvatarUrl(finalUrl)) return null;
+
+            if (resp.Content.Headers.ContentLength > MaxAvatarBytes) return null;
+
+            await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
+            var buffer = new MemoryStream();
+            var chunk = new byte[8192];
+            int read;
+            while ((read = await stream.ReadAsync(chunk, cancel)) > 0)
+            {
+                buffer.Write(chunk, 0, read);
+                if (buffer.Length > MaxAvatarBytes) return null; // the declared length lied
+            }
+            return buffer.ToArray();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null; // best-effort decoration — never fault the caller
         }
     }
 
