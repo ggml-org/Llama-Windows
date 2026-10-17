@@ -8,6 +8,9 @@
         "resolved": "10.0.12",
         "contentHash": "wO0W8VDMeRJZakRySOmemAnrBZMwEFRlbfBtATxUiLf2I3IhSRnCp1Vt157NWptdE4IJ7eftd5n8q9LtaKHFTQ=="
       }
-    }
+    },
+    "net10.0/win-arm64": {},
+    "net10.0/win-x64": {},
+    "net10.0/win-x86": {}
   }
 }

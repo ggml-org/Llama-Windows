@@ -105,11 +105,16 @@ jobs:
 
       - name: Build .msixbundle
         shell: pwsh
+        env:
+          # Via env, never ${{ }}-interpolated into the script body: a tag
+          # name is attacker-controllable (anyone who can push tags) and
+          # would otherwise be injected verbatim into this PowerShell block.
+          TAG: ${{ github.ref_name }}
         run: |
           New-Item -ItemType Directory -Force bundle-input,bundle | Out-Null
           Get-ChildItem signed -Recurse -Filter *.msix |
             Copy-Item -Destination bundle-input
-          & "${{ steps.makeappx.outputs.path }}" bundle /d bundle-input /p "bundle/LlamaApp-${{ github.ref_name }}.msixbundle" /v
+          & "${{ steps.makeappx.outputs.path }}" bundle /d bundle-input /p "bundle/LlamaApp-${env:TAG}.msixbundle" /v
 
       - name: Sign .msixbundle (Azure Trusted Signing)
         uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2

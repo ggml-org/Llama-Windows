@@ -53,11 +53,16 @@ jobs:
 
       # LlamaApp.LlamaCpp.Tests: platform-agnostic (net10.0) — runs on both
       # architectures. `dotnet test` restores + builds + tests in one go; a
-      # compile error fails the step here, within minutes.
+      # compile error fails the step here, within minutes. RestoreLockedMode:
+      # the committed packages.lock.json is the reviewed closure — a restore
+      # that would resolve anything else fails the build instead of silently
+      # drifting (Directory.Build.props pins the RID set so one lock file
+      # serves every restore shape).
       - name: Test (LlamaCpp)
         run: >
           dotnet test LlamaApp.LlamaCpp.Tests/LlamaApp.LlamaCpp.Tests.csproj
           -c Release
+          -p:RestoreLockedMode=true
           --logger "trx;LogFileName=test-results-llamacpp.trx"
           --logger "console;verbosity=normal"
 
@@ -71,6 +76,7 @@ jobs:
         run: >
           dotnet test LlamaApp.Tests/LlamaApp.Tests.csproj
           -c Release
+          -p:RestoreLockedMode=true
           -p:PublishReadyToRun=false
           -p:PublishTrimmed=false
           --logger "trx;LogFileName=test-results-app.trx"
@@ -127,8 +133,13 @@ jobs:
       - name: Set package version from tag
         if: inputs.tag != ''
         shell: pwsh
+        env:
+          # Via env, never ${{ }}-interpolated into the script body: a tag
+          # name is attacker-controllable (anyone who can push tags) and
+          # would otherwise be injected verbatim into this PowerShell block.
+          TAG: ${{ inputs.tag }}
         run: |
-          $tag = '${{ inputs.tag }}'
+          $tag = $env:TAG
           if ($tag -notmatch '^v?\d+(\.\d+)*(-.*)?$') {
             Write-Host "::warning::Ref '$tag' is not a version tag — keeping the committed manifest version."
             exit 0
@@ -167,6 +178,7 @@ jobs:
           msbuild LlamaApp.csproj
           -t:Build -restore -bl:msbuild.binlog
           -p:Configuration=Release
+          -p:RestoreLockedMode=true
           -p:Platform=${{ matrix.platform }}
           -p:RuntimeIdentifier=${{ matrix.rid }}
           -p:GenerateAppxPackageOnBuild=true
