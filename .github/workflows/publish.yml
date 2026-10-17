@@ -60,6 +60,11 @@ jobs:
           -p:Platform=${{ matrix.platform }}
           -p:RestoreLockedMode=true
 
+      # PublishTrimmed/PublishReadyToRun are forced off (mirroring the MSIX
+      # build in _build.yml): the app uses reflection-based
+      # JsonSerializer.Deserialize<TValue> and `dynamic` (StartupHelper),
+      # which trim/R2R break — and the WindowsAppSDK self-contained defaults
+      # would otherwise switch BOTH on for exactly these zip builds.
       - name: Publish (${{ matrix.rid }})
         run: >
           dotnet publish LlamaApp.csproj
@@ -69,6 +74,7 @@ jobs:
           -p:Platform=${{ matrix.platform }}
           -p:RestoreLockedMode=true
           -p:PublishReadyToRun=false
+          -p:PublishTrimmed=false
           -p:PublishSingleFile=false
           -o publish/${{ matrix.rid }}
 
