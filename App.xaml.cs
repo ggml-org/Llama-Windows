@@ -765,8 +765,13 @@ namespace LlamaApp
                 // spec-type entry for those comes from the app. Best-effort.
                 if (Common.DraftHeads.HasEmbeddedMtp(fileName))
                 {
-                    Settings.Current.ModelSpeculativeTypes[import.ModelId] =
-                        Common.DraftHeads.SpecType(Common.DraftHeadKind.Mtp);
+                    // Under the dictionary's lock — the same shared settings
+                    // dictionary the draft-head poller and the INI renderer
+                    // touch from background threads (see DraftHeadDetection.Apply).
+                    var specTypes = Settings.Current.ModelSpeculativeTypes;
+                    lock (specTypes)
+                        specTypes[import.ModelId] =
+                            Common.DraftHeads.SpecType(Common.DraftHeadKind.Mtp);
                     Settings.Current.Save();
                     await Llama.LlamaManager.Shared.ReloadModelPresetsAsync();
                     Common.Log.Info($"draft heads: '{fileName}' carries an embedded MTP head — speculative decoding enabled");

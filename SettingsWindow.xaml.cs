@@ -615,9 +615,15 @@ namespace LlamaApp
             // models drop out the same way. Unconditional: the reload is a
             // no-op when no server is running, and detecting "did the folder
             // list actually change" would cost more than the reload itself.
-            s.ModelFolders.Clear();
-            foreach (var folder in _modelFolders)
-                s.ModelFolders.Add(folder);
+            // Mutated under the list's lock — the INI renderer scans it from a
+            // background thread (WriteContextPresetsIniAsync), and a scan
+            // racing Clear/Add is undefined for List<T>.
+            lock (s.ModelFolders)
+            {
+                s.ModelFolders.Clear();
+                foreach (var folder in _modelFolders)
+                    s.ModelFolders.Add(folder);
+            }
             try { _ = Llama.LlamaManager.Shared.ReloadModelPresetsAsync(); }
             catch (Exception ex) { Common.Log.Warn(ex, "model-folder preset reload failed"); }
 

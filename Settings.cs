@@ -309,10 +309,23 @@ public sealed class Settings
         {
             ProtectedHuggingFaceToken = Common.SecretProtector.Protect(HuggingFaceToken);
             ProtectedServerApiKey = Common.SecretProtector.Protect(ServerApiKey);
-            var json = JsonSerializer.Serialize(this, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-            });
+            // The three collections below are shared BY REFERENCE with
+            // background readers/writers (LlamaManager's INI renderer and
+            // folder scan, the draft-head poller — see
+            // DraftHeadDetection.Apply's lock note), and the serializer
+            // traverses them. Save takes the same per-collection locks those
+            // sites use, in declaration order (no lock holder ever acquires
+            // another, so nesting here is deadlock-free). Without this, a
+            // mutation racing the serialization failed the whole save to a
+            // caught "collection was modified".
+            string json;
+            lock (ModelContextLengths)
+            lock (ModelSpeculativeTypes)
+            lock (ModelFolders)
+                json = JsonSerializer.Serialize(this, new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                });
             File.WriteAllText(SettingsPath, json);
             return true;
         }

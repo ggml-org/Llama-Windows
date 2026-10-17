@@ -1476,12 +1476,17 @@ public sealed class LlamaManager
         // recursive scan is disk I/O, so it runs off the caller's thread —
         // the write happens on server start (possibly the UI thread) and on
         // every preset reload, and a slow folder (network drive) must never
-        // stall either. The HF cache and the managed models dir are excluded:
-        // the server already lists those, and enrolling a parent of the
-        // cache must not duplicate every cached model.
-        var enrolled = ModelFolders is { Count: > 0 }
+        // stall either. The list is snapshotted under its lock first (it is
+        // the LIVE settings list, mutated in place by the settings UI). The
+        // HF cache and the managed models dir are excluded: the server
+        // already lists those, and enrolling a parent of the cache must not
+        // duplicate every cached model.
+        string[]? folders = null;
+        if (ModelFolders is { Count: > 0 } enrolledFolders)
+            lock (enrolledFolders) folders = [.. enrolledFolders];
+        var enrolled = folders is { Length: > 0 }
             ? await Task.Run(() => EnrolledFolderScanner.Scan(
-                  ModelFolders, [CacheDirectory, ManagedModelsDir]))
+                  folders, [CacheDirectory, ManagedModelsDir]))
             : [];
         if (enrolled.Count > 0)
             Log.Info($"model folders: enrolled {enrolled.Count} model(s) from disk");

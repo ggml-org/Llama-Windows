@@ -1601,8 +1601,16 @@ namespace LlamaApp.Views
                 // with, and a section for a deleted model would re-list it as a
                 // loadable ghost. (Lingered as a latent issue for context
                 // lengths while the flag was conditional — pruned here now.)
-                var removed = Settings.Current.ModelContextLengths.Remove(((IModel)item).ServerModelId);
-                removed |= Settings.Current.ModelSpeculativeTypes.Remove(((IModel)item).ServerModelId);
+                var modelId = ((IModel)item).ServerModelId;
+                // Mutations under each dictionary's lock — the same shared
+                // settings dictionaries the draft-head poller and the INI
+                // renderer touch from background threads (see
+                // DraftHeadDetection.Apply's lock note).
+                var contexts = Settings.Current.ModelContextLengths;
+                bool removed;
+                lock (contexts) removed = contexts.Remove(modelId);
+                var specTypes = Settings.Current.ModelSpeculativeTypes;
+                lock (specTypes) removed |= specTypes.Remove(modelId);
                 if (removed)
                 {
                     Settings.Current.Save();
@@ -1649,10 +1657,16 @@ namespace LlamaApp.Views
                 item,
                 host: this,
                 loadContextPreference: id =>
-                    Settings.Current.ModelContextLengths.TryGetValue(id, out var t) ? t : null,
+                {
+                    var contexts = Settings.Current.ModelContextLengths;
+                    lock (contexts) return contexts.TryGetValue(id, out var t) ? t : null;
+                },
                 saveContextPreference: (id, t) =>
                 {
-                    Settings.Current.ModelContextLengths[id] = t;
+                    // Under the dictionary's lock — the INI renderer snapshots
+                    // it from a background thread (WriteContextPresetsIniAsync).
+                    var contexts = Settings.Current.ModelContextLengths;
+                    lock (contexts) contexts[id] = t;
                     Settings.Current.Save();
                     // The router caches each model's preset at load; re-render
                     // the --models-preset INI and ask it to re-read so the next

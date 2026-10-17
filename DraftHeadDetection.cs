@@ -91,7 +91,14 @@ internal static class DraftHeadDetection
                 {
                     if (!model.Id.Contains('/')) continue;       // a models-dir import: sidecars wire themselves
                     if (model.IsDownloading) continue;            // owned by the download path — it persists the entry only on success (a canceled download must leave no ghost INI section)
-                    if (Settings.Current.ModelSpeculativeTypes.ContainsKey(model.Id)) continue;
+                    // Checked under the dictionary's own lock: the shared
+                    // settings dictionary is mutated from the UI import/delete
+                    // paths as well as Apply, and a read racing a write is
+                    // undefined for Dictionary (see Apply's lock note).
+                    bool alreadyKnown;
+                    var specTypes = Settings.Current.ModelSpeculativeTypes;
+                    lock (specTypes) alreadyKnown = specTypes.ContainsKey(model.Id);
+                    if (alreadyKnown) continue;
                     if (InFlight.Contains(model.Id)) continue;
                     if (FailedAt.TryGetValue(model.Id, out var failedAt) &&
                         DateTimeOffset.UtcNow - failedAt < FailureBackoff) continue;
