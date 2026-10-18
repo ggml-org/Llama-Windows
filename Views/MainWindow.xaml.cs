@@ -491,7 +491,9 @@ namespace LlamaApp.Views
                 Logo = ModelItem.ResolveLogoOrGeneric(brand),
                 IsLoaded = sm.IsLoaded,
                 IsDownloading = sm.IsDownloading,
-                FilePath = sm.Path,
+                // The server's path is not reliably populated — resolve
+                // locally when it isn't (enrolled scan map / cache layouts).
+                FilePath = sm.Path ?? LlamaManager.Shared.FindModelFilePath(sm.Id),
             };
         }
 
@@ -2501,9 +2503,11 @@ namespace LlamaApp.Views
                 {
                     // Rows built before the file existed (an app-driven
                     // download) learn their on-disk path here — it drives the
-                    // row's "reveal in Explorer" button.
-                    if (item.FilePath is null && sm.Path is not null)
-                        item.FilePath = sm.Path;
+                    // row's "reveal in Explorer" button. Resolution retries on
+                    // every reconcile until it succeeds (the enrolled-folder
+                    // scan map may fill in after the row was built).
+                    if (item.FilePath is null)
+                        item.FilePath = sm.Path ?? LlamaManager.Shared.FindModelFilePath(sm.Id);
 
                     // Server truth: any state but "downloading" means the model
                     // exists in the cache — no longer a pending first download.
