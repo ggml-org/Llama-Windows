@@ -2691,26 +2691,43 @@ namespace LlamaApp.Views
                 }
             }
 
-            // Rows whose model vanished from the server's list entirely: a
-            // file deleted outside the app (Explorer, a cleaner tool) leaves
-            // the server's scan without it after the next preset reload, and
-            // the row would otherwise linger with a play button that can only
-            // fail. Hysteresis (MissingSnapshotTracker): the model must be
-            // gone from several consecutive snapshots — one missed listing
-            // (a rescan in flight, a briefly unreachable network folder)
-            // never flickers rows away. Never runs on empty snapshots (those
-            // are transient errors — see above) and never for in-flight
-            // downloads their drivers own (the sweep above owns the poller's).
+            // Rows whose model is gone: either vanished from the server's
+            // list entirely (a file deleted outside the app leaves the
+            // server's scan without it after the next preset reload), or
+            // still listed but no longer on disk (a ghost the preset kept
+            // listed). Both leave the row with a play button that can only
+            // fail — so both expire it. Hysteresis (MissingSnapshotTracker):
+            // the model must be gone from several consecutive snapshots — one
+            // missed listing (a rescan in flight, a briefly unreachable
+            // network folder) never flickers rows away. Never runs on empty
+            // snapshots (those are transient errors — see above) and never
+            // for in-flight downloads their drivers own (the sweep above
+            // owns the poller's).
             if (serverIds.Count > 0)
             {
+                // A row's model counts as present only when it is busy
+                // (downloading / loading / loaded — see ModelPresence for why
+                // each must stay) or its file is findable on disk. The
+                // server-reported path wins when given; local resolution
+                // (enrolled scan map / cache layouts) is the fallback.
+                bool IsBusy(string id) => serverModels.Any(m =>
+                    m.Id == id && (m.IsDownloading || m.IsLoading || m.IsLoaded));
+                bool FileOnDisk(string id)
+                {
+                    var sm = serverModels.FirstOrDefault(m => m.Id == id);
+                    return (sm?.Path is { } reported && System.IO.File.Exists(reported))
+                        || LlamaManager.Shared.FindModelFilePath(id) is not null;
+                }
+
+                var present = ModelPresence.EffectivelyPresent(serverIds, IsBusy, FileOnDisk);
                 var rowIds = _localByServerId
                     .Where(kv => kv.Value.DownloadCancellation is null && !kv.Value.IsDownloading)
                     .Select(kv => kv.Key)
                     .ToList();
-                foreach (var id in _missingSnapshot.Observe(rowIds, serverIds))
+                foreach (var id in _missingSnapshot.Observe(rowIds, present))
                 {
                     if (!_localByServerId.TryGetValue(id, out var row)) continue;
-                    Log.Info("model vanished from the server list: " + id);
+                    Log.Info("model row expired (gone from disk or unlisted): " + id);
                     _localByServerId.Remove(id);
                     LocalModels.Remove(row);
                     if (PruneModelSettings(id))
