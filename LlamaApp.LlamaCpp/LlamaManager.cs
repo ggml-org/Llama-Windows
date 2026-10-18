@@ -2815,15 +2815,90 @@ public sealed class LlamaManager
         if (ModelFileLocator.TryFind(serverModelId, cacheRoots) is { PrimaryFilePath: { } located })
             return located;
 
-        // 3. Open-With imports land as {id}.gguf in the managed models dir.
+        // 3. Open-With imports land as {id}.gguf in the managed models dir —
+        //    or as a directory ({id}/model.gguf) for multi-file imports. The
+        //    directory-style pick must carry real GGUF content (an import
+        //    fixture's 2-byte "model.gguf" must not make a zombie
+        //    resolvable) and the main file wins over sidecars.
         if (ModelFileLocator.IsSafeModelId(serverModelId))
         {
             var direct = Path.Combine(managedDir, serverModelId + ".gguf");
             if (ModelFileLocator.IsUnder(managedDir, direct) && File.Exists(direct))
                 return direct;
+
+            var folder = Path.Combine(managedDir, serverModelId);
+            if (ModelFileLocator.IsUnder(managedDir, folder) && Directory.Exists(folder))
+            {
+                foreach (var file in Directory
+                             .EnumerateFiles(folder, "*.gguf", SearchOption.AllDirectories)
+                             .OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (Common.GgufFile.HasGgufMagic(file) &&
+                        !LocalModelImport.IsMmprojPath(file))
+                        return file;
+                }
+            }
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Removes a leftover artifact from the app-owned managed models dir:
+    /// the zombie behind rows the server lists but that can never load — a
+    /// directory-import fixture whose <c>{id}/model.gguf</c> files are not
+    /// real GGUF, or a <c>.gguf</c>-named stub. The server's DELETE chokes on
+    /// such entries and the row returns on every rescan, so the source
+    /// artifact itself has to go. Refuses everything else: unsafe ids, paths
+    /// outside the managed dir, and anything that still holds real GGUF
+    /// content (a model, not an artifact — those resolve via
+    /// <see cref="FindModelFilePath(string)"/> and never reach this).
+    /// </summary>
+    public bool RemoveManagedModelArtifact(string serverModelId)
+        => RemoveManagedModelArtifact(serverModelId, ManagedModelsDir);
+
+    /// <summary>
+    /// <see cref="RemoveManagedModelArtifact(string)"/> with the managed dir
+    /// injectable — internal so tests can drive it against temp directories.
+    /// </summary>
+    internal static bool RemoveManagedModelArtifact(string serverModelId, string managedDir)
+    {
+        // The id names an entry INSIDE the managed dir — never trust it into
+        // a path: no separators, no traversal, no wildcards/quotes/control.
+        if (string.IsNullOrWhiteSpace(serverModelId) ||
+            serverModelId is "." or ".." ||
+            serverModelId.IndexOfAny(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) >= 0 ||
+            serverModelId.Any(char.IsControl))
+            return false;
+
+        var folder = Path.Combine(managedDir, serverModelId);
+        var direct = Path.Combine(managedDir, serverModelId + ".gguf");
+        var target = Directory.Exists(folder) ? folder
+            : File.Exists(direct) ? direct
+            : null;
+        if (target is null || !ModelFileLocator.IsUnder(managedDir, target))
+            return false;
+
+        // Real GGUF content means it is a model, not an artifact — never
+        // delete it here.
+        IEnumerable<string> ggufs = Directory.Exists(target)
+            ? Directory.EnumerateFiles(target, "*.gguf", SearchOption.AllDirectories)
+            : [target];
+        if (ggufs.Any(Common.GgufFile.HasGgufMagic))
+            return false;
+
+        try
+        {
+            if (Directory.Exists(target)) Directory.Delete(target, recursive: true);
+            else File.Delete(target);
+            Log.Info($"removed leftover model artifact: {target}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "could not remove leftover model artifact: " + target);
+            return false;
+        }
     }
 
     /// <summary>

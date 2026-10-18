@@ -1665,6 +1665,11 @@ namespace LlamaApp.Views
                 UpdateEmptyState();
                 if (PruneModelSettings(serverModelId))
                     Settings.Current.Save();
+                // A leftover artifact in the app-owned managed models dir (an
+                // import fixture the router's scan keeps listing) IS the
+                // row's source — remove it too, or every rescan re-adds the
+                // row no matter how often it is deleted.
+                LlamaManager.Shared.RemoveManagedModelArtifact(serverModelId);
                 _ = LlamaManager.Shared.ReloadModelPresetsAsync();
                 return true;
             }
