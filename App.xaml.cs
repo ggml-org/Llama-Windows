@@ -328,6 +328,10 @@ namespace LlamaApp
             // or adopted with the server) is detected within a poll cycle.
             // Fire-and-forget: the watcher owns its own threading.
             DraftHeadDetection.StartWatching();
+            // Enrolled model folders stay live the same way: a .gguf added or
+            // removed on disk refreshes the server's view without a restart
+            // (fire-and-forget; the watcher owns its own threading).
+            EnrolledFolderWatch.StartWatching();
         }
 
         /// <summary>

@@ -624,6 +624,9 @@ namespace LlamaApp
                 foreach (var folder in _modelFolders)
                     s.ModelFolders.Add(folder);
             }
+            // Re-point the model-folder watchers at the new list (they also
+            // retry folders whose watcher failed earlier).
+            EnrolledFolderWatch.SyncFolders();
             try { _ = Llama.LlamaManager.Shared.ReloadModelPresetsAsync(); }
             catch (Exception ex) { Common.Log.Warn(ex, "model-folder preset reload failed"); }
 

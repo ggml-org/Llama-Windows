@@ -105,6 +105,11 @@ namespace LlamaApp.Views
         // (and scroll position) survive membership churn.
         private readonly Dictionary<ModelItem, InstalledModelListItemViewModel> _installedWrappers = new();
 
+        // Hysteresis for rows whose model vanished from the server's list
+        // (file deleted outside the app) — see the vanish sweep in
+        // ReconcileAsync.
+        private readonly MissingSnapshotTracker _missingSnapshot = new();
+
         /// <summary>
         /// The remote catalog, fetched once as model families and shared by
         /// both sections: the browse section lists the families directly, the
@@ -1608,17 +1613,7 @@ namespace LlamaApp.Views
                 // with, and a section for a deleted model would re-list it as a
                 // loadable ghost. (Lingered as a latent issue for context
                 // lengths while the flag was conditional — pruned here now.)
-                var modelId = ((IModel)item).ServerModelId;
-                // Mutations under each dictionary's lock — the same shared
-                // settings dictionaries the draft-head poller and the INI
-                // renderer touch from background threads (see
-                // DraftHeadDetection.Apply's lock note).
-                var contexts = Settings.Current.ModelContextLengths;
-                bool removed;
-                lock (contexts) removed = contexts.Remove(modelId);
-                var specTypes = Settings.Current.ModelSpeculativeTypes;
-                lock (specTypes) removed |= specTypes.Remove(modelId);
-                if (removed)
+                if (PruneModelSettings(((IModel)item).ServerModelId))
                 {
                     Settings.Current.Save();
                     _ = LlamaManager.Shared.ReloadModelPresetsAsync();
@@ -2640,7 +2635,51 @@ namespace LlamaApp.Views
                 }
             }
 
+            // Rows whose model vanished from the server's list entirely: a
+            // file deleted outside the app (Explorer, a cleaner tool) leaves
+            // the server's scan without it after the next preset reload, and
+            // the row would otherwise linger with a play button that can only
+            // fail. Hysteresis (MissingSnapshotTracker): the model must be
+            // gone from several consecutive snapshots — one missed listing
+            // (a rescan in flight, a briefly unreachable network folder)
+            // never flickers rows away. Never runs on empty snapshots (those
+            // are transient errors — see above) and never for in-flight
+            // downloads their drivers own (the sweep above owns the poller's).
+            if (serverIds.Count > 0)
+            {
+                var rowIds = _localByServerId
+                    .Where(kv => kv.Value.DownloadCancellation is null && !kv.Value.IsDownloading)
+                    .Select(kv => kv.Key)
+                    .ToList();
+                foreach (var id in _missingSnapshot.Observe(rowIds, serverIds))
+                {
+                    if (!_localByServerId.TryGetValue(id, out var row)) continue;
+                    Log.Info("model vanished from the server list: " + id);
+                    _localByServerId.Remove(id);
+                    LocalModels.Remove(row);
+                    if (PruneModelSettings(id))
+                        Settings.Current.Save();
+                }
+            }
+
             UpdateEmptyState();
+        }
+
+        /// <summary>
+        /// Removes a model's per-model settings entries (context length /
+        /// speculative type) so the --models-preset INI can't grow ghost
+        /// sections for ids no scan produces anymore. Mutations take the
+        /// dictionaries' locks (see DraftHeadDetection.Apply). Shared by the
+        /// delete path and the vanished-row sweep.
+        /// </summary>
+        private static bool PruneModelSettings(string serverModelId)
+        {
+            var contexts = Settings.Current.ModelContextLengths;
+            bool removed;
+            lock (contexts) removed = contexts.Remove(serverModelId);
+            var specTypes = Settings.Current.ModelSpeculativeTypes;
+            lock (specTypes) removed |= specTypes.Remove(serverModelId);
+            return removed;
         }
 
         /// <summary>
@@ -3514,6 +3553,12 @@ namespace LlamaApp.Views
             else
             {
                 _allowHideOnDeactivate = true;
+                // Flyout is opening: refresh the model folders' view of disk
+                // (rate-limited) — the safety net for folders whose filesystem
+                // watcher died quietly (e.g. network shares) and for changes
+                // the watcher filtered out. The /models poller reconciles the
+                // result into the rows.
+                EnrolledFolderWatch.RefreshOnOpen();
             }
         }
 
