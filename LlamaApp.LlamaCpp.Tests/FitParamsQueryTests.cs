@@ -124,4 +124,25 @@ public class FitParamsQueryTests
         var device = Assert.Single(estimate.Devices);
         Assert.Equal("CUDA1", device.Name);
     }
+
+    [Fact]
+    public void Parse_Wins_When_The_Rows_Arrive_Before_The_Anchor()
+    {
+        // The exact regression that hid llama's estimates ("fit-params: no
+        // verdict" for every context): the anchor is a stderr log line, the
+        // rows are stdout, and a merged capture can land stdout FIRST — the
+        // old ordering gate then skipped every row and dropped the verdict.
+        // Real capture from a machine where this happened (MiMo Q8_0).
+        var output = """
+            CUDA0 8045 178 521 
+            Host 1030 0 36 
+            0.00.071.181 I llama_fit_params: printing estimated memory in MiB to stdout (device, model, context, compute) ...
+            """;
+
+        var estimate = FitParamsQuery.Parse(output);
+
+        Assert.NotNull(estimate);
+        Assert.Equal("CUDA0", Assert.Single(estimate.Devices).Name);
+        Assert.Equal((8045UL + 178 + 521 + 1030 + 0 + 36) << 20, estimate.TotalBytes);
+    }
 }

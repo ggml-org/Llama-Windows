@@ -186,29 +186,29 @@ public static partial class FitParamsQuery
 
     /// <summary>
     /// Parses a <c>--fit-print on</c> output (stdout + stderr combined) into
-    /// an estimate. Rows are only considered after the
-    /// <see cref="Header"/> anchor (backend init noise precedes it, and the
-    /// log line may carry ANSI color codes); the section ends at the
-    /// <c>Host</c> row, which the tool always prints last. <c>null</c> when
-    /// no <c>Host</c> row parsed — a partial section is an unknown verdict,
-    /// not a zero one. Internal for unit tests.
+    /// an estimate. Order-independent by design: the section anchor is a
+    /// stderr log line while the rows land on stdout, so depending on how the
+    /// two streams merge the rows can appear BEFORE the anchor — requiring
+    /// order silently discarded every estimate ("no verdict") on exactly the
+    /// builds that log the banner. Row recognition is the anchored numeric
+    /// shape instead; log noise (timestamps, prefixes) never matches it.
+    /// <c>null</c> when no <c>Host</c> row parsed — a partial section is an
+    /// unknown verdict, not a zero one. Internal for unit tests.
     /// </summary>
     internal static FitParamsEstimate? Parse(string output)
     {
+        // The banner still marks the output as a fit-params estimate at all
+        // (an "unknown command" dump has no section) — but its POSITION no
+        // longer matters: it is a stderr log line while the rows are stdout.
+        if (!output.Contains(Header, StringComparison.Ordinal))
+            return null;
+
         var devices = new List<DeviceMemoryUsage>();
         DeviceMemoryUsage? host = null;
 
-        var inSection = false;
         foreach (var rawLine in output.Split('\n'))
         {
             var line = rawLine.TrimEnd('\r');
-
-            if (!inSection)
-            {
-                if (line.Contains(Header, StringComparison.Ordinal))
-                    inSection = true;
-                continue;
-            }
 
             var match = UsageLineRegex().Match(line.Trim());
             if (!match.Success)
