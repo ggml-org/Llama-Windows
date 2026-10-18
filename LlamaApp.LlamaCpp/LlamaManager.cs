@@ -2623,6 +2623,14 @@ public sealed class LlamaManager
         /// model's files; the model is id'd by its bare repo until the download completes and the
         /// quant is resolved).</summary>
         public bool IsDownloading => string.Equals(Status, "downloading", StringComparison.OrdinalIgnoreCase);
+        /// <summary>True when the server reports the last load attempt as failed —
+        /// the model process crashed or refused the model. Distinct from
+        /// <see cref="Status"/> (which is <c>unloaded</c> again): without this a
+        /// failed load is indistinguishable from a never-started one.</summary>
+        public bool IsFailed { get; init; }
+        /// <summary>The failed child process's exit code, when the server reports
+        /// one (see <see cref="IsFailed"/>).</summary>
+        public long? LoadExitCode { get; init; }
         /// <summary>True when <c>architecture.input_modalities</c> contains <c>image</c>.</summary>
         public bool SupportsImage { get; init; }
         /// <summary>All declared input modalities (e.g. <c>text</c>, <c>image</c>).</summary>
@@ -2708,6 +2716,8 @@ public sealed class LlamaManager
         Id = d.Id ?? "",
         Path = d.Path,
         Status = d.Status?.Value ?? "",
+        IsFailed = d.Status?.Failed ?? false,
+        LoadExitCode = d.Status?.ExitCode,
         SupportsImage = d.Architecture?.InputModalities != null
             && d.Architecture.InputModalities.Contains("image", StringComparer.OrdinalIgnoreCase),
         InputModalities = (IReadOnlyList<string>?)d.Architecture?.InputModalities ?? [],
@@ -2893,6 +2903,14 @@ public sealed class LlamaManager
     internal sealed class ModelStatusDto
     {
         [JsonPropertyName("value")] public string Value { get; set; } = "";
+        /// <summary>The load failed (the child process crashed or refused the
+        /// model) — set by the server after a load attempt; the row must
+        /// surface it instead of spinning forever.</summary>
+        [JsonPropertyName("failed")] public bool Failed { get; set; }
+        /// <summary>The child process's exit code when it died — e.g.
+        /// 0xC0000409 (fail-fast, often a GPU OOM abort in the CUDA backend).
+        /// </summary>
+        [JsonPropertyName("exit_code")] public long? ExitCode { get; set; }
     }
 
     internal sealed class ArchitectureDto

@@ -466,6 +466,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             if (_isLoading == value) return;
             
             _isLoading = value;
+            if (value) LoadingSinceUtc = DateTime.UtcNow;
             OnPropertyChanged();
             OnPropertyChanged(nameof(PlayGlyphVisible));
             OnPropertyChanged(nameof(LoadingRingVisible));
@@ -473,6 +474,27 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged(nameof(IsIndeterminateLoad));
             OnPropertyChanged(nameof(LoadPercentTextVisible));
             NotifyAccessibleNameChanged();
+        }
+    }
+
+    /// <summary>When <see cref="IsLoading"/> last turned on — the poller uses
+    /// it to time out an optimistic load the server never picked up (a lost
+    /// request leaves the ring spinning forever otherwise).</summary>
+    public DateTime LoadingSinceUtc { get; private set; }
+
+    private string _loadFailureTooltip = "Couldn't load the model.";
+
+    /// <summary>Why the load failed — shown on the failure dot. Fed by the
+    /// model-state poller from the server's failed/exit-code report (see
+    /// <see cref="Views.LoadFailurePresentation"/>).</summary>
+    public string LoadFailureTooltip
+    {
+        get => _loadFailureTooltip;
+        set
+        {
+            if (_loadFailureTooltip == value) return;
+            _loadFailureTooltip = value;
+            OnPropertyChanged();
         }
     }
 

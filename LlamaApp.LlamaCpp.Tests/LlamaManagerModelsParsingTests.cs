@@ -57,4 +57,29 @@ public class LlamaManagerModelsParsingTests
     [Fact]
     public async Task Wrong_Type_Data_Is_A_Failure_Not_An_Empty_Snapshot()
         => Assert.Null(await Parse("""{"data":42}"""));
+
+    [Fact]
+    public async Task A_Failed_Load_Reports_Its_Exit_Code()
+    {
+        // The exact shape of the incident that started this: the child
+        // crashed (CUDA OOM -> fail-fast abort) and the server said so.
+        var parsed = await Parse(
+            """{"data":[{"id":"org/repo:Q8_0","status":{"value":"unloaded","failed":true,"exit_code":-1073740791}}]}""");
+
+        var m = Assert.Single(parsed!);
+        Assert.Equal("unloaded", m.Status);
+        Assert.True(m.IsFailed);
+        Assert.Equal(-1073740791, m.LoadExitCode);
+    }
+
+    [Fact]
+    public async Task A_Healthy_Status_Is_Not_Failed()
+    {
+        var parsed = await Parse(
+            """{"data":[{"id":"org/repo:Q8_0","status":{"value":"loaded"}}]}""");
+
+        var m = Assert.Single(parsed!);
+        Assert.False(m.IsFailed);
+        Assert.Null(m.LoadExitCode);
+    }
 }

@@ -47,6 +47,13 @@ namespace LlamaApp.Views
         // straight back, making it look like the flyout never reopens.
         private const long ShownDeactivationGraceMs = 250;
 
+        /// <summary>How long an optimistic load ring (set by a play/retry click
+        /// before the server reports <c>loading</c>) is trusted. Past it, a row
+        /// still ringing over a server-side unloaded/failed state is a load
+        /// that died or never started — surfaced as a failure, never left
+        /// spinning.</summary>
+        private static readonly TimeSpan OptimisticLoadGrace = TimeSpan.FromSeconds(30);
+
         private const int SW_SHOW = 5;
         private const int SW_HIDE = 0;
 
@@ -2489,6 +2496,25 @@ namespace LlamaApp.Views
                     //   unloaded   -> play glyph (but don't clobber an optimistic
                     //                 IsLoading set by a just-fired play click that
                     //                 the server hasn't acknowledged yet)
+                    // A load ring must never outlive its load. The server
+                    // tells us whenever a load is not happening: past a short
+                    // optimistic grace (a just-fired play click must not be
+                    // clobbered before the server reports "loading"), an
+                    // unloaded/failed state with the row still ringing means
+                    // the load died — a crashed child (failed + exit code) or
+                    // a request the server never picked up. Surface it as a
+                    // failure instead of spinning forever.
+                    if (item.IsLoading &&
+                        !sm.IsLoading && !sm.IsLoaded && !sm.IsDownloading &&
+                        DateTime.UtcNow - item.LoadingSinceUtc > OptimisticLoadGrace)
+                    {
+                        Log.Warn("load did not materialize: " + sm.Id +
+                            $" (server: {sm.Status}, failed={sm.IsFailed}, exit {sm.LoadExitCode?.ToString() ?? "?"})");
+                        item.IsLoading = false;
+                        item.LoadFailed = true;
+                        item.LoadFailureTooltip = LoadFailurePresentation.Describe(sm.LoadExitCode);
+                    }
+
                     if (sm.IsLoaded)
                     {
                         if (!item.IsLoaded)
@@ -2546,7 +2572,24 @@ namespace LlamaApp.Views
                         // optimistically before the server transitions to "loading";
                         // clearing it here would flicker the ring off for up to one
                         // poll cycle. Once the server reports "loading" or "loaded"
-                        // the branches above take over.
+                        // the branches above take over. (A ring that never
+                        // materializes a load is timed out before the chain.)
+                        if (!item.IsLoading)
+                        {
+                            // Surface (or clear) the failure state: the server
+                            // reports a failed load as unloaded + failed + exit
+                            // code — without this it looks like a plain idle
+                            // model (or keeps a stale failure dot forever).
+                            if (sm.IsFailed)
+                            {
+                                item.LoadFailed = true;
+                                item.LoadFailureTooltip = LoadFailurePresentation.Describe(sm.LoadExitCode);
+                            }
+                            else
+                            {
+                                item.LoadFailed = false;
+                            }
+                        }
                     }
                 }
                 else

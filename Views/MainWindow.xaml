@@ -279,7 +279,7 @@
                                   Foreground="#F85149"
                                   VerticalAlignment="Center"
                                   Margin="0,0,2,0"
-                                  ToolTipService.ToolTip="Couldn't load the model" />
+                                  ToolTipService.ToolTip="{x:Bind Model.LoadFailureTooltip, Mode=OneWay}" />
                         <Button Visibility="{x:Bind Model.LoadFailed, Mode=OneWay}"
                                 Click="LocalModelRetryLoad_Click"
                                 Tag="{x:Bind Model}"
