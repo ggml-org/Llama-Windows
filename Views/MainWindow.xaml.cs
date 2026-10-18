@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -490,6 +491,7 @@ namespace LlamaApp.Views
                 Logo = ModelItem.ResolveLogoOrGeneric(brand),
                 IsLoaded = sm.IsLoaded,
                 IsDownloading = sm.IsDownloading,
+                FilePath = sm.Path,
             };
         }
 
@@ -1554,6 +1556,29 @@ namespace LlamaApp.Views
         /// <see cref="LocalModelDeleteConfirm_Click"/> can act on them. Deleting
         /// means re-downloading GBs, so it never happens on a single misclick.
         /// </summary>
+        /// <summary>
+        /// "Show model file in Explorer": opens the model's containing folder
+        /// with the .gguf selected (falls back to the folder alone when the
+        /// file is gone). The launch decision and explorer.exe arguments live
+        /// in <see cref="ExplorerReveal"/> (pure + tested).
+        /// </summary>
+        private void LocalModelRevealInExplorer_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is not Button { Tag: ModelItem item }) return;
+            var reveal = ExplorerReveal.BuildReveal(item.FilePath);
+            if (reveal is null) return;
+            try
+            {
+                var (fileName, arguments) = reveal.Value;
+                Process.Start(new ProcessStartInfo(fileName)
+                {
+                    Arguments = arguments,
+                    UseShellExecute = true,
+                });
+            }
+            catch (Exception ex) { Log.Warn(ex, "could not reveal the model file in Explorer"); }
+        }
+
         private void LocalModelDelete_Click(object sender, RoutedEventArgs e)
         {
             if (sender is not Button btn) return;
@@ -2474,6 +2499,12 @@ namespace LlamaApp.Views
 
                 if (item is not null)
                 {
+                    // Rows built before the file existed (an app-driven
+                    // download) learn their on-disk path here — it drives the
+                    // row's "reveal in Explorer" button.
+                    if (item.FilePath is null && sm.Path is not null)
+                        item.FilePath = sm.Path;
+
                     // Server truth: any state but "downloading" means the model
                     // exists in the cache — no longer a pending first download.
                     if (!sm.IsDownloading)

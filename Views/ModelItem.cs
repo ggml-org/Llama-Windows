@@ -108,6 +108,32 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>True when a parameter count exists — drives the row's params chip.</summary>
     public bool HasParameters => !string.IsNullOrWhiteSpace(Parameters);
 
+    private string? _filePath;
+
+    /// <summary>
+    /// The model's file on disk (the server's <c>path</c> — an enrolled-folder,
+    /// imported or cached <c>.gguf</c>). Empty for rows whose file isn't known
+    /// yet (a mid-download row until the server reports one). Drives the
+    /// row's "reveal in Explorer" button; filled in late (the reconcile
+    /// back-fills it for app-downloaded rows), hence the notifying setter.
+    /// </summary>
+    public string? FilePath
+    {
+        get => _filePath;
+        set
+        {
+            if (_filePath == value) return;
+            _filePath = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasFilePath));
+        }
+    }
+
+    /// <summary>True when the model's file location is known — drives the
+    /// row's "reveal in Explorer" button. Constant per row once set, so the
+    /// action cell never shifts as the row flips load states.</summary>
+    public bool HasFilePath => !string.IsNullOrWhiteSpace(_filePath);
+
     /// <summary>
     /// The row's tooltip: the full (possibly ellipsized) name, the catalog's
     /// one-line <see cref="Description"/> on a second line when known — so
