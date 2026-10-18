@@ -1648,6 +1648,27 @@ namespace LlamaApp.Views
                 return true;
             }
 
+            // The server said no. If the file is already gone (deleted in
+            // Explorer, a folder un-enrolled while the app was off) there is
+            // nothing for the server to delete — the row is a ghost kept
+            // alive by its settings entries' preset section. Clean it up and
+            // reload the presets so the router drops it. A model that still
+            // exists (a transient refusal) simply reappears from the next
+            // snapshot.
+            var serverModelId = ((IModel)item).ServerModelId;
+            if (item.DownloadCancellation is null && !item.IsDownloading &&
+                LlamaManager.Shared.FindModelFilePath(serverModelId) is null)
+            {
+                Log.Info("model file already gone; removing the ghost row: " + serverModelId);
+                _localByServerId.Remove(serverModelId);
+                LocalModels.Remove(item);
+                UpdateEmptyState();
+                if (PruneModelSettings(serverModelId))
+                    Settings.Current.Save();
+                _ = LlamaManager.Shared.ReloadModelPresetsAsync();
+                return true;
+            }
+
             Log.Warn("server rejected delete for " + ((IModel)item).ServerModelId);
             return false;
         }

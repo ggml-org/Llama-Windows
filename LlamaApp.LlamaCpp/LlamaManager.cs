@@ -1496,6 +1496,18 @@ public sealed class LlamaManager
         _enrolledModelPaths = enrolled.ToDictionary(
             m => m.Name, m => m.ModelPath, StringComparer.OrdinalIgnoreCase);
 
+        // Don't render preset sections for models whose files no longer exist:
+        // a ctx / spec-type entry outlives its model (deleted in Explorer, a
+        // folder un-enrolled while the app was off) and the router re-lists a
+        // preset section as a loadable ghost — a row that can't even be
+        // deleted, because there is nothing on disk left to delete.
+        var listed = LastModelsSnapshot;
+        bool IsBusy(string id) =>
+            listed.Any(m => m.Id == id && (m.IsDownloading || m.IsLoading));
+        bool Exists(string id) => FindModelFilePath(id) is not null;
+        contextItems = FilterExistingModels(contextItems, IsBusy, Exists);
+        specItems = FilterExistingModels(specItems, IsBusy, Exists);
+
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(ContextPresetPath)!);
@@ -2813,6 +2825,31 @@ public sealed class LlamaManager
 
         return null;
     }
+
+    /// <summary>
+    /// Drops preset entries for models whose files no longer exist (the ghost
+    /// guard behind <c>WriteContextPresetsIniAsync</c>), keeping entries for
+    /// models that are merely busy (mid-download / mid-load — no file yet) or
+    /// whose file exists. Deliberately non-destructive: the settings entries
+    /// themselves are untouched, so a temporarily unavailable folder (an
+    /// asleep network share) gets its preferences back when the file does.
+    /// Internal for tests.
+    /// </summary>
+    internal static List<KeyValuePair<string, int>> FilterExistingModels(
+        IEnumerable<KeyValuePair<string, int>> entries,
+        Func<string, bool> isBusy,
+        Func<string, bool> fileExists)
+        => entries.Where(kv => isBusy(kv.Key) || fileExists(kv.Key)).ToList();
+
+    /// <summary>
+    /// The speculative-type counterpart of the context-length filter — same
+    /// ghost guard.
+    /// </summary>
+    internal static List<KeyValuePair<string, string>> FilterExistingModels(
+        IEnumerable<KeyValuePair<string, string>> entries,
+        Func<string, bool> isBusy,
+        Func<string, bool> fileExists)
+        => entries.Where(kv => isBusy(kv.Key) || fileExists(kv.Key)).ToList();
 
     /// <summary>
     /// Streams an OpenAI-compatible chat completion for <paramref name="userMessage"/>
