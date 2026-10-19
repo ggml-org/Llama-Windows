@@ -90,6 +90,15 @@ public sealed class EnrolledFolderWatcher : IDisposable
             foreach (var folder in folders.Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 if (string.IsNullOrWhiteSpace(folder)) continue;
+                if (!Directory.Exists(folder))
+                {
+                    // An enrolled path that isn't (or is no longer) a
+                    // directory — removed or renamed by the user: expected,
+                    // not a watcher fault. Reported and skipped; the
+                    // refresh-on-open fallback covers its return.
+                    MarkUnhealthy(folder, null, missing: true);
+                    continue;
+                }
                 try
                 {
                     var watcher = new FileSystemWatcher(folder)
@@ -123,14 +132,20 @@ public sealed class EnrolledFolderWatcher : IDisposable
         if (IsModelFile(e.Name) || IsModelFile(e.OldName)) MarkDirty();
     }
 
-    private void MarkUnhealthy(string folder, Exception? ex)
+    private void MarkUnhealthy(string folder, Exception? ex, bool missing = false)
     {
         lock (_gate)
         {
             _watched.Remove(folder);
             _unhealthy.Add(folder);
         }
-        Common.Log.Warn(ex, $"model folder watcher failed; falling back to refresh-on-open: {folder}");
+        // A path that is not a directory (never existed, removed, renamed) is
+        // an expected state, not a watcher crash — message only. Anything
+        // else is a real watcher failure and keeps its stack.
+        if (missing || ex is ArgumentException)
+            Common.Log.Warn($"model folder not present; not watching it: {folder}");
+        else
+            Common.Log.Warn(ex, $"model folder watcher failed; falling back to refresh-on-open: {folder}");
     }
 
     /// <summary>

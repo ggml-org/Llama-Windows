@@ -175,4 +175,20 @@ public sealed class EnrolledFolderWatcherTests : IDisposable
         Assert.Empty(watcher.WatchedFolders);
         Assert.Contains(missing, watcher.UnhealthyFolders);
     }
+
+    [Fact]
+    public void A_File_Where_A_Folder_Should_Be_Is_Reported_Not_Watched()
+    {
+        // A renamed/replaced path can land on a file — same expected state,
+        // same treatment (and no exception escaping the constructor).
+        var file = Path.Combine(_root, "just-a-file");
+        File.WriteAllText(file, "1");
+
+        var counter = new Counter();
+        using var watcher = new EnrolledFolderWatcher(
+            [file], counter.Fire, quiet: TimeSpan.FromMilliseconds(250), maxLatency: TimeSpan.FromSeconds(3));
+
+        Assert.Empty(watcher.WatchedFolders);
+        Assert.Contains(file, watcher.UnhealthyFolders);
+    }
 }
