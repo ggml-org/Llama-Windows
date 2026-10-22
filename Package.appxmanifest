@@ -12,7 +12,7 @@
     Version="0.13.0.0" />
 
   <Properties>
-    <DisplayName>LlamaApp</DisplayName>
+    <DisplayName>Llama App</DisplayName>
     <PublisherDisplayName>Hugging Face Inc.</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
