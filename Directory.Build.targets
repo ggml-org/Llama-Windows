@@ -1,0 +1,86 @@
+<Project>
+
+  <!-- WinAppSDK's self-contained payload omits Microsoft.WindowsAppRuntime.Insights.Resource.dll:
+       the satellite only ships inside the runtime's framework MSIX (tools/MSIX in the
+       Microsoft.WindowsAppSDK.Runtime package) — no NuGet component carries it, not even the
+       full metapackage (verified on 2.5.1). Without it, AppNotificationManager.Register()
+       throws "Unable to load resource dll" and toasts are silently disabled.
+
+       This extracts the DLL from the runtime package at BUILD time and deploys it app-local,
+       in every output (bin, publish, AppX): nothing is committed to the repo, and the DLL
+       always matches the referenced runtime package version. -->
+  <UsingTask TaskName="ExtractWindowsAppRuntimeInsightsResource" TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <RuntimePackageDir ParameterType="System.String" Required="true" />
+      <NativePlatform ParameterType="System.String" Required="true" />
+      <Destination ParameterType="System.String" Required="true" />
+      <Extracted ParameterType="Microsoft.Build.Framework.ITaskItem[]" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.IO.Compression" />
+      <Code Type="Fragment" Language="cs">
+        <![CDATA[
+        var archivePath = Path.Combine(
+            RuntimePackageDir, "tools", "MSIX", "win10-" + NativePlatform, "Microsoft.WindowsAppRuntime.2.msix");
+        if (!File.Exists(archivePath))
+        {
+            Log.LogError(
+                "WindowsAppRuntime MSIX not found at '{0}' — toasts would be silently disabled. " +
+                "Is the Microsoft.WindowsAppSDK.Runtime package restored for platform '{1}'?",
+                archivePath, NativePlatform);
+            return false;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(Destination));
+        using (var archive = ZipFile.OpenRead(archivePath))
+        {
+            const string entryName = "Microsoft.WindowsAppRuntime.Insights.Resource.dll";
+            var entry = archive.GetEntry(entryName);
+            if (entry == null)
+            {
+                Log.LogError("'{0}' not found in {1}", entryName, archivePath);
+                return false;
+            }
+            entry.ExtractToFile(Destination, overwrite: true);
+        }
+
+        Extracted = new[] { new Microsoft.Build.Utilities.TaskItem(Destination) };
+        ]]>
+      </Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="DeployWindowsAppRuntimeInsightsResource"
+          BeforeTargets="AssignTargetPaths"
+          Condition="'$(MSBuildProjectExtension)' == '.csproj' and
+                     '$(WindowsAppSDKSelfContained)' == 'true' and
+                     '$(Platform)' != '' and '$(Platform)' != 'AnyCPU'">
+
+    <!-- The runtime MSIX carries one Insights DLL per architecture; the app's
+         platform picks the folder (x64 -> win10-x64, ARM64 -> win10-arm64,
+         x86 -> win10-x86). ARM64EC packages exist but plain ARM64 is what the
+         app ships. -->
+    <PropertyGroup>
+      <WinAppRuntimeInsightsNativePlatform>$([System.String]::Copy('$(Platform)').ToLowerInvariant())</WinAppRuntimeInsightsNativePlatform>
+    </PropertyGroup>
+
+    <ExtractWindowsAppRuntimeInsightsResource
+        RuntimePackageDir="$(PkgMicrosoft_WindowsAppSDK_Runtime)"
+        NativePlatform="$(WinAppRuntimeInsightsNativePlatform)"
+        Destination="$(IntermediateOutputPath)Microsoft.WindowsAppRuntime.Insights.Resource.dll">
+      <Output TaskParameter="Extracted" PropertyName="WinAppRuntimeInsightsExtractedPath" />
+    </ExtractWindowsAppRuntimeInsightsResource>
+
+    <!-- Same payload-item shape the WinAppSDK self-contained targets use, so the
+         DLL flows into bin, publish and the AppX package alike. -->
+    <ItemGroup>
+      <None Include="$(WinAppRuntimeInsightsExtractedPath)"
+            CopyToOutputDirectory="PreserveNewest"
+            Link="Microsoft.WindowsAppRuntime.Insights.Resource.dll"
+            Visible="false" />
+    </ItemGroup>
+  </Target>
+
+</Project>
