@@ -42,12 +42,15 @@ namespace LlamaApp.Llama;
 /// hourly tick retries. Everything is logged to <c>%LOCALAPPDATA%\Llama\logs</c>;
 /// the scheduler must never fault the app.</para>
 ///
-/// <para><b>Version comparison.</b> llama.cpp releases are tagged
+/// <para><b>Version comparison.</b> llama.cpp builds are tagged
 /// <c>b&lt;build&gt;</c> (e.g. <c>b6726</c>) and build numbers are monotonic,
 /// so "newer" is a plain integer comparison of the installed build (parsed
-/// from the binary's <c>--version</c> output) against the latest release tag.
-/// An unparsable release tag skips the check — guessing would risk
-/// downgrades.</para>
+/// from the binary's <c>--version</c> output) against the newest build tag.
+/// Since llama.cpp's stable releases adopted semver tags (<c>v0.7.0</c>), the
+/// per-build <c>b&lt;build&gt;</c> releases are marked prerelease and no longer
+/// appear in <c>releases/latest</c> — the newest build is found by scanning
+/// the releases LIST instead (issue #133). A release without a recognizable
+/// build tag skips the check — guessing would risk downgrades.</para>
 /// </summary>
 public sealed class RuntimeUpdateScheduler
 {
@@ -293,15 +296,24 @@ public sealed class RuntimeUpdateScheduler
             client.DefaultRequestHeaders.UserAgent.ParseAdd(Common.HttpUserAgent.Value);
             client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
 
-            using var resp = await client.GetAsync(LatestReleaseUrl, cancel);
-            if (!resp.IsSuccessStatusCode)
+            // The releases LIST is authoritative: llama.cpp's per-build
+            // b<build> releases are marked "prerelease" now that stable
+            // releases carry semver tags ("v0.7.0"), and releases/latest only
+            // ever returns the newest stable — a tag with no comparable build
+            // number (issue #133). The install channel serves the nightly
+            // b-stream (install.ps1 resolves its version from the same tags),
+            // so the newest b<build> in the list is what "up to date" is
+            // measured against. The list is newest-first, so the current
+            // build is always on the first page.
+            var build = ParseLatestBuildFromReleaseList(
+                await GetJsonAsync(client, ReleasesListUrl, cancel));
+            if (build is null)
             {
-                Log.Warn($"llama.cpp release check got HTTP {(int)resp.StatusCode}");
-                return null;
+                // Fallback for the pre-semver scheme, where every build was
+                // its own non-prerelease "latest" release with a b<build> tag.
+                build = ParseLatestReleaseBuild(
+                    await GetJsonAsync(client, LatestReleaseUrl, cancel));
             }
-
-            var json = await resp.Content.ReadAsStringAsync(cancel);
-            var build = ParseLatestReleaseBuild(json);
             if (build is null)
                 Log.Warn("llama.cpp release response carried no recognizable b<build> tag; skipping");
             return build;
@@ -319,9 +331,30 @@ public sealed class RuntimeUpdateScheduler
         }
     }
 
-    /// <summary>GitHub releases endpoint for the latest llama.cpp release.</summary>
+    /// <summary>GitHub releases endpoint for the latest llama.cpp release —
+    /// the fallback only: it hides prereleases (where the nightly
+    /// <c>b&lt;build&gt;</c> stream lives since semver stable releases) and
+    /// answers in semver tags.</summary>
     private static readonly Uri LatestReleaseUrl =
         new("https://api.github.com/repos/ggml-org/llama.cpp/releases/latest");
+
+    /// <summary>GitHub releases LIST endpoint — unlike <c>releases/latest</c>
+    /// it includes prereleases, so it sees the nightly <c>b&lt;build&gt;</c>
+    /// stream. Newest first; the newest build is always on the first page.</summary>
+    private static readonly Uri ReleasesListUrl =
+        new("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30");
+
+    /// <summary>GETs one GitHub API JSON body; null (logged) on a non-success status.</summary>
+    private static async Task<string?> GetJsonAsync(HttpClient client, Uri url, CancellationToken cancel)
+    {
+        using var resp = await client.GetAsync(url, cancel);
+        if (!resp.IsSuccessStatusCode)
+        {
+            Log.Warn($"llama.cpp release check got HTTP {(int)resp.StatusCode} from {url.AbsolutePath}");
+            return null;
+        }
+        return await resp.Content.ReadAsStringAsync(cancel);
+    }
 
     /// <summary>
     /// Parses the <c>releases/latest</c> JSON body into the release build
@@ -335,6 +368,28 @@ public sealed class RuntimeUpdateScheduler
         if (string.IsNullOrWhiteSpace(json)) return null;
         var release = JsonSerializer.Deserialize(json, LlamaJsonContext.Default.LatestReleaseDto);
         return ParseReleaseBuild(release?.TagName);
+    }
+
+    /// <summary>
+    /// Parses the GitHub <c>releases</c> LIST JSON body (prereleases included)
+    /// into the NEWEST release build number — the highest recognizable
+    /// <c>b&lt;build&gt;</c> tag on the page. Entries with other tags (semver
+    /// stable releases, decorated tags) are looked past; null when no entry
+    /// carries one — the check stays due and is retried later. Same pure,
+    /// internal JSON-contract shape as <see cref="ParseLatestReleaseBuild"/>.
+    /// </summary>
+    internal static uint? ParseLatestBuildFromReleaseList(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        var releases = JsonSerializer.Deserialize(json, LlamaJsonContext.Default.LatestReleaseDtoArray);
+        uint? newest = null;
+        foreach (var release in releases ?? [])
+        {
+            if (ParseReleaseBuild(release?.TagName) is { } build &&
+                (newest is null || build > newest.Value))
+                newest = build;
+        }
+        return newest;
     }
 
     /// <summary>
@@ -379,9 +434,9 @@ public sealed class RuntimeUpdateScheduler
 
     /// <summary>
     /// Parses a llama.cpp release tag — strictly <c>b&lt;build&gt;</c>
-    /// (e.g. <c>b6726</c>). Anything else (versions, decorated or
-    /// release-candidate tags) yields null: only tags this app understands are
-    /// comparable, and skipping is always safe.
+    /// (e.g. <c>b6726</c>). Anything else (semver stable releases like
+    /// <c>v0.7.0</c>, decorated or release-candidate tags) yields null: only
+    /// tags this app understands are comparable, and skipping is always safe.
     /// </summary>
     internal static uint? ParseReleaseBuild(string? tag)
     {
@@ -390,7 +445,9 @@ public sealed class RuntimeUpdateScheduler
         if (t.Length < 2 || t[0] != 'b') return null;
         foreach (var c in t[1..])
             if (c is < '0' or > '9') return null;
-        return uint.Parse(t[1..]);
+        // TryParse: a tag like "b99999999999" is all-digits but overflows —
+        // unparsable, not an exception (tags are untrusted input).
+        return uint.TryParse(t[1..], out var build) ? build : null;
     }
 
     /// <summary>releases/latest response — only the tag matters here.</summary>

@@ -22,7 +22,7 @@ internal static class RuntimeUpdateMessages
         Llama.RuntimeUpdateScheduler.CheckOutcome.DeferredServerBusy =>
             "An update is available, but the server is running. It installs at the next launch.",
         Llama.RuntimeUpdateScheduler.CheckOutcome.FetchFailed =>
-            "Couldn't reach GitHub — check your connection and try again.",
+            "Couldn't check for updates — check your connection and try again.",
         Llama.RuntimeUpdateScheduler.CheckOutcome.SkippedNotManaged =>
             "This llama.cpp installation is your own (found on PATH) — Llama leaves it alone.",
         Llama.RuntimeUpdateScheduler.CheckOutcome.SkippedUnparsableVersion =>

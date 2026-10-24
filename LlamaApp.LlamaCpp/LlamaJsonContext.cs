@@ -13,6 +13,7 @@ namespace LlamaApp.Llama;
 /// </summary>
 [JsonSerializable(typeof(LlamaManager.ModelsResponseDto), TypeInfoPropertyName = "ModelsResponseDto")]
 [JsonSerializable(typeof(RuntimeUpdateScheduler.LatestReleaseDto), TypeInfoPropertyName = "LatestReleaseDto")]
+[JsonSerializable(typeof(RuntimeUpdateScheduler.LatestReleaseDto[]), TypeInfoPropertyName = "LatestReleaseDtoArray")]
 internal partial class LlamaJsonContext : JsonSerializerContext
 {
 }
