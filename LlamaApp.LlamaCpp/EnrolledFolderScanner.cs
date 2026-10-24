@@ -88,13 +88,17 @@ public static class EnrolledFolderScanner
             while (pending.Count > 0)
             {
                 var dir = pending.Pop();
-                IEnumerable<System.IO.FileInfo> ggufs = [];
-                IEnumerable<System.IO.DirectoryInfo> subdirs = [];
+                System.IO.FileInfo[] ggufs;
+                System.IO.DirectoryInfo[] subdirs;
                 try
                 {
+                    // Materialized eagerly: EnumerateFiles/EnumerateDirectories
+                    // are lazy and one unreadable or vanished directory throws
+                    // mid-foreach — outside this try. ToArray() moves every
+                    // such failure inside it.
                     var info = new DirectoryInfo(dir);
-                    ggufs = info.EnumerateFiles("*.gguf");
-                    subdirs = info.EnumerateDirectories();
+                    ggufs = info.EnumerateFiles("*.gguf").ToArray();
+                    subdirs = info.EnumerateDirectories().ToArray();
                 }
                 catch (Exception ex)
                 {
@@ -130,8 +134,21 @@ public static class EnrolledFolderScanner
 
                 foreach (var sub in subdirs)
                 {
-                    if ((sub.Attributes & FileAttributes.ReparsePoint) != 0) continue;
-                    pending.Push(sub.FullName);
+                    // A dangling/broken directory link must not kill the walk:
+                    // probing Attributes of a directory that vanished (or sits
+                    // behind a broken link) throws, and one bad entry must not
+                    // fail the whole scan (issue #135). DIRECTORY reparse
+                    // points are still skipped — junction loops must not
+                    // spiral — while FILE symlinks above stay legitimate.
+                    try
+                    {
+                        if ((sub.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                        pending.Push(sub.FullName);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Debug($"model folders: '{sub.FullName}' can't be probed ({ex.Message}); skipped");
+                    }
                 }
             }
         }
@@ -144,9 +161,10 @@ public static class EnrolledFolderScanner
     /// <c>[name]</c> with <c>model = path</c>, plus <c>mmproj</c> and
     /// <c>spec-draft-model</c> when the sidecars were found — the same keys
     /// llama.cpp's own models-dir scan sets (the INI parser's key grammar is
-    /// <c>ident</c> and its section names accept anything but <c>]</c>, and
-    /// the section names here are file stems, which can never carry
-    /// <c>/</c>, <c>:</c> or <c>]</c> on Windows). Empty for no models.
+    /// <c>ident</c> and its section names accept anything but <c>]</c>; the
+    /// section names here are file stems and folder prefixes, which can never
+    /// carry <c>/</c> or <c>:</c> on Windows, and every name is vetted against
+    /// <c>[</c>/<c>]</c> in <see cref="NameAndOrder"/>). Empty for no models.
     /// </summary>
     public static string RenderSections(IEnumerable<EnrolledFolderModel> models)
     {
@@ -176,12 +194,12 @@ public static class EnrolledFolderScanner
         if (LocalModelImport.IsMmprojPath(path)) return false;
         if (IsDraftName(stem)) return false;
 
-        if (stem.Contains(LocalModelImport.ShardMarker, StringComparison.Ordinal))
+        if (stem.Contains(LocalModelImport.ShardMarker, StringComparison.OrdinalIgnoreCase))
         {
             // First shard only; the marker without a valid set base is a
             // malformed name, not a model.
             return LocalModelImport.ShardSetBase(path) is not null &&
-                   stem.Contains("-00001-of-", StringComparison.Ordinal);
+                   stem.Contains("-00001-of-", StringComparison.OrdinalIgnoreCase);
         }
         return true;
     }
@@ -229,7 +247,14 @@ public static class EnrolledFolderScanner
                     // the name is taken.
                     var parent = Path.GetDirectoryName(Path.GetFullPath(entry.Path));
                     if (parent is { Length: > 3 } && Path.GetFileName(parent) is { Length: > 0 } firstParent)
+                    {
                         name = firstParent + "-" + name;
+                        // Advance to the grandparent now: the while loop below
+                        // prepends ONE level per collision, and without this
+                        // the first collision re-prepends the same parent
+                        // ("fam-fam-stem").
+                        parent = Path.GetDirectoryName(parent);
+                    }
                     var fallback = 2;
                     while (taken.Contains(name))
                     {
@@ -245,6 +270,16 @@ public static class EnrolledFolderScanner
                         }
                     }
                 }
+                // A parent-folder prefix can carry brackets even after
+                // StemOf vetted the stem — such a name would end the INI
+                // section early ([a]b] parses as [a]) and silently misapply
+                // the preset. Drop the model instead (logged), keeping the
+                // name out of taken too.
+                if (!LlamaManager.IsSafeSectionId(name))
+                {
+                    Log.Warn($"model folders: skipping unsafe section name '{name}'");
+                    continue;
+                }
                 taken.Add(name);
                 result.Add(new EnrolledFolderModel(name, entry.Path, entry.Mmproj, entry.Draft));
             }
@@ -254,13 +289,13 @@ public static class EnrolledFolderScanner
 
     /// <summary>The section-name stem of a model file: its name, with a shard
     /// set's base replacing the <c>…-00001-of-…</c> part. Null when the name
-    /// can't head an INI section (empty, or carries ']').</summary>
+    /// can't head an INI section (empty, or carries '[' or ']').</summary>
     private static string? StemOf(string path)
     {
         var stem = Path.GetFileNameWithoutExtension(path);
         if (LocalModelImport.ShardSetBase(path) is { } shardBase)
             stem = shardBase;
-        return stem.Length == 0 || stem.Contains(']') ? null : stem;
+        return stem.Length == 0 || stem.Contains(']') || stem.Contains('[') ? null : stem;
     }
 
     /// <summary>Full path with a trailing separator, for prefix checks; null when not resolvable.</summary>

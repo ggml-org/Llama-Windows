@@ -124,12 +124,16 @@ public sealed class EnrolledFolderWatcher : IDisposable
 
     private void OnFileEvent(object sender, FileSystemEventArgs e)
     {
-        if (IsModelFile(e.Name)) MarkDirty();
+        // ANY name change marks dirty: NotifyFilter is FileName|DirectoryName,
+        // so a directory event (a folder of models created, moved in or
+        // renamed) changes what the scan sees even when no .gguf name did.
+        // The debounce coalesces the burst into one refresh.
+        MarkDirty();
     }
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
-        if (IsModelFile(e.Name) || IsModelFile(e.OldName)) MarkDirty();
+        MarkDirty();
     }
 
     private void MarkUnhealthy(string folder, Exception? ex, bool missing = false)

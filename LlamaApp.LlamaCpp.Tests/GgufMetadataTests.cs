@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using LlamaApp.Llama;
 using Xunit;
@@ -78,6 +79,14 @@ public sealed class GgufMetadataTests
             w.Write((ulong)b.Length);
             w.Write(b);
         }
+    };
+
+    private static Action<BinaryWriter> RawArray(string key, uint elemType, ulong count) => w =>
+    {
+        WriteKey(w, key);
+        w.Write(9u);  // ARRAY
+        w.Write(elemType);
+        w.Write(count);
     };
 
     private static GgufContextInfo? Parse(byte[] bytes)
@@ -211,6 +220,31 @@ public sealed class GgufMetadataTests
 
         Assert.NotNull(info);
         Assert.Equal(65536, info.ContextLength);
+    }
+
+    [Fact]
+    public void Parse_Bounds_The_Array_Skip_For_An_Enormous_Count()
+    {
+        // A corrupt/hostile header claiming an ARRAY of ~2^64 elements must
+        // not seek (or loop) on that count: the skip is bounded by the header
+        // budget and the parse bails to null immediately — a declared element
+        // count is never trusted.
+        var sw = Stopwatch.StartNew();
+
+        Assert.Null(Parse(Gguf(
+        [
+            RawArray("some.ints", 4u /* UINT32 */, ulong.MaxValue / 2),
+            .. LlamaHeader(),
+        ])));
+        Assert.Null(Parse(Gguf(
+        [
+            RawArray("some.strings", 8u /* STRING */, ulong.MaxValue / 2),
+            .. LlamaHeader(),
+        ])));
+
+        sw.Stop();
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5),
+            $"an enormous ARRAY count must be bounded, took {sw.Elapsed}");
     }
 
     [Fact]

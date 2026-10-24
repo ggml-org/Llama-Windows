@@ -245,6 +245,39 @@ public sealed class LocalModelImportTests : IDisposable
     }
 
     [Fact]
+    public void CollectModelFiles_MatchesMmprojAndDraftNames_CaseInsensitively()
+    {
+        // llama.cpp's C++ name checks are case-insensitive: whatever the case,
+        // MMPROJ-MODEL-F16.GGUF is a projector and MTP-model.gguf a draft.
+        var main = WriteSource("model.gguf");
+        var draft = Sidecar("MTP-model.gguf");
+        var mmproj = Sidecar("MMPROJ-MODEL-F16.GGUF");
+
+        var files = LocalModelImport.CollectModelFiles(main);
+
+        Assert.Equal(new[] { main, draft, mmproj }, files);
+        Assert.True(LocalModelImport.IsMmprojPath(mmproj));
+        Assert.False(LocalModelImport.IsMmprojPath(main));
+    }
+
+    [Fact]
+    public void CollectModelFiles_ShardQuantMatching_UsesTheSetBaseNotTheShardStem()
+    {
+        // The stem of "big-00001-of-00002.gguf" must NOT offer the quant tag
+        // "00002": a projector whose name merely mentions 00002 must not
+        // displace the deterministic first mmproj.
+        var shard1 = WriteSource("big-00001-of-00002.gguf");
+        Sidecar("big-00002-of-00002.gguf");
+        var firstMmproj = Sidecar("mmproj-aa-F16.gguf");
+        Sidecar("mmproj-zz-00002.gguf");
+
+        var files = LocalModelImport.CollectModelFiles(shard1);
+
+        Assert.Equal(3, files.Count);
+        Assert.Equal(firstMmproj, files[^1]);
+    }
+
+    [Fact]
     public void Import_WithSidecars_UsesTheDirectoryLayout()
     {
         var main = WriteSource("Vision-8B-Q4_K_M.gguf");

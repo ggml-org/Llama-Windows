@@ -108,15 +108,21 @@ public static class LocalModelImport
     internal static IReadOnlyList<string> CollectModelFiles(string mainFile)
     {
         var dir = Path.GetDirectoryName(Path.GetFullPath(mainFile))!;
-        var stem = Path.GetFileNameWithoutExtension(mainFile);
+        // Quant matching uses the SHARD SET's base, never the raw file stem:
+        // the stem of "big-00001-of-00002.gguf" would yield the bogus quant
+        // tag "00002".
+        var shardBase = ShardSetBase(mainFile);
+        var quantStem = shardBase ?? Path.GetFileNameWithoutExtension(mainFile);
 
         var result = new List<string> { mainFile };
         string? mmproj = null;
         string? draft = null;
         var shards = new List<string>();
-        var shardBase = ShardSetBase(mainFile);
 
-        foreach (var file in Directory.EnumerateFiles(dir, "*.gguf"))
+        // Deterministic order: directory enumeration order is filesystem-
+        // dependent, and the "first wins" tie-breaks must not be.
+        foreach (var file in Directory.EnumerateFiles(dir, "*.gguf")
+                     .OrderBy(Path.GetFileName, StringComparer.Ordinal))
         {
             var name = Path.GetFileName(file);
             if (string.Equals(name, Path.GetFileName(mainFile), StringComparison.OrdinalIgnoreCase))
@@ -130,14 +136,14 @@ public static class LocalModelImport
                 // incumbent, so the right projector pairs with the right
                 // model when a folder holds several quants of one family.
                 if (mmproj is null ||
-                    (QuantTagMatches(name, stem) && !QuantTagMatches(mmproj, stem)))
+                    (QuantTagMatches(name, quantStem) && !QuantTagMatches(mmproj, quantStem)))
                 {
                     mmproj = file;
                 }
                 continue;
             }
 
-            if (DraftPrefixes.Any(p => name.StartsWith(p, StringComparison.Ordinal)))
+            if (DraftPrefixes.Any(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
             {
                 // The scanner keeps the first draft sidecar found; order by
                 // name for determinism.
@@ -156,12 +162,13 @@ public static class LocalModelImport
         return result;
     }
 
-    /// <summary>True when the file name contains "mmproj" (llama.cpp's <c>is_mmproj_file</c>).</summary>
+    /// <summary>True when the file name contains "mmproj" (llama.cpp's
+    /// <c>is_mmproj_file</c>); case-insensitive like llama.cpp's C++ scan.</summary>
     internal static bool IsMmprojPath(string path)
-        => Path.GetFileName(path).Contains("mmproj", StringComparison.Ordinal);
+        => Path.GetFileName(path).Contains("mmproj", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsMmprojName(string fileName)
-        => fileName.Contains("mmproj", StringComparison.Ordinal);
+        => fileName.Contains("mmproj", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// For a shard member (<c>base-00001-of-00002.gguf</c>), the set's base
@@ -170,7 +177,7 @@ public static class LocalModelImport
     internal static string? ShardSetBase(string path)
     {
         var stem = Path.GetFileNameWithoutExtension(path);
-        var marker = stem.IndexOf(ShardMarker, StringComparison.Ordinal);
+        var marker = stem.IndexOf(ShardMarker, StringComparison.OrdinalIgnoreCase);
         if (marker < 0) return null;
         var head = stem[..marker];
         var tail = stem[(marker + ShardMarker.Length)..];
@@ -226,8 +233,8 @@ public static class LocalModelImport
             {
                 var name = Path.GetFileName(f);
                 return !IsMmprojName(name) &&
-                       !DraftPrefixes.Any(p => name.StartsWith(p, StringComparison.Ordinal)) &&
-                       !name.Contains(ShardMarker);
+                       !DraftPrefixes.Any(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase)) &&
+                       !name.Contains(ShardMarker, StringComparison.OrdinalIgnoreCase);
             })
             .ToList();
 
