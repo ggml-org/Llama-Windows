@@ -544,6 +544,14 @@ public sealed class LlamaManager
     // races are handled by the retrying adoption probe (see WaitForReachableAsync).
     private readonly SemaphoreSlim _ensureGate = new(1, 1);
 
+    // Single-flight guard for WriteContextPresetsIniAsync: a server start and
+    // a concurrent reload (settings change racing a launch) both write the
+    // shared --models-preset file, and the loser of File.WriteAllText's
+    // truncate race used to fail the write and return null — the server then
+    // launched WITHOUT --models-preset. Serializing the writes keeps every
+    // call returning the path.
+    private readonly System.Threading.SemaphoreSlim _presetWriteGate = new(1, 1);
+
     /// <summary>
     /// The single <see cref="HttpClient"/> for every llama-server REST call.
     /// <see cref="HttpClient.BaseAddress"/> carries the configured port and
@@ -1426,13 +1434,13 @@ public sealed class LlamaManager
     /// <c>[</c>/<c>]</c> (either would end the section early — a filename may
     /// legally contain them, and <c>[x]junk]</c> silently misapplies the
     /// preset to the wrong model) and no control characters (CR/LF would
-    /// inject whole lines). Mirrors <c>EnrolledFolderScanner.StemOf</c>, which
-    /// already rejects <c>]</c> — this is the sink the other renderer's guard
-    /// was missing. Ids arrive from server-reported model lists, Open-With
+    /// inject whole lines). Shared with <c>EnrolledFolderScanner</c>, which
+    /// now vets its folder-derived section names through this sink. Ids
+    /// arrive from server-reported model lists, Open-With
     /// file stems and hand-edited settings, so the sink validates even though
     /// Windows filenames can't carry CR/LF.
     /// </summary>
-    private static bool IsSafeSectionId(string id)
+    internal static bool IsSafeSectionId(string id)
         => !string.IsNullOrWhiteSpace(id)
            && id.All(c => c is not ('[' or ']') && !char.IsControl(c));
 
@@ -1441,7 +1449,7 @@ public sealed class LlamaManager
     /// characters (CR/LF would inject whole lines — a hand-edited settings
     /// entry must not be able to append arbitrary keys).
     /// </summary>
-    private static bool IsSafeIniValue(string value)
+    internal static bool IsSafeIniValue(string value)
         => !string.IsNullOrWhiteSpace(value) && value.All(c => !char.IsControl(c));
 
     /// <summary>
@@ -1459,67 +1467,75 @@ public sealed class LlamaManager
     /// </summary>
     private async Task<string?> WriteContextPresetsIniAsync()
     {
-        var contexts = ModelContextLengths;
-        var specs = ModelSpeculativeTypes;
-
-        // Snapshot the dictionaries under their locks before rendering: both
-        // are the LIVE settings dictionaries (shared by reference), and the
-        // draft-head detector mutates its dictionary from a poller thread —
-        // an enumeration racing an Add would throw. (A null dictionary has
-        // no entries and no writer.)
-        var contextItems = new List<KeyValuePair<string, int>>();
-        if (contexts is not null) lock (contexts) contextItems.AddRange(contexts);
-        var specItems = new List<KeyValuePair<string, string>>();
-        if (specs is not null) lock (specs) specItems.AddRange(specs);
-
-        // Enrolled model folders (Settings → General → Model folders): a
-        // recursive scan is disk I/O, so it runs off the caller's thread —
-        // the write happens on server start (possibly the UI thread) and on
-        // every preset reload, and a slow folder (network drive) must never
-        // stall either. The list is snapshotted under its lock first (it is
-        // the LIVE settings list, mutated in place by the settings UI). The
-        // HF cache and the managed models dir are excluded: the server
-        // already lists those, and enrolling a parent of the cache must not
-        // duplicate every cached model.
-        string[]? folders = null;
-        if (ModelFolders is { Count: > 0 } enrolledFolders)
-            lock (enrolledFolders) folders = [.. enrolledFolders];
-        var enrolled = folders is { Length: > 0 }
-            ? await Task.Run(() => EnrolledFolderScanner.Scan(
-                  folders, [CacheDirectory, ManagedModelsDir]))
-            : [];
-        if (enrolled.Count > 0)
-            Log.Info($"model folders: enrolled {enrolled.Count} model(s) from disk");
-        // Keep the scan's id → path map: the rows' "reveal in Explorer"
-        // resolves enrolled models through it (the server's /models does not
-        // reliably report a path). Reference-swapped for readers.
-        _enrolledModelPaths = enrolled.ToDictionary(
-            m => m.Name, m => m.ModelPath, StringComparer.OrdinalIgnoreCase);
-
-        // Don't render preset sections for models whose files no longer exist:
-        // a ctx / spec-type entry outlives its model (deleted in Explorer, a
-        // folder un-enrolled while the app was off) and the router re-lists a
-        // preset section as a loadable ghost — a row that can't even be
-        // deleted, because there is nothing on disk left to delete.
-        var listed = LastModelsSnapshot;
-        bool IsBusy(string id) =>
-            listed.Any(m => m.Id == id && (m.IsDownloading || m.IsLoading));
-        bool Exists(string id) => FindModelFilePath(id) is not null;
-        contextItems = FilterExistingModels(contextItems, IsBusy, Exists);
-        specItems = FilterExistingModels(specItems, IsBusy, Exists);
-
+        await _presetWriteGate.WaitAsync();
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(ContextPresetPath)!);
-            File.WriteAllText(ContextPresetPath,
-                RenderModelsPresetIni(contextItems, specItems) +
-                EnrolledFolderScanner.RenderSections(enrolled));
-            return ContextPresetPath;
+            var contexts = ModelContextLengths;
+            var specs = ModelSpeculativeTypes;
+
+            // Snapshot the dictionaries under their locks before rendering: both
+            // are the LIVE settings dictionaries (shared by reference), and the
+            // draft-head detector mutates its dictionary from a poller thread —
+            // an enumeration racing an Add would throw. (A null dictionary has
+            // no entries and no writer.)
+            var contextItems = new List<KeyValuePair<string, int>>();
+            if (contexts is not null) lock (contexts) contextItems.AddRange(contexts);
+            var specItems = new List<KeyValuePair<string, string>>();
+            if (specs is not null) lock (specs) specItems.AddRange(specs);
+
+            // Enrolled model folders (Settings → General → Model folders): a
+            // recursive scan is disk I/O, so it runs off the caller's thread —
+            // the write happens on server start (possibly the UI thread) and on
+            // every preset reload, and a slow folder (network drive) must never
+            // stall either. The list is snapshotted under its lock first (it is
+            // the LIVE settings list, mutated in place by the settings UI). The
+            // HF cache and the managed models dir are excluded: the server
+            // already lists those, and enrolling a parent of the cache must not
+            // duplicate every cached model.
+            string[]? folders = null;
+            if (ModelFolders is { Count: > 0 } enrolledFolders)
+                lock (enrolledFolders) folders = [.. enrolledFolders];
+            var enrolled = folders is { Length: > 0 }
+                ? await Task.Run(() => EnrolledFolderScanner.Scan(
+                      folders, [CacheDirectory, ManagedModelsDir]))
+                : [];
+            if (enrolled.Count > 0)
+                Log.Info($"model folders: enrolled {enrolled.Count} model(s) from disk");
+            // Keep the scan's id → path map: the rows' "reveal in Explorer"
+            // resolves enrolled models through it (the server's /models does not
+            // reliably report a path). Reference-swapped for readers.
+            _enrolledModelPaths = enrolled.ToDictionary(
+                m => m.Name, m => m.ModelPath, StringComparer.OrdinalIgnoreCase);
+
+            // Don't render preset sections for models whose files no longer exist:
+            // a ctx / spec-type entry outlives its model (deleted in Explorer, a
+            // folder un-enrolled while the app was off) and the router re-lists a
+            // preset section as a loadable ghost — a row that can't even be
+            // deleted, because there is nothing on disk left to delete.
+            var listed = LastModelsSnapshot;
+            bool IsBusy(string id) =>
+                listed.Any(m => m.Id == id && (m.IsDownloading || m.IsLoading));
+            bool Exists(string id) => FindModelFilePath(id) is not null;
+            contextItems = FilterExistingModels(contextItems, IsBusy, Exists);
+            specItems = FilterExistingModels(specItems, IsBusy, Exists);
+
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(ContextPresetPath)!);
+                File.WriteAllText(ContextPresetPath,
+                    RenderModelsPresetIni(contextItems, specItems) +
+                    EnrolledFolderScanner.RenderSections(enrolled));
+                return ContextPresetPath;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(ex, "failed to write model context preset file");
+                return null;
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            Log.Warn(ex, "failed to write model context preset file");
-            return null;
+            _presetWriteGate.Release();
         }
     }
 

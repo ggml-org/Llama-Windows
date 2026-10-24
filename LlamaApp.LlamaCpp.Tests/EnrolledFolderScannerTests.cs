@@ -89,6 +89,24 @@ public sealed class EnrolledFolderScannerTests : IDisposable
     }
 
     [Fact]
+    public void Scan_ClassifiesUppercaseSidecarNames_CaseInsensitively()
+    {
+        // llama.cpp's C++ name checks are case-insensitive; ours must be too:
+        // "MMPROJ-MODEL-F16.GGUF" is a projector (not a model) and
+        // "MTP-model.gguf" is a draft head.
+        var main = WriteGguf("fam", "model.gguf");
+        var mmproj = WriteGguf("fam", "MMPROJ-MODEL-F16.GGUF");
+        var draft = WriteGguf("fam", "MTP-model.gguf");
+
+        var models = EnrolledFolderScanner.Scan([_root]);
+
+        var model = Assert.Single(models);
+        Assert.Equal(main, model.ModelPath);
+        Assert.Equal(mmproj, model.MmprojPath);
+        Assert.Equal(draft, model.DraftPath);
+    }
+
+    [Fact]
     public void Scan_SkipsNonFirstShards()
     {
         // A set missing its first shard cannot load — don't list it.
@@ -159,6 +177,52 @@ public sealed class EnrolledFolderScannerTests : IDisposable
         Assert.Equal(
             new[] { a, b }.OrderBy(p => p, StringComparer.OrdinalIgnoreCase),
             models.Select(m => m.ModelPath).OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void DuplicateStems_UnderABracketedParent_AreDroppedNotRendered()
+    {
+        // A parent folder named with ']' would end the INI section early
+        // ([bad]dir-stem] parses as [bad]) and misapply the preset. The unsafe
+        // twin is dropped, the safe twin kept, and no rendered section name
+        // carries a bracket.
+        var safe = WriteGguf("good", "stem.gguf");
+        WriteGguf("bad]dir", "stem.gguf");
+
+        var models = EnrolledFolderScanner.Scan([_root]);
+
+        var model = Assert.Single(models);
+        Assert.Equal(safe, model.ModelPath);
+        Assert.Equal("good-stem", model.Name);
+        Assert.DoesNotContain(']', model.Name);
+        Assert.DoesNotContain('[', model.Name);
+
+        var ini = EnrolledFolderScanner.RenderSections(models);
+        Assert.Equal($"[good-stem]\nmodel = {safe}\n\n", ini);
+        Assert.All(
+            ini.Split('\n').Where(l => l.StartsWith('[')),
+            line => Assert.DoesNotContain(']', line[..^1]));
+    }
+
+    [Fact]
+    public void SharedStems_PrefixOneAncestorPerCollision_NeverRepeatTheParent()
+    {
+        // root/fam/stem.gguf + root/other/stem.gguf share a stem and root/fam-stem.gguf
+        // (unique stem) claims "fam-stem" first. The fam twin must climb to
+        // its GRANDPARENT ("…-fam-stem"), never re-prepend its own parent
+        // ("fam-fam-stem" — the pre-fix bug).
+        var fam = WriteGguf("fam", "stem.gguf");
+        WriteGguf("other", "stem.gguf");
+        var claimed = WriteGguf("fam-stem.gguf");
+
+        var models = EnrolledFolderScanner.Scan([_root]);
+
+        Assert.Equal(3, models.Count);
+        Assert.All(models, m => Assert.DoesNotContain("fam-fam", m.Name));
+        var famModel = Assert.Single(models, m => m.ModelPath == fam);
+        Assert.Equal(Path.GetFileName(_root) + "-fam-stem", famModel.Name);
+        Assert.Equal("fam-stem", Assert.Single(models, m => m.ModelPath == claimed).Name);
+        Assert.Single(models, m => m.Name == "other-stem");
     }
 
     // ---- rendering ----

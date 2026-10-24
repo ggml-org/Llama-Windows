@@ -139,7 +139,7 @@ namespace LlamaApp.Llama
                 {
                     case "general.architecture":
                         arch = type == 8 ? ReadString(r) : null;
-                        if (arch is null) SkipValue(r, type);
+                        if (arch is null && !SkipValue(r, type, cancel)) return null;
                         break;
                     case var k when arch is null && IsWantedKey(k):
                         // Architecture not known yet — remember by suffix; the
@@ -173,11 +173,11 @@ namespace LlamaApp.Llama
                         }
                         else
                         {
-                            SkipValue(r, type);
+                            if (!SkipValue(r, type, cancel)) return null;
                         }
                         break;
                     default:
-                        SkipValue(r, type);
+                        if (!SkipValue(r, type, cancel)) return null;
                         break;
                 }
 
@@ -244,22 +244,39 @@ namespace LlamaApp.Llama
             _ => null,
         };
 
-        /// <summary>Skips a metadata value of the given GGUF type.</summary>
-        private static void SkipValue(BinaryReader r, uint type)
+        /// <summary>
+        /// Skips a metadata value of the given GGUF type. True when the value
+        /// was skipped cleanly; false when it is malformed or its declared
+        /// size exceeds the header budget — the caller must abort the parse
+        /// rather than seek (or loop) on a corrupt/hostile count.
+        /// </summary>
+        private static bool SkipValue(BinaryReader r, uint type, CancellationToken cancel)
         {
             switch (type)
             {
                 case 0 or 1 or 7: r.BaseStream.Seek(1, SeekOrigin.Current); break;
                 case 2 or 3: r.BaseStream.Seek(2, SeekOrigin.Current); break;
                 case 4 or 5 or 6: r.BaseStream.Seek(4, SeekOrigin.Current); break;
-                case 8: ReadString(r); break;
+                case 8: return ReadString(r) is not null;
                 case 10 or 11 or 12: r.BaseStream.Seek(8, SeekOrigin.Current); break;
                 case 9: // ARRAY: element type + count + elements
                     var elemType = r.ReadUInt32();
                     var count = r.ReadUInt64();
                     if (elemType == 8)
                     {
-                        for (ulong i = 0; i < count; i++) ReadString(r);
+                        // String arrays walk element by element — bound the
+                        // walk by the header budget, honor cancellation and
+                        // stop as soon as the budget is passed.
+                        if (count > (ulong)MaxHeaderBytes) return false;
+                        for (ulong i = 0; i < count; i++)
+                        {
+                            if (i % 1024 == 0)
+                            {
+                                cancel.ThrowIfCancellationRequested();
+                                if (r.BaseStream.Position > MaxHeaderBytes) return false;
+                            }
+                            if (ReadString(r) is null) return false;
+                        }
                     }
                     else
                     {
@@ -271,10 +288,15 @@ namespace LlamaApp.Llama
                             10 or 11 or 12 => 8L,
                             _ => 0L,
                         };
-                        r.BaseStream.Seek((long)(elemSize * (long)count), SeekOrigin.Current);
+                        // A count that would push the skip past the header
+                        // budget is corrupt/hostile — and the bound keeps the
+                        // seek below long overflow (count * elemSize ≤ budget).
+                        if (count > (ulong)(MaxHeaderBytes / Math.Max(elemSize, 1L))) return false;
+                        r.BaseStream.Seek((long)count * elemSize, SeekOrigin.Current);
                     }
                     break;
             }
+            return true;
         }
     }
 }

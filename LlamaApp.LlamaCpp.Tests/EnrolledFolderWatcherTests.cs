@@ -113,8 +113,12 @@ public sealed class EnrolledFolderWatcherTests : IDisposable
     }
 
     [Fact]
-    public async Task Changes_Outside_Model_Files_Are_Ignored()
+    public async Task Any_Name_Change_Fires_One_Callback()
     {
+        // Folder move-in/rename fix (issue #135): a directory name event
+        // changes what the scan sees even when no .gguf name changed, so EVERY
+        // name change (NotifyFilter = FileName | DirectoryName) marks dirty —
+        // non-model names included — and the debounce coalesces the burst.
         var counter = new Counter();
         using var watcher = new EnrolledFolderWatcher(
             [_root], counter.Fire, quiet: TimeSpan.FromMilliseconds(250), maxLatency: TimeSpan.FromSeconds(3));
@@ -123,7 +127,51 @@ public sealed class EnrolledFolderWatcherTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "cover.png"), "2");
         File.Delete(Path.Combine(_root, "notes.txt"));
 
-        Assert.True(await StaysQuietAsync(counter, forMs: 1_500), "non-model files must not trigger refreshes");
+        Assert.True(await counter.WaitForAsync(1), "name changes should fire a callback");
+        Assert.True(await StaysQuietAsync(counter), "the burst must coalesce into ONE callback");
+    }
+
+    [Fact]
+    public async Task Creating_A_Subdirectory_Fires_A_Callback()
+    {
+        // Creating a folder inside a watched one can add whole trees of models
+        // without a single .gguf name event at the watched level — the scan
+        // must refresh just the same.
+        var counter = new Counter();
+        using var watcher = new EnrolledFolderWatcher(
+            [_root], counter.Fire, quiet: TimeSpan.FromMilliseconds(250), maxLatency: TimeSpan.FromSeconds(3));
+
+        Directory.CreateDirectory(Path.Combine(_root, "new-folder"));
+
+        Assert.True(await counter.WaitForAsync(1), "creating a subdirectory should fire a callback");
+        Assert.True(await StaysQuietAsync(counter), "one directory burst must coalesce into ONE callback");
+    }
+
+    [Fact]
+    public async Task Moving_A_Folder_In_Fires_A_Callback()
+    {
+        // A folder of models moved into a watched folder: the scanner sees
+        // brand-new models without any .gguf event — the move itself must
+        // refresh.
+        var staging = Path.Combine(
+            Path.GetTempPath(), "llama-watch-ext-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staging);
+        File.WriteAllText(Path.Combine(staging, "moved-model.gguf"), "1");
+        try
+        {
+            var counter = new Counter();
+            using var watcher = new EnrolledFolderWatcher(
+                [_root], counter.Fire, quiet: TimeSpan.FromMilliseconds(250), maxLatency: TimeSpan.FromSeconds(3));
+
+            Directory.Move(staging, Path.Combine(_root, "moved-in"));
+
+            Assert.True(await counter.WaitForAsync(1), "moving a folder in should fire a callback");
+            Assert.True(await StaysQuietAsync(counter), "the move must coalesce into ONE callback");
+        }
+        finally
+        {
+            try { if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true); } catch { /* best-effort */ }
+        }
     }
 
     [Fact]
