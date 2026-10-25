@@ -166,7 +166,11 @@ public static class ModelFileLocator
     {
         foreach (var snapshot in SafeEnumerateDirs(snapshotsDir))
         {
-            var found = ProbeFiles(SafeEnumerate(snapshot, "*.gguf"), quant);
+            // Files directly in the snapshot win. Some repos keep their GGUFs in
+            // a subfolder (Renesas/Qwen3-ASR-1.7B-GGUF has them under fp16/), so
+            // look there when the snapshot root has no match.
+            var found = ProbeFiles(SafeEnumerate(snapshot, "*.gguf"), quant)
+                        ?? ProbeFiles(SafeEnumerateAll(snapshot, "*.gguf"), quant);
             if (found is not null) return found;
         }
         return null;
@@ -222,6 +226,12 @@ public static class ModelFileLocator
     private static IEnumerable<string> SafeEnumerate(string dir, string pattern)
     {
         try { return Directory.EnumerateFiles(dir, pattern).ToList(); }
+        catch { return []; }
+    }
+
+    private static IEnumerable<string> SafeEnumerateAll(string dir, string pattern)
+    {
+        try { return Directory.EnumerateFiles(dir, pattern, SearchOption.AllDirectories).ToList(); }
         catch { return []; }
     }
 

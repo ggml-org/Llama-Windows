@@ -30,6 +30,7 @@ public sealed class ModelFileLocatorTests : IDisposable
         var dir = Path.Combine(_root, "models--" + repo.Replace("/", "--"), "snapshots", snapshot);
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, fileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);   // fileName may carry a subfolder
         File.WriteAllBytes(path, new byte[size]);
         return path;
     }
@@ -113,6 +114,41 @@ public sealed class ModelFileLocatorTests : IDisposable
 
         Assert.NotNull(found);
         Assert.Equal(expected, found!.PrimaryFilePath);
+    }
+
+    [Fact]
+    public void FindsModelInASubfolderOfTheSnapshot()
+    {
+        // Renesas/Qwen3-ASR-1.7B-GGUF keeps its files under fp16/ — the snapshot root is empty.
+        var model = HubFile("Renesas/Qwen3-ASR-1.7B-GGUF", "sha", Path.Combine("fp16", "Qwen3-ASR-1.7B-FP16.gguf"), size: 400);
+        HubFile("Renesas/Qwen3-ASR-1.7B-GGUF", "sha", Path.Combine("fp16", "mmproj-Qwen3-ASR-1.7b-FP16.gguf"), size: 90);
+
+        var found = Find("Renesas/Qwen3-ASR-1.7B-GGUF:FP16");
+
+        Assert.NotNull(found);
+        Assert.Equal(model, found!.PrimaryFilePath);
+        Assert.Equal(400, found.TotalSizeBytes);   // the projector is not part of the model
+    }
+
+    [Fact]
+    public void AFileInTheSnapshotRootWinsOverOneInASubfolder()
+    {
+        var root = HubFile("org/model-GGUF", "sha", "model-Q4_K_M.gguf", size: 10);
+        HubFile("org/model-GGUF", "sha", Path.Combine("old", "model-Q4_K_M.gguf"), size: 20);
+
+        var found = Find("org/model-GGUF:Q4_K_M");
+
+        Assert.NotNull(found);
+        Assert.Equal(root, found!.PrimaryFilePath);
+        Assert.Equal(10, found.TotalSizeBytes);
+    }
+
+    [Fact]
+    public void AnMmprojInASubfolderNeverMatches()
+    {
+        HubFile("org/vision-GGUF", "sha", Path.Combine("bf16", "vision-BF16-mmproj.gguf"));
+
+        Assert.Null(Find("org/vision-GGUF:BF16"));
     }
 
     [Fact]
