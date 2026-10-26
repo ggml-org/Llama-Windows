@@ -237,6 +237,23 @@ public sealed class LocalModelImportTests : IDisposable
     }
 
     [Fact]
+    public void CollectModelFiles_CollectsShardSiblings_AcrossCase()
+    {
+        // NTFS is case-preserving: "Big-00001-..." + "BIG-00002-..." is one
+        // legal shard set. Matching the set base case-sensitively would drop
+        // the sibling and load the model truncated.
+        var shard1 = WriteSource("Big-00001-of-00002.gguf");
+        var shard2 = Sidecar("BIG-00002-of-00002.gguf");
+        Sidecar("unrelated.gguf");
+
+        var files = LocalModelImport.CollectModelFiles(shard1);
+
+        Assert.Contains(shard1, files);
+        Assert.Contains(shard2, files);
+        Assert.Equal(2, files.Count);
+    }
+
+    [Fact]
     public void CollectModelFiles_AloneModel_ImportsJustItself()
     {
         var main = WriteSource("lonewolf.gguf");

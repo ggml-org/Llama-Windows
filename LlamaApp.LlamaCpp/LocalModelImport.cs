@@ -190,8 +190,13 @@ public static class LocalModelImport
             : null;
     }
 
+    /// <summary>Whether a file name belongs to the shard set whose base is
+    /// <paramref name="shardBase"/>. Case-insensitive like every other name
+    /// rule: NTFS is case-preserving, so "Big-00001-..." and "BIG-00002-..."
+    /// are one legal set, and dropping a case-twin would load the model
+    /// truncated.</summary>
     private static bool IsShardOf(string fileName, string shardBase)
-        => ShardSetBase(fileName)?.Equals(shardBase, StringComparison.Ordinal) ?? false;
+        => ShardSetBase(fileName)?.Equals(shardBase, StringComparison.OrdinalIgnoreCase) ?? false;
 
     /// <summary>
     /// llama.cpp keeps one mmproj per model directory; prefer one whose name

@@ -246,11 +246,13 @@ namespace LlamaApp.Llama
 
         /// <summary>
         /// Skips a metadata value of the given GGUF type. True when the value
-        /// was skipped cleanly; false when it is malformed or its declared
-        /// size exceeds the header budget — the caller must abort the parse
-        /// rather than seek (or loop) on a corrupt/hostile count.
+        /// was skipped cleanly; false when it is malformed, its type is
+        /// unknown, or its declared size exceeds the header budget — the
+        /// caller must abort the parse rather than seek (or loop) on a
+        /// corrupt/hostile count. Every exit consumes the value exactly (or
+        /// reports failure) so the stream can never fall out of alignment.
         /// </summary>
-        private static bool SkipValue(BinaryReader r, uint type, CancellationToken cancel)
+        internal static bool SkipValue(BinaryReader r, uint type, CancellationToken cancel)
         {
             switch (type)
             {
@@ -266,15 +268,16 @@ namespace LlamaApp.Llama
                     {
                         // String arrays walk element by element — bound the
                         // walk by the header budget, honor cancellation and
-                        // stop as soon as the budget is passed.
+                        // stop as soon as the budget is passed. The budget is
+                        // checked EVERY iteration (a 1024-stride check could
+                        // read a whole window past it); the token is only
+                        // polled at stride 1024 to keep the per-iteration
+                        // cost negligible.
                         if (count > (ulong)MaxHeaderBytes) return false;
                         for (ulong i = 0; i < count; i++)
                         {
-                            if (i % 1024 == 0)
-                            {
-                                cancel.ThrowIfCancellationRequested();
-                                if (r.BaseStream.Position > MaxHeaderBytes) return false;
-                            }
+                            if (r.BaseStream.Position > MaxHeaderBytes) return false;
+                            if (i % 1024 == 0) cancel.ThrowIfCancellationRequested();
                             if (ReadString(r) is null) return false;
                         }
                     }
@@ -288,13 +291,22 @@ namespace LlamaApp.Llama
                             10 or 11 or 12 => 8L,
                             _ => 0L,
                         };
+                        // Unknown element type (incl. nested ARRAY=9): there
+                        // is no element stride to seek by — refusing beats
+                        // seeking 0 bytes and silently misaligning the stream.
+                        if (elemSize == 0) return false;
                         // A count that would push the skip past the header
                         // budget is corrupt/hostile — and the bound keeps the
                         // seek below long overflow (count * elemSize ≤ budget).
-                        if (count > (ulong)(MaxHeaderBytes / Math.Max(elemSize, 1L))) return false;
+                        if (count > (ulong)(MaxHeaderBytes / elemSize)) return false;
                         r.BaseStream.Seek((long)count * elemSize, SeekOrigin.Current);
                     }
                     break;
+                default:
+                    // Unknown GGUF type (>12): its value width is unknowable,
+                    // so there is nothing safe to consume — abort instead of
+                    // falling through without advancing the stream.
+                    return false;
             }
             return true;
         }
