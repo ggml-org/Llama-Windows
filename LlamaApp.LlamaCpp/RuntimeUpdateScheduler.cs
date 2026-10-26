@@ -139,17 +139,29 @@ public sealed class RuntimeUpdateScheduler
             // failure is logged and the ensure still runs.
             try
             {
+                // Resolve the managed binary FIRST: the check below reads
+                // CurrentOrigin/Version, which EnsureLlamaOrDownloadAsync
+                // populates (it runs later, inside ensureServer). Without
+                // this a fresh launch sees Origin.Unknown and misroutes the
+                // check as "not managed" — silently discarding a deferred
+                // install AND neutering the weekly check. Best-effort; it
+                // never throws.
+                await _manager.ResolveAndReadVersionAsync();
+
                 // Honor a deferred manual "Check for updates" first: the
                 // Settings card promises "it installs at the next launch",
                 // and this is the one point the binary is guaranteed idle
                 // (the server is Stopped — IsServerSafe(Stopped) — and
                 // ensureServer() has not launched anything yet). force
                 // bypasses the weekly gate; a transient failure keeps the
-                // marker so the next launch retries. Any exception falls
-                // through to the ensure below — the server must come up.
+                // marker so the next launch retries. When a pending install
+                // is served here, skip the weekly check — one fetch per
+                // launch is enough. Any exception falls through to the
+                // ensure below — the server must come up.
                 if (_store.IsPendingInstall())
                     await RunCheckAsync(force: true, fetchBudget: StartupCheckBudget);
-                await CheckDueAsync(bounded: true);
+                else
+                    await CheckDueAsync(bounded: true);
             }
             catch (Exception ex)
             {
@@ -221,14 +233,23 @@ public sealed class RuntimeUpdateScheduler
             // flight. A non-managed origin is a stable situation worth
             // stamping — polling GitHub hourly for a binary we will never
             // touch buys nothing.
-            if (manager.CurrentOrigin != LlamaManager.Origin.Managed)
+            if (manager.CurrentOrigin == LlamaManager.Origin.External)
             {
-                Log.Info($"runtime update skipped: installation is {manager.CurrentOrigin}, not app-managed");
+                Log.Info("runtime update skipped: installation is External (user-managed), not app-managed");
                 _store.Save(DateTimeOffset.UtcNow);
                 // Terminal: an install will never run here — a pending
                 // intent must not outlive it.
                 _store.ClearPendingInstall();
                 return CheckOutcome.SkippedNotManaged;
+            }
+            if (manager.CurrentOrigin != LlamaManager.Origin.Managed)
+            {
+                // Origin.Unknown: the binary has not been resolved yet (the
+                // startup honor step runs before EnsureLlamaOrDownloadAsync,
+                // and resolution is best-effort). Transient — do not stamp
+                // and do not clear a pending install; a later launch retries.
+                Log.Debug("runtime update deferred: managed binary not yet resolved");
+                return CheckOutcome.DeferredServerBusy;
             }
 
             // The overwrite needs the binary idle; skip without stamping so
@@ -562,22 +583,16 @@ public sealed class RuntimeUpdateScheduler
 /// </summary>
 public sealed class LastCheckStore
 {
-    /// <summary>Sibling of the check stamp: exists ⇔ an install was deferred
-    /// and should run at the next launch.</summary>
-    private const string PendingMarkerFileName = ".runtime-update-pending";
-
     private readonly string _path;
     private readonly string _pendingPath;
 
     public LastCheckStore(string? path = null)
     {
         _path = path ?? Path.Combine(AppData.Root, ".runtime-update-check");
-        // Derived from the stamp's own directory so the two files are always
-        // siblings — a test that passes a temp stamp path gets an isolated
-        // pending marker with it.
-        var dir = Path.GetDirectoryName(_path);
-        _pendingPath = Path.Combine(
-            string.IsNullOrEmpty(dir) ? "." : dir, PendingMarkerFileName);
+        // Derived from the stamp's own path (not just its directory) so two
+        // stores pointing at different stamp files in the same directory do
+        // not share a pending marker.
+        _pendingPath = _path + ".pending";
     }
 
     /// <summary>The last completed check, or null when never / unreadable.</summary>

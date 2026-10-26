@@ -829,11 +829,15 @@ public sealed class LlamaManager
     }
 
     /// <summary>
-    /// Best-effort binary resolution and version read for an adopted (external)
-    /// server — populates <see cref="BinaryPath"/>/<see cref="Version"/> for
-    /// display without blocking the client. Fire-and-forget.
+    /// Best-effort binary resolution and version read — populates
+    /// <see cref="BinaryPath"/>, <see cref="CurrentOrigin"/> and
+    /// <see cref="Version"/> without launching the server. Used for an
+    /// adopted (external) server's display fields and by the runtime-update
+    /// scheduler, which must know the origin/version before its startup
+    /// install window (it runs before <see cref="EnsureLlamaOrDownloadAsync"/>).
+    /// Never throws.
     /// </summary>
-    private async Task ResolveAndReadVersionAsync(CancellationToken cancel)
+    public async Task ResolveAndReadVersionAsync(CancellationToken cancel = default)
     {
         try
         {

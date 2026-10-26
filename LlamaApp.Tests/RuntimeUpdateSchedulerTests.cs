@@ -211,12 +211,16 @@ public class RuntimeUpdateSchedulerTests
     [Fact]
     public void Store_PendingMarker_Is_Isolated_Per_Stamp_Path()
     {
-        // The marker is a sibling of the stamp file, so stores with different
-        // stamp paths never share pending state.
-        var store = new LastCheckStore(Path.Combine(TempDir(), "stamp"));
-        store.SetPendingInstall();
+        // Two stamp files in the SAME directory must not share one pending
+        // marker — the marker derives from the stamp's own path.
+        var dir = TempDir();
+        var a = new LastCheckStore(Path.Combine(dir, "stamp-a"));
+        var b = new LastCheckStore(Path.Combine(dir, "stamp-b"));
 
-        Assert.False(new LastCheckStore(Path.Combine(TempDir(), "stamp")).IsPendingInstall());
+        a.SetPendingInstall();
+
+        Assert.True(a.IsPendingInstall());
+        Assert.False(b.IsPendingInstall());
     }
 
     // ---- CheckNowAsync: a busy binary defers — and a manual check keeps
@@ -243,6 +247,29 @@ public class RuntimeUpdateSchedulerTests
         Assert.True(store.IsPendingInstall());
         // A fresh store — i.e. the next launch — sees the pending intent.
         Assert.True(new LastCheckStore(path).IsPendingInstall());
+    }
+
+    [Fact]
+    public async Task CheckNowAsync_WhenOriginIsUnknown_KeepsPendingAndDoesNotStamp()
+    {
+        // Before EnsureLlamaOrDownloadAsync resolves the binary, CurrentOrigin
+        // is Unknown — the state the startup honor step met before it learned
+        // to resolve first. Unknown is transient, NOT "not managed": the
+        // pending intent must survive and the weekly stamp stay untouched.
+        var path = Path.Combine(TempDir(), "stamp");
+        var store = new LastCheckStore(path);
+        var manager = (LlamaManager)System.Runtime.CompilerServices.RuntimeHelpers
+            .GetUninitializedObject(typeof(LlamaManager));
+        SetStateProperty(manager, nameof(LlamaManager.CurrentOrigin), LlamaManager.Origin.Unknown);
+        SetStateProperty(manager, nameof(LlamaManager.ServerStatus), LlamaManager.ServerState.Stopped);
+        store.SetPendingInstall();
+        var scheduler = new RuntimeUpdateScheduler(manager, store);
+
+        var outcome = await scheduler.CheckNowAsync();
+
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.DeferredServerBusy, outcome);
+        Assert.True(store.IsPendingInstall()); // intent survives
+        Assert.Null(store.Load());             // and no stamp was written
     }
 
     /// <summary>
