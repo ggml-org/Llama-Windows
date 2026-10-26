@@ -88,9 +88,6 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     internal static readonly int[] StandardContextTokens =
         [4096, 8192, 16384, 32768, 65536, 131072, 262144];
 
-    /// <summary>llama.cpp's default context size — the neutral preselection.</summary>
-    internal const int DefaultContextTokens = 4096;
-
     private readonly IModelItemDetailsHost _host;
     private readonly Func<string, int?> _loadContextPreference;
     private readonly Action<string, int> _saveContextPreference;
@@ -497,20 +494,18 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     }
 
     /// <summary>
-    /// Restores the persisted per-model preference when it's still supported;
-    /// otherwise falls back to the llama.cpp default (clamped to what the
-    /// model supports) — never silently the largest context.
+    /// Restores the persisted per-model preference when it's still supported.
+    /// When there is none — or the saved value no longer applies (above the
+    /// model's max context, or beyond the memory budget) — nothing is
+    /// preselected: an unset context must not read as an applied 4k on the
+    /// server.
     /// </summary>
     private void RestoreSelection()
     {
         var pref = _loadContextPreference(ServerModelId);
-        var restored = pref is { } p
+        SelectedContextLength = pref is { } p
             ? ContextLengths.FirstOrDefault(o => o.Tokens == p && o.IsSelectable)
             : null;
-        SelectedContextLength = restored
-            ?? ContextLengths.FirstOrDefault(o => o.Tokens == DefaultContextTokens && o.IsSelectable)
-            ?? ContextLengths.LastOrDefault(o => o.IsSelectable)
-            ?? ContextLengths.FirstOrDefault();
     }
 
     /// <summary>
