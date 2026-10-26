@@ -1,3 +1,5 @@
+using System.IO.Enumeration;
+
 namespace LlamaApp.Llama;
 
 /// <summary>
@@ -166,7 +168,11 @@ public static class ModelFileLocator
     {
         foreach (var snapshot in SafeEnumerateDirs(snapshotsDir))
         {
-            var found = ProbeFiles(SafeEnumerate(snapshot, "*.gguf"), quant);
+            // Files directly in the snapshot win. Some repos keep their GGUFs in
+            // a subfolder (Renesas/Qwen3-ASR-1.7B-GGUF has them under fp16/), so
+            // look there when the snapshot root has no match.
+            var found = ProbeFiles(SafeEnumerate(snapshot, "*.gguf"), quant)
+                        ?? ProbeFiles(SafeEnumerateAll(snapshot, "*.gguf"), quant);
             if (found is not null) return found;
         }
         return null;
@@ -222,6 +228,38 @@ public static class ModelFileLocator
     private static IEnumerable<string> SafeEnumerate(string dir, string pattern)
     {
         try { return Directory.EnumerateFiles(dir, pattern).ToList(); }
+        catch { return []; }
+    }
+
+    // IgnoreInaccessible: one folder we may not read must not end the walk.
+    // AttributesToSkip = 0: the default would hide Hidden/System files, which
+    // the plain EnumerateFiles above does not.
+    private static readonly EnumerationOptions WalkOptions = new()
+    {
+        RecurseSubdirectories = true,
+        IgnoreInaccessible = true,
+        AttributesToSkip = 0,
+    };
+
+    /// <summary>
+    /// Every file matching <paramref name="pattern"/> below <paramref name="dir"/>.
+    /// Reparse points are handled by kind: FILE links are kept (hub cache
+    /// snapshots are symlinks into blobs/, so skipping them would find
+    /// nothing), DIRECTORY links are never descended into (a junction loop
+    /// must not spiral the walk).
+    /// </summary>
+    private static IEnumerable<string> SafeEnumerateAll(string dir, string pattern)
+    {
+        try
+        {
+            return new FileSystemEnumerable<string>(dir, (ref FileSystemEntry e) => e.ToFullPath(), WalkOptions)
+            {
+                ShouldIncludePredicate = (ref FileSystemEntry e) =>
+                    !e.IsDirectory && FileSystemName.MatchesSimpleExpression(pattern, e.FileName),
+                ShouldRecursePredicate = (ref FileSystemEntry e) =>
+                    (e.Attributes & FileAttributes.ReparsePoint) == 0,
+            }.ToList();
+        }
         catch { return []; }
     }
 
