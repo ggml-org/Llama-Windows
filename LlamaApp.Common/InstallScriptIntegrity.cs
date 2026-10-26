@@ -84,7 +84,8 @@ public static class InstallScriptIntegrity
     /// installs. Null disables unattended installs (they are skipped rather
     /// than run unverified). Update this when pinning a new script revision.
     /// </summary>
-    public const string? PinnedSha256 = null;
+    public const string? PinnedSha256 =
+        "3d53d22286b5cbe83741da2a4b6d2be5d0c4a9347fe92c19c7d88dd8298f3f10";
 
     /// <summary>True when the verdict allows the script to run.</summary>
     public static bool IsOk(InstallScriptVerdict verdict) => verdict == InstallScriptVerdict.Ok;

@@ -43,6 +43,7 @@ public class RuntimeUpdateSchedulerTests
     [Theory]
     [InlineData("b6726", 6726u)]
     [InlineData(" b6726 ", 6726u)]
+    [InlineData("b11852\r\n", 11852u)]  // the install channel's plain-text latest marker
     [InlineData("b1", 1u)]
     public void ParseReleaseBuild_ParsesPlainBuildTags(string tag, uint expected)
     {
@@ -98,6 +99,43 @@ public class RuntimeUpdateSchedulerTests
         Assert.Equal(1234u, RuntimeUpdateScheduler.ParseInstalledBuild("b9553 (build: 1234)"));
     }
 
+    // ---- ClassifyInstallOutcome: an install that changes nothing is not an update ----
+
+    [Fact]
+    public void ClassifyInstallOutcome_FailedInstall_IsAFailure()
+    {
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.InstallFailed,
+            RuntimeUpdateScheduler.ClassifyInstallOutcome(false, 11852u, "version: 11852 (abcdef)"));
+    }
+
+    [Fact]
+    public void ClassifyInstallOutcome_WhenTheBuildChanged_IsAnUpdate()
+    {
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.Installed,
+            RuntimeUpdateScheduler.ClassifyInstallOutcome(true, 11852u, "version: 11860 (abcdef)"));
+    }
+
+    [Fact]
+    public void ClassifyInstallOutcome_WhenTheBuildDidNotChange_IsUpToDate_NotAPhantomUpdate()
+    {
+        // The channel marker can lag the comparison source (or move between
+        // check and install): a "successful" install that delivers the very
+        // same build must never claim a version that never appears — that is
+        // the endless "it updates at the next launch" loop (issue #133
+        // follow-up).
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.UpToDate,
+            RuntimeUpdateScheduler.ClassifyInstallOutcome(true, 11852u, "version: 11852 (abcdef)"));
+    }
+
+    [Fact]
+    public void ClassifyInstallOutcome_UnreadablePostInstallVersion_KeepsTheBenefitOfTheDoubt()
+    {
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.Installed,
+            RuntimeUpdateScheduler.ClassifyInstallOutcome(true, 11852u, null));
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.Installed,
+            RuntimeUpdateScheduler.ClassifyInstallOutcome(true, null, "version: 11860 (abcdef)"));
+    }
+
     // ---- IsServerSafe: installs only while the binary is idle ----
 
     [Theory]
@@ -147,6 +185,116 @@ public class RuntimeUpdateSchedulerTests
         var store = new LastCheckStore(Path.Combine(TempDir(), "missing", "stamp"));
         Assert.Null(store.Load());
     }
+
+    // ---- LastCheckStore pending-install marker: a deferred manual check's
+    // "it installs at the next launch" promise survives restarts ----
+
+    [Fact]
+    public void Store_PendingMarker_SetLoadClear_RoundTrip()
+    {
+        var path = Path.Combine(TempDir(), "stamp");
+        var store = new LastCheckStore(path);
+
+        Assert.False(store.IsPendingInstall()); // nothing deferred
+
+        store.SetPendingInstall();
+        Assert.True(store.IsPendingInstall());
+        // Persisted, not in-memory: a fresh store (the next app launch) sees
+        // the pending intent.
+        Assert.True(new LastCheckStore(path).IsPendingInstall());
+
+        store.ClearPendingInstall();
+        Assert.False(store.IsPendingInstall());
+        Assert.False(new LastCheckStore(path).IsPendingInstall());
+    }
+
+    [Fact]
+    public void Store_PendingMarker_Is_Isolated_Per_Stamp_Path()
+    {
+        // Two stamp files in the SAME directory must not share one pending
+        // marker — the marker derives from the stamp's own path.
+        var dir = TempDir();
+        var a = new LastCheckStore(Path.Combine(dir, "stamp-a"));
+        var b = new LastCheckStore(Path.Combine(dir, "stamp-b"));
+
+        a.SetPendingInstall();
+
+        Assert.True(a.IsPendingInstall());
+        Assert.False(b.IsPendingInstall());
+    }
+
+    // ---- CheckNowAsync: a busy binary defers — and a manual check keeps
+    // its "installs at the next launch" promise across restarts ----
+    //
+    // RunCheckAsync records the pending intent at BOTH DeferredServerBusy
+    // return sites when the check is manual (force) — this exercises the
+    // pre-fetch site; the post-fetch site runs the same two lines. StartAsync
+    // honors the marker on the next launch, before ensureServer(), while the
+    // server is still Stopped — that honor step is the other half of the
+    // promise (kept code-reviewed; driving StartAsync end-to-end would need
+    // seams for its fire-and-forget timer loop).
+
+    [Fact]
+    public async Task CheckNowAsync_WhenTheServerIsRunning_DefersAndLeavesAPendingInstall()
+    {
+        var path = Path.Combine(TempDir(), "stamp");
+        var store = new LastCheckStore(path);
+        var scheduler = new RuntimeUpdateScheduler(CreateBusyManager(), store);
+
+        var outcome = await scheduler.CheckNowAsync();
+
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.DeferredServerBusy, outcome);
+        Assert.True(store.IsPendingInstall());
+        // A fresh store — i.e. the next launch — sees the pending intent.
+        Assert.True(new LastCheckStore(path).IsPendingInstall());
+    }
+
+    [Fact]
+    public async Task CheckNowAsync_WhenOriginIsUnknown_KeepsPendingAndDoesNotStamp()
+    {
+        // Before EnsureLlamaOrDownloadAsync resolves the binary, CurrentOrigin
+        // is Unknown — the state the startup honor step met before it learned
+        // to resolve first. Unknown is transient, NOT "not managed": the
+        // pending intent must survive and the weekly stamp stay untouched.
+        var path = Path.Combine(TempDir(), "stamp");
+        var store = new LastCheckStore(path);
+        var manager = (LlamaManager)System.Runtime.CompilerServices.RuntimeHelpers
+            .GetUninitializedObject(typeof(LlamaManager));
+        SetStateProperty(manager, nameof(LlamaManager.CurrentOrigin), LlamaManager.Origin.Unknown);
+        SetStateProperty(manager, nameof(LlamaManager.ServerStatus), LlamaManager.ServerState.Stopped);
+        store.SetPendingInstall();
+        var scheduler = new RuntimeUpdateScheduler(manager, store);
+
+        var outcome = await scheduler.CheckNowAsync();
+
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.DeferredServerBusy, outcome);
+        Assert.True(store.IsPendingInstall()); // intent survives
+        Assert.Null(store.Load());             // and no stamp was written
+    }
+
+    /// <summary>
+    /// A <see cref="LlamaManager"/> that reads as "app-managed install, llama
+    /// server running" — the situation the Settings "Check for updates"
+    /// button meets. LlamaManager is a singleton whose constructor spins up a
+    /// background status supervisor (which would promptly re-derive any faked
+    /// status over HTTP), so the test builds an uninitialized instance and
+    /// writes the observable state through the property setters — no test
+    /// seam in production code, and the deferred path touches nothing the
+    /// constructor would have set up.
+    /// </summary>
+    private static LlamaManager CreateBusyManager()
+    {
+        var manager = (LlamaManager)System.Runtime.CompilerServices.RuntimeHelpers
+            .GetUninitializedObject(typeof(LlamaManager));
+        SetStateProperty(manager, nameof(LlamaManager.CurrentOrigin), LlamaManager.Origin.Managed);
+        SetStateProperty(manager, nameof(LlamaManager.ServerStatus), LlamaManager.ServerState.Running);
+        return manager;
+    }
+
+    private static void SetStateProperty(LlamaManager manager, string name, object value)
+        // The state properties have private setters — reflection invokes
+        // those just fine.
+        => typeof(LlamaManager).GetProperty(name)!.SetValue(manager, value);
 
     private static string TempDir()
     {

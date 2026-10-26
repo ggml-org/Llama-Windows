@@ -7,8 +7,8 @@ namespace LlamaApp.Llama;
 
 /// <summary>
 /// Keeps the app-managed llama.cpp runtime current: about once a week, check
-/// whether a newer release exists on GitHub and, when it does, install it via
-/// the official <c>install.ps1</c> — the same machinery the app already uses
+/// whether the install channel serves a newer build and, when it does,
+/// install it via the official <c>install.ps1</c> — the same machinery the app already uses
 /// for the first install (<see cref="LlamaManager.InstallAsync"/>), so there
 /// is exactly one install path and the user's own (external) installation is
 /// never touched.
@@ -20,7 +20,10 @@ namespace LlamaApp.Llama;
 /// <see cref="AppData.Root"/> (<c>.runtime-update-check</c>, UTC ISO 8601);
 /// at startup the check runs when the stamp is a week old or older, and an
 /// hourly <see cref="PeriodicTimer"/> loop keeps watching for the week
-/// elapsing during long sessions.</para>
+/// elapsing during long sessions. A manual check deferred by a busy server
+/// additionally records a pending install (see <see cref="LastCheckStore"/>)
+/// which the startup pass honors before the server launches — making the
+/// "installs at the next launch" promise true.</para>
 ///
 /// <para><b>When installing is safe.</b> <c>install.ps1</c> overwrites
 /// <c>llama.exe</c>, which Windows locks while the server runs — so an install
@@ -45,12 +48,16 @@ namespace LlamaApp.Llama;
 /// <para><b>Version comparison.</b> llama.cpp builds are tagged
 /// <c>b&lt;build&gt;</c> (e.g. <c>b6726</c>) and build numbers are monotonic,
 /// so "newer" is a plain integer comparison of the installed build (parsed
-/// from the binary's <c>--version</c> output) against the newest build tag.
-/// Since llama.cpp's stable releases adopted semver tags (<c>v0.7.0</c>), the
-/// per-build <c>b&lt;build&gt;</c> releases are marked prerelease and no longer
-/// appear in <c>releases/latest</c> — the newest build is found by scanning
-/// the releases LIST instead (issue #133). A release without a recognizable
-/// build tag skips the check — guessing would risk downgrades.</para>
+/// from the binary's <c>--version</c> output) against the newest build the
+/// INSTALL CHANNEL serves: <c>install.ps1</c> installs exactly the build
+/// behind the channel's <c>latest</c> marker, so that marker is the only
+/// truthful "is there a newer runtime to install" (issue #133 follow-up —
+/// GitHub's nightly tags move ahead of the channel, and comparing against
+/// them finds updates the installer cannot deliver). GitHub serves only as a
+/// fallback signal (llama.cpp's semver stable releases also hid the
+/// <c>b&lt;build&gt;</c> stream from <c>releases/latest</c>, issue #133); an
+/// unrecognized tag anywhere skips the check — guessing would risk
+/// downgrades.</para>
 /// </summary>
 public sealed class RuntimeUpdateScheduler
 {
@@ -132,7 +139,29 @@ public sealed class RuntimeUpdateScheduler
             // failure is logged and the ensure still runs.
             try
             {
-                await CheckDueAsync(bounded: true);
+                // Resolve the managed binary FIRST: the check below reads
+                // CurrentOrigin/Version, which EnsureLlamaOrDownloadAsync
+                // populates (it runs later, inside ensureServer). Without
+                // this a fresh launch sees Origin.Unknown and misroutes the
+                // check as "not managed" — silently discarding a deferred
+                // install AND neutering the weekly check. Best-effort; it
+                // never throws.
+                await _manager.ResolveAndReadVersionAsync();
+
+                // Honor a deferred manual "Check for updates" first: the
+                // Settings card promises "it installs at the next launch",
+                // and this is the one point the binary is guaranteed idle
+                // (the server is Stopped — IsServerSafe(Stopped) — and
+                // ensureServer() has not launched anything yet). force
+                // bypasses the weekly gate; a transient failure keeps the
+                // marker so the next launch retries. When a pending install
+                // is served here, skip the weekly check — one fetch per
+                // launch is enough. Any exception falls through to the
+                // ensure below — the server must come up.
+                if (_store.IsPendingInstall())
+                    await RunCheckAsync(force: true, fetchBudget: StartupCheckBudget);
+                else
+                    await CheckDueAsync(bounded: true);
             }
             catch (Exception ex)
             {
@@ -178,6 +207,13 @@ public sealed class RuntimeUpdateScheduler
     /// (not managed, unparsable, up to date, install attempted) marks the
     /// weekly check done; transient failures (fetch) and deferrals (server
     /// busy) leave the stamp so the next tick retries.
+    ///
+    /// <para>Pending-install rules (the "installs at the next launch"
+    /// promise a manual check makes when the server is busy): a manual check
+    /// that defers records a pending install; every terminal outcome clears
+    /// it; transient outcomes (fetch failure, scheduled deferral) leave it
+    /// untouched so the intent survives across launches until
+    /// <see cref="StartAsync"/> honors it.</para>
     /// </summary>
     private async Task<CheckOutcome> RunCheckAsync(bool force, TimeSpan? fetchBudget)
     {
@@ -197,11 +233,23 @@ public sealed class RuntimeUpdateScheduler
             // flight. A non-managed origin is a stable situation worth
             // stamping — polling GitHub hourly for a binary we will never
             // touch buys nothing.
+            if (manager.CurrentOrigin == LlamaManager.Origin.External)
+            {
+                Log.Info("runtime update skipped: installation is External (user-managed), not app-managed");
+                _store.Save(DateTimeOffset.UtcNow);
+                // Terminal: an install will never run here — a pending
+                // intent must not outlive it.
+                _store.ClearPendingInstall();
+                return CheckOutcome.SkippedNotManaged;
+            }
             if (manager.CurrentOrigin != LlamaManager.Origin.Managed)
             {
-                Log.Info($"runtime update skipped: installation is {manager.CurrentOrigin}, not app-managed");
-                _store.Save(DateTimeOffset.UtcNow);
-                return CheckOutcome.SkippedNotManaged;
+                // Origin.Unknown: the binary has not been resolved yet (the
+                // startup honor step runs before EnsureLlamaOrDownloadAsync,
+                // and resolution is best-effort). Transient — do not stamp
+                // and do not clear a pending install; a later launch retries.
+                Log.Debug("runtime update deferred: managed binary not yet resolved");
+                return CheckOutcome.DeferredServerBusy;
             }
 
             // The overwrite needs the binary idle; skip without stamping so
@@ -209,6 +257,12 @@ public sealed class RuntimeUpdateScheduler
             // start, which runs before the server launches).
             if (!IsServerSafe(manager.ServerStatus) || manager.State == LlamaManager.InstallState.Installing)
             {
+                // A manual check's deferral is a promise the UI makes ("it
+                // installs at the next launch") — record it FIRST so the
+                // next launch's startup pass honors it even though the
+                // weekly check isn't due. Scheduled defers need no marker:
+                // the hourly tick keeps retrying on its own cadence.
+                if (force) _store.SetPendingInstall();
                 Log.Debug("runtime update deferred: llama server is not idle");
                 return CheckOutcome.DeferredServerBusy;
             }
@@ -229,7 +283,8 @@ public sealed class RuntimeUpdateScheduler
             finally { boundedCts?.Dispose(); }
 
             // Transient failure (network, GitHub, unparsable tag) — the next
-            // tick retries, so this week's check stays "due".
+            // tick retries, so this week's check stays "due", and any pending
+            // install intent stays pending for the next launch.
             if (latest is null)
             {
                 Log.Warn("runtime update check failed: could not determine the latest llama.cpp release");
@@ -243,6 +298,9 @@ public sealed class RuntimeUpdateScheduler
                 // hourly won't change the answer, so stamp the check as done.
                 Log.Warn($"runtime update skipped: installed version '{manager.Version}' has no recognizable build number");
                 _store.Save(DateTimeOffset.UtcNow);
+                // Terminal: retrying won't change the answer — a pending
+                // intent goes with it.
+                _store.ClearPendingInstall();
                 return CheckOutcome.SkippedUnparsableVersion;
             }
 
@@ -250,6 +308,9 @@ public sealed class RuntimeUpdateScheduler
             {
                 Log.Info($"llama.cpp runtime is up to date (installed b{installed}, latest b{latest})");
                 _store.Save(DateTimeOffset.UtcNow);
+                // Terminal: there is nothing left to install — a pending
+                // intent (e.g. the update landed in the meantime) is served.
+                _store.ClearPendingInstall();
                 return CheckOutcome.UpToDate;
             }
 
@@ -257,6 +318,9 @@ public sealed class RuntimeUpdateScheduler
             // between (e.g. a sibling tool or a state change during the call).
             if (!IsServerSafe(manager.ServerStatus) || manager.State == LlamaManager.InstallState.Installing)
             {
+                // Same promise as the pre-fetch deferral — record the manual
+                // check's pending install intent first (see above).
+                if (force) _store.SetPendingInstall();
                 Log.Debug("runtime update deferred: llama server became busy during the check");
                 return CheckOutcome.DeferredServerBusy;
             }
@@ -264,15 +328,26 @@ public sealed class RuntimeUpdateScheduler
             Log.Info($"llama.cpp runtime update available: installed b{installed}, latest b{latest} — installing");
             try
             {
-                // Unattended: require a pinned script hash. While
-                // InstallScriptIntegrity.PinnedSha256 is null the install is
-                // refused (logged by InstallAsync) rather than executing an
-                // unverified remote script on a weekly timer.
+                // Unattended: require the pinned script hash
+                // (InstallScriptIntegrity.PinnedSha256) — a mismatch, or a
+                // build without a pin, refuses the install (logged by
+                // InstallAsync) rather than executing an unverified remote
+                // script on a weekly timer.
                 var installedOk = await manager.InstallAsync(
                     CancellationToken.None, allowUnpinnedInstall: false);
-                if (installedOk)
+                // Belt against phantom updates: a "successful" install that
+                // delivers the very same build is not an update — never toast
+                // a version that never appears.
+                var outcome = ClassifyInstallOutcome(installedOk, installed, manager.Version);
+                // Whatever the verdict, the attempt is terminal: the deferred
+                // intent is served (installed / confirmed up to date) or the
+                // failure is logged and the weekly cadence owns any retry.
+                _store.ClearPendingInstall();
+                if (outcome == CheckOutcome.Installed)
                     RuntimeUpdated?.Invoke(latest.Value);
-                return installedOk ? CheckOutcome.Installed : CheckOutcome.InstallFailed;
+                else if (outcome == CheckOutcome.UpToDate)
+                    Log.Warn("install completed but the build did not change — reporting up to date");
+                return outcome;
             }
             finally
             {
@@ -283,37 +358,45 @@ public sealed class RuntimeUpdateScheduler
     }
 
     /// <summary>
-    /// Fetches the latest llama.cpp release from GitHub and returns its build
-    /// number. Null on any failure — the check simply stays due.
+    /// Fetches the newest llama.cpp build the app's installer can deliver and
+    /// returns its build number. Null on any failure — the check simply stays
+    /// due.
     /// </summary>
     private static async Task<uint?> FetchLatestBuildAsync(CancellationToken cancel)
     {
         try
         {
             // Deliberately NOT a shared client: an internet call, so the
-            // system proxy is welcome (same reasoning as the installer).
+            // system proxy is welcome (same reasoning as the installer). No
+            // Accept header: the GitHub API is fine without one and the
+            // install channel's plain-text marker answers empty when sent one.
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             client.DefaultRequestHeaders.UserAgent.ParseAdd(Common.HttpUserAgent.Value);
-            client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
 
-            // The releases LIST is authoritative: llama.cpp's per-build
-            // b<build> releases are marked "prerelease" now that stable
-            // releases carry semver tags ("v0.7.0"), and releases/latest only
-            // ever returns the newest stable — a tag with no comparable build
-            // number (issue #133). The install channel serves the nightly
-            // b-stream (install.ps1 resolves its version from the same tags),
-            // so the newest b<build> in the list is what "up to date" is
-            // measured against. The list is newest-first, so the current
-            // build is always on the first page.
-            var build = ParseLatestBuildFromReleaseList(
-                await GetJsonAsync(client, ReleasesListUrl, cancel));
+            // The install channel is the source of truth: install.ps1 resolves
+            // its version from this very "latest" marker and installs exactly
+            // that build, so it is the only thing "up to date" can truthfully
+            // be measured against. GitHub's nightly b-tags move ahead of the
+            // channel; comparing against them finds "updates" the installer
+            // cannot deliver — the install then silently re-installs the same
+            // build and the version never changes (issue #133 follow-up).
+            var build = ParseReleaseBuild(
+                await GetStringAsync(client, InstallChannelLatestUrl, cancel));
+            if (build is not null) return build;
+
+            // Fallback for a missing/unreadable channel marker: the GitHub
+            // releases LIST — the nightly b<build> prereleases, which since
+            // llama.cpp's semver stable releases no longer surface in
+            // releases/latest (issue #133) — then releases/latest itself for
+            // the pre-semver scheme. An "update" seen here may not be
+            // installable yet; the install then fails loudly rather than
+            // pretending. The list is newest-first, so the current build is
+            // always on the first page.
+            build = ParseLatestBuildFromReleaseList(
+                await GetStringAsync(client, ReleasesListUrl, cancel));
             if (build is null)
-            {
-                // Fallback for the pre-semver scheme, where every build was
-                // its own non-prerelease "latest" release with a b<build> tag.
                 build = ParseLatestReleaseBuild(
-                    await GetJsonAsync(client, LatestReleaseUrl, cancel));
-            }
+                    await GetStringAsync(client, LatestReleaseUrl, cancel));
             if (build is null)
                 Log.Warn("llama.cpp release response carried no recognizable b<build> tag; skipping");
             return build;
@@ -331,6 +414,14 @@ public sealed class RuntimeUpdateScheduler
         }
     }
 
+    /// <summary>The install channel's <c>latest</c> marker — the plain-text
+    /// <c>b&lt;build&gt;</c> tag of the build <c>install.ps1</c> would install
+    /// (the script resolves its version from this same file: the HF bucket
+    /// behind <c>llama.app/install.ps1</c>). The source of truth for "is there
+    /// a newer runtime to install".</summary>
+    private static readonly Uri InstallChannelLatestUrl =
+        new("https://huggingface.co/buckets/ggml-org/install.sh/resolve/latest");
+
     /// <summary>GitHub releases endpoint for the latest llama.cpp release —
     /// the fallback only: it hides prereleases (where the nightly
     /// <c>b&lt;build&gt;</c> stream lives since semver stable releases) and
@@ -344,8 +435,9 @@ public sealed class RuntimeUpdateScheduler
     private static readonly Uri ReleasesListUrl =
         new("https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30");
 
-    /// <summary>GETs one GitHub API JSON body; null (logged) on a non-success status.</summary>
-    private static async Task<string?> GetJsonAsync(HttpClient client, Uri url, CancellationToken cancel)
+    /// <summary>GETs one response body (GitHub JSON or the channel's plain
+    /// text); null (logged) on a non-success status.</summary>
+    private static async Task<string?> GetStringAsync(HttpClient client, Uri url, CancellationToken cancel)
     {
         using var resp = await client.GetAsync(url, cancel);
         if (!resp.IsSuccessStatusCode)
@@ -433,6 +525,26 @@ public sealed class RuntimeUpdateScheduler
     }
 
     /// <summary>
+    /// Decides what a finished install attempt means: a failure, a real
+    /// update (the installed build changed) — or "up to date" when a nominally
+    /// successful install delivered the very same build (the channel marker
+    /// lagging the comparison source, or moving between check and install).
+    /// Reporting <see cref="CheckOutcome.Installed"/> for a non-change is a
+    /// phantom update: the toast promises a version that never appears (issue
+    /// #133 follow-up). An unreadable post-install version keeps the benefit
+    /// of the doubt. Pure for tests.
+    /// </summary>
+    internal static CheckOutcome ClassifyInstallOutcome(
+        bool installOk, uint? buildBefore, string? versionAfter)
+    {
+        if (!installOk) return CheckOutcome.InstallFailed;
+        if (buildBefore is not null &&
+            ParseInstalledBuild(versionAfter) is { } after && after == buildBefore.Value)
+            return CheckOutcome.UpToDate;
+        return CheckOutcome.Installed;
+    }
+
+    /// <summary>
     /// Parses a llama.cpp release tag — strictly <c>b&lt;build&gt;</c>
     /// (e.g. <c>b6726</c>). Anything else (semver stable releases like
     /// <c>v0.7.0</c>, decorated or release-candidate tags) yields null: only
@@ -463,13 +575,25 @@ public sealed class RuntimeUpdateScheduler
 /// cadence survives app restarts. Best-effort in both directions: a missing
 /// or unreadable file means "never checked", a failed write is logged and
 /// skipped — the worst case is a check that runs more often than weekly.
+///
+/// <para>Also owns the sibling <c>.runtime-update-pending</c> marker: a
+/// manual check deferred by a busy server records its "installs at the next
+/// launch" promise there, and <see cref="RuntimeUpdateScheduler.StartAsync"/>
+/// honors it before the server comes up. Same best-effort rules.</para>
 /// </summary>
 public sealed class LastCheckStore
 {
     private readonly string _path;
+    private readonly string _pendingPath;
 
     public LastCheckStore(string? path = null)
-        => _path = path ?? Path.Combine(AppData.Root, ".runtime-update-check");
+    {
+        _path = path ?? Path.Combine(AppData.Root, ".runtime-update-check");
+        // Derived from the stamp's own path (not just its directory) so two
+        // stores pointing at different stamp files in the same directory do
+        // not share a pending marker.
+        _pendingPath = _path + ".pending";
+    }
 
     /// <summary>The last completed check, or null when never / unreadable.</summary>
     public DateTimeOffset? Load()
@@ -501,6 +625,50 @@ public sealed class LastCheckStore
         catch (Exception ex)
         {
             Log.Warn(ex, "could not persist the runtime update check stamp");
+        }
+    }
+
+    /// <summary>True when a deferred install is waiting for the next launch.
+    /// A missing marker (the normal case) means nothing is pending.</summary>
+    public bool IsPendingInstall()
+    {
+        try
+        {
+            return File.Exists(_pendingPath);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "could not read the runtime update pending-install marker");
+            return false;
+        }
+    }
+
+    /// <summary>Records that an install was deferred and should run at the
+    /// next launch. Best-effort.</summary>
+    public void SetPendingInstall()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_pendingPath)!);
+            File.WriteAllText(_pendingPath, DateTimeOffset.UtcNow.ToUniversalTime().ToString("o"));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "could not persist the runtime update pending-install marker");
+        }
+    }
+
+    /// <summary>Marks a pending install as handled (or moot — e.g. the check
+    /// found nothing left to install). Best-effort.</summary>
+    public void ClearPendingInstall()
+    {
+        try
+        {
+            File.Delete(_pendingPath);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "could not clear the runtime update pending-install marker");
         }
     }
 }
