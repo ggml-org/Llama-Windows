@@ -63,6 +63,9 @@ public sealed class EnrolledFolderWatcherTests : IDisposable
     [InlineData("sub/dir/Thumbs.db", true)] // events carry relative paths
     [InlineData("model.gguf", false)]
     [InlineData("model-00001-of-00002.gguf", false)]
+    [InlineData("~model.gguf", false)]
+    [InlineData("~model-00001-of-00002.gguf", false)]
+    [InlineData("model.tmp.gguf", false)]
     [InlineData("notes.txt", false)]
     [InlineData("desktop.ini.bak", false)]
     [InlineData("mytmp", false)]

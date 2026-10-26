@@ -314,6 +314,22 @@ public sealed class GgufMetadataTests
     }
 
     [Fact]
+    public void SkipValue_Returns_False_When_A_Truncated_Value_Would_Seek_Past_The_End()
+    {
+        // A numeric ARRAY whose element body is cut short: count*elemSize is
+        // within the header budget but the bytes are not actually present.
+        // Skipping past EOF on a truncated FINAL value is a corrupt header,
+        // not something to "skip cleanly".
+        var (arrayOk, _) = Skip(
+            ArrayValue(4u /* UINT32 */, 4, body: new byte[4]), 9u /* ARRAY */);
+        Assert.False(arrayOk);
+
+        // And a scalar UINT32 with only 2 bytes behind it.
+        var (scalarOk, _) = Skip(new byte[2], 4u /* UINT32 */);
+        Assert.False(scalarOk);
+    }
+
+    [Fact]
     public void SkipValue_Checks_The_Budget_Every_String_Array_Step()
     {
         // 1-byte strings: each consumes 9 bytes (uint64 length + 1 byte).

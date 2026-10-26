@@ -129,6 +129,10 @@ public sealed class EnrolledFolderWatcher : IDisposable
         // Events under IncludeSubdirectories carry a relative path — the
         // rules apply to the final component.
         name = Path.GetFileName(name);
+        // A .gguf name can ALWAYS change the scan result (the scanner
+        // enumerates *.gguf) — never classify one as noise, whatever
+        // prefix/suffix it carries (~model.gguf is a legitimate model).
+        if (name.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase)) return false;
         return name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)
             || name.Equals("Thumbs.db", StringComparison.OrdinalIgnoreCase)
             || name.Equals(".DS_Store", StringComparison.OrdinalIgnoreCase)

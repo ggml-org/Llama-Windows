@@ -256,11 +256,11 @@ namespace LlamaApp.Llama
         {
             switch (type)
             {
-                case 0 or 1 or 7: r.BaseStream.Seek(1, SeekOrigin.Current); break;
-                case 2 or 3: r.BaseStream.Seek(2, SeekOrigin.Current); break;
-                case 4 or 5 or 6: r.BaseStream.Seek(4, SeekOrigin.Current); break;
+                case 0 or 1 or 7: if (!HasRemaining(r, 1)) return false; r.BaseStream.Seek(1, SeekOrigin.Current); break;
+                case 2 or 3: if (!HasRemaining(r, 2)) return false; r.BaseStream.Seek(2, SeekOrigin.Current); break;
+                case 4 or 5 or 6: if (!HasRemaining(r, 4)) return false; r.BaseStream.Seek(4, SeekOrigin.Current); break;
                 case 8: return ReadString(r) is not null;
-                case 10 or 11 or 12: r.BaseStream.Seek(8, SeekOrigin.Current); break;
+                case 10 or 11 or 12: if (!HasRemaining(r, 8)) return false; r.BaseStream.Seek(8, SeekOrigin.Current); break;
                 case 9: // ARRAY: element type + count + elements
                     var elemType = r.ReadUInt32();
                     var count = r.ReadUInt64();
@@ -299,6 +299,11 @@ namespace LlamaApp.Llama
                         // budget is corrupt/hostile — and the bound keeps the
                         // seek below long overflow (count * elemSize ≤ budget).
                         if (count > (ulong)(MaxHeaderBytes / elemSize)) return false;
+                        // The count guard bounds the skip against the header
+                        // budget, but a truncated FINAL value can still sit
+                        // past the end of the stream — refuse rather than
+                        // "skipping" bytes that aren't there.
+                        if (!HasRemaining(r, (long)count * elemSize)) return false;
                         r.BaseStream.Seek((long)count * elemSize, SeekOrigin.Current);
                     }
                     break;
@@ -310,5 +315,11 @@ namespace LlamaApp.Llama
             }
             return true;
         }
+
+        /// <summary>True when at least <paramref name="bytes"/> remain in
+        /// the stream — so a seek can never move past EOF on a truncated
+        /// final value.</summary>
+        private static bool HasRemaining(BinaryReader r, long bytes)
+            => r.BaseStream.Length - r.BaseStream.Position >= bytes;
     }
 }
