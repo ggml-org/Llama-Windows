@@ -246,19 +246,21 @@ namespace LlamaApp.Llama
 
         /// <summary>
         /// Skips a metadata value of the given GGUF type. True when the value
-        /// was skipped cleanly; false when it is malformed or its declared
-        /// size exceeds the header budget — the caller must abort the parse
-        /// rather than seek (or loop) on a corrupt/hostile count.
+        /// was skipped cleanly; false when it is malformed, its type is
+        /// unknown, or its declared size exceeds the header budget — the
+        /// caller must abort the parse rather than seek (or loop) on a
+        /// corrupt/hostile count. Every exit consumes the value exactly (or
+        /// reports failure) so the stream can never fall out of alignment.
         /// </summary>
-        private static bool SkipValue(BinaryReader r, uint type, CancellationToken cancel)
+        internal static bool SkipValue(BinaryReader r, uint type, CancellationToken cancel)
         {
             switch (type)
             {
-                case 0 or 1 or 7: r.BaseStream.Seek(1, SeekOrigin.Current); break;
-                case 2 or 3: r.BaseStream.Seek(2, SeekOrigin.Current); break;
-                case 4 or 5 or 6: r.BaseStream.Seek(4, SeekOrigin.Current); break;
+                case 0 or 1 or 7: if (!HasRemaining(r, 1)) return false; r.BaseStream.Seek(1, SeekOrigin.Current); break;
+                case 2 or 3: if (!HasRemaining(r, 2)) return false; r.BaseStream.Seek(2, SeekOrigin.Current); break;
+                case 4 or 5 or 6: if (!HasRemaining(r, 4)) return false; r.BaseStream.Seek(4, SeekOrigin.Current); break;
                 case 8: return ReadString(r) is not null;
-                case 10 or 11 or 12: r.BaseStream.Seek(8, SeekOrigin.Current); break;
+                case 10 or 11 or 12: if (!HasRemaining(r, 8)) return false; r.BaseStream.Seek(8, SeekOrigin.Current); break;
                 case 9: // ARRAY: element type + count + elements
                     var elemType = r.ReadUInt32();
                     var count = r.ReadUInt64();
@@ -266,15 +268,16 @@ namespace LlamaApp.Llama
                     {
                         // String arrays walk element by element — bound the
                         // walk by the header budget, honor cancellation and
-                        // stop as soon as the budget is passed.
+                        // stop as soon as the budget is passed. The budget is
+                        // checked EVERY iteration (a 1024-stride check could
+                        // read a whole window past it); the token is only
+                        // polled at stride 1024 to keep the per-iteration
+                        // cost negligible.
                         if (count > (ulong)MaxHeaderBytes) return false;
                         for (ulong i = 0; i < count; i++)
                         {
-                            if (i % 1024 == 0)
-                            {
-                                cancel.ThrowIfCancellationRequested();
-                                if (r.BaseStream.Position > MaxHeaderBytes) return false;
-                            }
+                            if (r.BaseStream.Position > MaxHeaderBytes) return false;
+                            if (i % 1024 == 0) cancel.ThrowIfCancellationRequested();
                             if (ReadString(r) is null) return false;
                         }
                     }
@@ -288,15 +291,35 @@ namespace LlamaApp.Llama
                             10 or 11 or 12 => 8L,
                             _ => 0L,
                         };
+                        // Unknown element type (incl. nested ARRAY=9): there
+                        // is no element stride to seek by — refusing beats
+                        // seeking 0 bytes and silently misaligning the stream.
+                        if (elemSize == 0) return false;
                         // A count that would push the skip past the header
                         // budget is corrupt/hostile — and the bound keeps the
                         // seek below long overflow (count * elemSize ≤ budget).
-                        if (count > (ulong)(MaxHeaderBytes / Math.Max(elemSize, 1L))) return false;
+                        if (count > (ulong)(MaxHeaderBytes / elemSize)) return false;
+                        // The count guard bounds the skip against the header
+                        // budget, but a truncated FINAL value can still sit
+                        // past the end of the stream — refuse rather than
+                        // "skipping" bytes that aren't there.
+                        if (!HasRemaining(r, (long)count * elemSize)) return false;
                         r.BaseStream.Seek((long)count * elemSize, SeekOrigin.Current);
                     }
                     break;
+                default:
+                    // Unknown GGUF type (>12): its value width is unknowable,
+                    // so there is nothing safe to consume — abort instead of
+                    // falling through without advancing the stream.
+                    return false;
             }
             return true;
         }
+
+        /// <summary>True when at least <paramref name="bytes"/> remain in
+        /// the stream — so a seek can never move past EOF on a truncated
+        /// final value.</summary>
+        private static bool HasRemaining(BinaryReader r, long bytes)
+            => r.BaseStream.Length - r.BaseStream.Position >= bytes;
     }
 }

@@ -50,21 +50,32 @@ public sealed class EnrolledFolderWatcherTests : IDisposable
     }
 
     [Theory]
-    [InlineData("model.gguf", true)]
-    [InlineData("MODEL.GGUF", true)]
-    [InlineData("sub/dir/model-00001-of-00002.gguf", true)]
-    [InlineData("vision-mmproj.gguf", true)]
-    [InlineData("mtp-draft.gguf", true)]
-    [InlineData("model.gguf.part", false)]
+    [InlineData("desktop.ini", true)]
+    [InlineData("Desktop.INI", true)]
+    [InlineData("Thumbs.db", true)]
+    [InlineData("THUMBS.DB", true)]
+    [InlineData(".DS_Store", true)]
+    [InlineData("~$word.docx", true)]
+    [InlineData("~report.docx", true)]
+    [InlineData("model.tmp", true)]
+    [InlineData("MODEL.TMP", true)]
+    [InlineData("scratch.temp", true)]
+    [InlineData("sub/dir/Thumbs.db", true)] // events carry relative paths
+    [InlineData("model.gguf", false)]
+    [InlineData("model-00001-of-00002.gguf", false)]
+    [InlineData("~model.gguf", false)]
+    [InlineData("~model-00001-of-00002.gguf", false)]
+    [InlineData("model.tmp.gguf", false)]
     [InlineData("notes.txt", false)]
-    [InlineData("model.bin", false)]
-    [InlineData("README.md", false)]
-    public void IsModelFile_MatchesOnlyWhatTheScannerSees(string path, bool expected)
-        => Assert.Equal(expected, EnrolledFolderWatcher.IsModelFile(path));
+    [InlineData("desktop.ini.bak", false)]
+    [InlineData("mytmp", false)]
+    [InlineData("", false)]
+    public void IsNoiseName_FiltersOsAndEditorChurn(string name, bool expected)
+        => Assert.Equal(expected, EnrolledFolderWatcher.IsNoiseName(name));
 
     [Fact]
-    public void IsModelFile_RejectsNull()
-        => Assert.False(EnrolledFolderWatcher.IsModelFile(null));
+    public void IsNoiseName_RejectsNull()
+        => Assert.False(EnrolledFolderWatcher.IsNoiseName(null));
 
     [Fact]
     public async Task A_Burst_Of_Model_Changes_Fires_One_Callback()

@@ -63,14 +63,6 @@ public sealed class EnrolledFolderWatcher : IDisposable
     /// </summary>
     public void UpdateFolders(IEnumerable<string> folders) => Rebuild(folders);
 
-    /// <summary>
-    /// Whether a path is a file the folder scan cares about: the scanner
-    /// enumerates <c>*.gguf</c> and treats mmproj/draft/shard special names
-    /// within that set — so <c>.gguf</c> is the whole universe.
-    /// </summary>
-    public static bool IsModelFile(string? path)
-        => path is not null && path.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase);
-
     private void Rebuild(IEnumerable<string> folders)
     {
         lock (_gate)
@@ -122,18 +114,48 @@ public sealed class EnrolledFolderWatcher : IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether an event name is pure OS/app churn — Explorer's
+    /// <c>desktop.ini</c>/<c>Thumbs.db</c>, macOS's <c>.DS_Store</c>, Office
+    /// lock files (<c>~$doc.docx</c>, any <c>~</c>-prefixed name) and editor
+    /// scratch files (<c>*.tmp</c>/<c>*.temp</c>). A churn folder (Downloads)
+    /// fires these constantly; none of them can be a model, so reacting to
+    /// them would sustain a full recursive rescan + INI write + server
+    /// reload on every quiet period for nothing.
+    /// </summary>
+    internal static bool IsNoiseName(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return false;
+        // Events under IncludeSubdirectories carry a relative path — the
+        // rules apply to the final component.
+        name = Path.GetFileName(name);
+        // A .gguf name can ALWAYS change the scan result (the scanner
+        // enumerates *.gguf) — never classify one as noise, whatever
+        // prefix/suffix it carries (~model.gguf is a legitimate model).
+        if (name.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase)) return false;
+        return name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Thumbs.db", StringComparison.OrdinalIgnoreCase)
+            || name.Equals(".DS_Store", StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith('~') // includes the Office ~$ lock prefix
+            || name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".temp", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void OnFileEvent(object sender, FileSystemEventArgs e)
     {
         // ANY name change marks dirty: NotifyFilter is FileName|DirectoryName,
         // so a directory event (a folder of models created, moved in or
         // renamed) changes what the scan sees even when no .gguf name did.
-        // The debounce coalesces the burst into one refresh.
-        MarkDirty();
+        // The debounce coalesces the burst into one refresh. Noise names are
+        // the one exception — they can never change the scan result.
+        if (!IsNoiseName(e.Name)) MarkDirty();
     }
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
-        MarkDirty();
+        // A rename out of a noise name (or into one) can still matter — the
+        // non-noise side is what the scan may see.
+        if (!IsNoiseName(e.Name) || !IsNoiseName(e.OldName)) MarkDirty();
     }
 
     private void MarkUnhealthy(string folder, Exception? ex, bool missing = false)

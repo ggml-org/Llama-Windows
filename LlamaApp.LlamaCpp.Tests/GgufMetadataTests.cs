@@ -225,10 +225,9 @@ public sealed class GgufMetadataTests
     [Fact]
     public void Parse_Bounds_The_Array_Skip_For_An_Enormous_Count()
     {
-        // A corrupt/hostile header claiming an ARRAY of ~2^64 elements must
-        // not seek (or loop) on that count: the skip is bounded by the header
-        // budget and the parse bails to null immediately — a declared element
-        // count is never trusted.
+        // Parse-level smoke: a corrupt/hostile header claiming an ARRAY of
+        // ~2^64 elements bails to null instead of seeking (or looping) on
+        // that count. The mechanism is pinned by the SkipValue_* tests below.
         var sw = Stopwatch.StartNew();
 
         Assert.Null(Parse(Gguf(
@@ -245,6 +244,114 @@ public sealed class GgufMetadataTests
         sw.Stop();
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5),
             $"an enormous ARRAY count must be bounded, took {sw.Elapsed}");
+    }
+
+    // ---- SkipValue directly: the array skip's alignment/budget contract ----
+
+    /// <summary>Runs <see cref="GgufMetadata.SkipValue"/> over a crafted
+    /// value payload and reports success plus the end position.</summary>
+    private static (bool Ok, long Position) Skip(byte[] value, uint type)
+    {
+        using var ms = new MemoryStream(value);
+        using var r = new BinaryReader(ms);
+        var ok = GgufMetadata.SkipValue(r, type, CancellationToken.None);
+        return (ok, ms.Position);
+    }
+
+    /// <summary>Raw ARRAY value payload: elemType + count (+ optional body).
+    /// No key prefix — SkipValue reads the value only.</summary>
+    private static byte[] ArrayValue(uint elemType, ulong count, byte[]? body = null)
+    {
+        using var ms = new MemoryStream();
+        using var w = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        w.Write(elemType);
+        w.Write(count);
+        if (body is not null) w.Write(body);
+        w.Flush();
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public void SkipValue_Returns_False_For_An_Enormous_Array_Count_Without_Seeking()
+    {
+        // Both array flavors must bail after reading just elemType + count —
+        // seeking count*elemSize (or looping count strings) on a ~2^64 count
+        // is exactly the misalignment/hostility the skip must refuse.
+        foreach (var elemType in new uint[] { 4u /* UINT32 */, 8u /* STRING */ })
+        {
+            var (ok, pos) = Skip(ArrayValue(elemType, ulong.MaxValue / 2), 9u /* ARRAY */);
+
+            Assert.False(ok);
+            Assert.True(pos <= GgufMetadata.MaxHeaderBytes,
+                $"elemType {elemType}: skipped to {pos}, far past the budget");
+        }
+    }
+
+    [Fact]
+    public void SkipValue_Returns_False_For_An_Unknown_Outer_Type()
+    {
+        // A GGUF type >12 has an unknowable width: skipping nothing and
+        // reporting success would misalign every following KV. Must fail.
+        var (ok, pos) = Skip([0xAB, 0xCD, 0xEF], 42u);
+
+        Assert.False(ok);
+        Assert.Equal(0, pos); // fails fast — nothing consumed
+    }
+
+    [Fact]
+    public void SkipValue_Returns_False_For_An_Unknown_Array_Element_Type()
+    {
+        // elemSize == 0 (unknown elem type, incl. nested ARRAY=9): seeking
+        // count*0 = 0 bytes and returning true would silently misalign.
+        foreach (var elemType in new uint[] { 9u /* nested ARRAY */, 42u /* unknown */ })
+        {
+            var (ok, pos) = Skip(ArrayValue(elemType, count: 1), 9u /* ARRAY */);
+
+            Assert.False(ok);
+            Assert.True(pos <= GgufMetadata.MaxHeaderBytes,
+                $"elemType {elemType}: skipped to {pos}, far past the budget");
+        }
+    }
+
+    [Fact]
+    public void SkipValue_Returns_False_When_A_Truncated_Value_Would_Seek_Past_The_End()
+    {
+        // A numeric ARRAY whose element body is cut short: count*elemSize is
+        // within the header budget but the bytes are not actually present.
+        // Skipping past EOF on a truncated FINAL value is a corrupt header,
+        // not something to "skip cleanly".
+        var (arrayOk, _) = Skip(
+            ArrayValue(4u /* UINT32 */, 4, body: new byte[4]), 9u /* ARRAY */);
+        Assert.False(arrayOk);
+
+        // And a scalar UINT32 with only 2 bytes behind it.
+        var (scalarOk, _) = Skip(new byte[2], 4u /* UINT32 */);
+        Assert.False(scalarOk);
+    }
+
+    [Fact]
+    public void SkipValue_Checks_The_Budget_Every_String_Array_Step()
+    {
+        // 1-byte strings: each consumes 9 bytes (uint64 length + 1 byte).
+        // Enough of them to cross the header budget mid-walk — the walk must
+        // stop at the FIRST string past the budget, not up to 1024 strings
+        // later (the old stride-1024 check read a whole window past it).
+        const int BytesPerString = 9;
+        var count = (ulong)(GgufMetadata.MaxHeaderBytes / BytesPerString) + 4096;
+        var body = new byte[checked((int)count * BytesPerString)];
+        for (int i = 0; i < (int)count; i++)
+        {
+            body[i * BytesPerString] = 1;        // uint64 length = 1 (LE low byte)
+            body[i * BytesPerString + 8] = 0x2A; // the single content byte
+        }
+
+        var (ok, pos) = Skip(ArrayValue(8u /* STRING */, count, body), 9u /* ARRAY */);
+
+        Assert.False(ok);
+        // First failing step sits at most one string past the budget; the old
+        // stride-1024 check could land ~1024 strings (9 KB) past it.
+        Assert.True(pos <= GgufMetadata.MaxHeaderBytes + BytesPerString,
+            $"string-array walk ran to {pos}, past budget+1 step ({GgufMetadata.MaxHeaderBytes + BytesPerString})");
     }
 
     [Fact]
