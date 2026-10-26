@@ -179,9 +179,10 @@ public sealed class ModelItemDetailsViewModelTests
         Assert.Equal(
             [true, true, true, true, false, false, false],
             vm.ContextLengths.Select(o => o.IsSupported).ToArray());
-        // The llama.cpp default is preselected — never silently the largest.
-        Assert.Equal(4096, vm.SelectedContextLength?.Tokens);
-        Assert.True(vm.ContextLengths[0].IsSelected);
+        // Nothing is preselected until the user picks — an unset context
+        // must not read as an applied 4k (and never silently the largest).
+        Assert.Null(vm.SelectedContextLength);
+        Assert.All(vm.ContextLengths, o => Assert.False(o.IsSelected));
     }
 
     [Fact]
@@ -196,6 +197,9 @@ public sealed class ModelItemDetailsViewModelTests
         // 32k: 8× the KV of 4k.
         Assert.Equal(4_000_000_000L + 8 * 512L * 1024 * 1024,
             vm.ContextLengths[3].EstimatedMemoryBytes);
+        // No preselection → the header stays empty until the user picks.
+        Assert.True(string.IsNullOrEmpty(vm.EstimatedMemoryDisplay));
+        vm.SelectContextLength(vm.ContextLengths[0]); // 4k
         Assert.False(string.IsNullOrEmpty(vm.EstimatedMemoryDisplay));
     }
 
@@ -211,7 +215,7 @@ public sealed class ModelItemDetailsViewModelTests
         Assert.All(vm.ContextLengths, o => Assert.Equal(HardwareFitLevel.Might, o.FitLevel));
         Assert.All(vm.ContextLengths, o => Assert.True(o.IsSelectable));
         Assert.All(vm.ContextLengths, o => Assert.Equal("Memory requirement unknown — might fit", o.TooltipText));
-        Assert.Equal(4096, vm.SelectedContextLength?.Tokens);
+        Assert.Null(vm.SelectedContextLength);
     }
 
     [Fact]
@@ -259,7 +263,7 @@ public sealed class ModelItemDetailsViewModelTests
 
         // A red option can't be selected; an yellow one can.
         vm.SelectContextLength(vm.ContextLengths[4]);
-        Assert.Equal(4096, vm.SelectedContextLength?.Tokens);
+        Assert.Null(vm.SelectedContextLength);
         vm.SelectContextLength(vm.ContextLengths[3]);
         Assert.Equal(32768, vm.SelectedContextLength?.Tokens);
     }
@@ -396,15 +400,15 @@ public sealed class ModelItemDetailsViewModelTests
     public async Task RestoreSelection_Skips_A_Memory_Capped_Preference()
     {
         // ~5 GB free: 32k (~8.3 GB) is a hard no — the persisted 32k
-        // preference must fall back to the 4k default (yellow at ~4.5 GB,
-        // but selectable).
+        // preference falls away to NOTHING preselected (an over-budget saved
+        // value must not silently become 4k).
         var prefs = new FakePreferences();
         prefs.Saved["unsloth/Qwen3-4B-GGUF:Q4_K_M"] = 32768;
         var vm = MakeVm(InstalledItem(), new FakeHost(), prefs,
             memoryBudget: () => 5_000_000_000UL);
         await vm.InitializeAsync();
 
-        Assert.Equal(4096, vm.SelectedContextLength?.Tokens);
+        Assert.Null(vm.SelectedContextLength);
     }
 
     [Fact]
@@ -428,7 +432,7 @@ public sealed class ModelItemDetailsViewModelTests
         var vm = MakeVm(InstalledItem(), new FakeHost(), prefs);
         await vm.InitializeAsync();
 
-        Assert.Equal(4096, vm.SelectedContextLength?.Tokens);
+        Assert.Null(vm.SelectedContextLength);
     }
 
     [Fact]
@@ -457,7 +461,7 @@ public sealed class ModelItemDetailsViewModelTests
 
         vm.SelectContextLength(vm.ContextLengths[4]); // 64k > 32k max
 
-        Assert.Equal(4096, vm.SelectedContextLength?.Tokens);
+        Assert.Null(vm.SelectedContextLength);
         Assert.Empty(prefs.Saved);
     }
 
@@ -475,7 +479,7 @@ public sealed class ModelItemDetailsViewModelTests
         var vm2 = MakeVm(other, new FakeHost(), prefs);
         await vm2.InitializeAsync();
 
-        Assert.Equal(4096, vm2.SelectedContextLength?.Tokens);
+        Assert.Null(vm2.SelectedContextLength);
     }
 
     // ---- Actions ----
