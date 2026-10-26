@@ -1,3 +1,5 @@
+using System.IO.Enumeration;
+
 namespace LlamaApp.Llama;
 
 /// <summary>
@@ -166,7 +168,11 @@ public static class ModelFileLocator
     {
         foreach (var snapshot in SafeEnumerateDirs(snapshotsDir))
         {
-            var found = ProbeFiles(SafeEnumerate(snapshot, "*.gguf"), quant);
+            // Files directly in the snapshot win. Some repos keep their GGUFs
+            // in a subfolder (Renesas/Qwen3-ASR-1.7B-GGUF has them under
+            // fp16/), so look there too when the snapshot root has no match.
+            var found = ProbeFiles(SafeEnumerate(snapshot, "*.gguf"), quant)
+                        ?? ProbeFiles(SafeEnumerateAll(snapshot, "*.gguf"), quant);
             if (found is not null) return found;
         }
         return null;
@@ -228,6 +234,41 @@ public static class ModelFileLocator
     private static IEnumerable<string> SafeEnumerateDirs(string dir)
     {
         try { return Directory.EnumerateDirectories(dir).ToList(); }
+        catch { return []; }
+    }
+
+    // The recursive probe's options. IgnoreInaccessible so one folder we may
+    // not read must not end the walk; AttributesToSkip = 0 because the default
+    // (Hidden | System) would diverge from the plain EnumerateFiles overloads
+    // used above. Reparse points are handled by KIND, not by this flag: FILE
+    // links are kept (hub-cache snapshots are symlinks into blobs/, so
+    // skipping them would find nothing), DIRECTORY links are never descended
+    // into (a junction loop must not spiral the walk).
+    private static readonly EnumerationOptions WalkOptions = new()
+    {
+        RecurseSubdirectories = true,
+        IgnoreInaccessible = true,
+        AttributesToSkip = 0,
+    };
+
+    /// <summary>
+    /// Every file matching <paramref name="pattern"/> below
+    /// <paramref name="dir"/>, recursively. See <see cref="WalkOptions"/> for
+    /// the reparse-point policy: file links are kept, directory links are not
+    /// entered.
+    /// </summary>
+    private static IEnumerable<string> SafeEnumerateAll(string dir, string pattern)
+    {
+        try
+        {
+            return new FileSystemEnumerable<string>(dir, (ref FileSystemEntry e) => e.ToFullPath(), WalkOptions)
+            {
+                ShouldIncludePredicate = (ref FileSystemEntry e) =>
+                    !e.IsDirectory && FileSystemName.MatchesSimpleExpression(pattern, e.FileName),
+                ShouldRecursePredicate = (ref FileSystemEntry e) =>
+                    (e.Attributes & FileAttributes.ReparsePoint) == 0,
+            }.ToList();
+        }
         catch { return []; }
     }
 }
