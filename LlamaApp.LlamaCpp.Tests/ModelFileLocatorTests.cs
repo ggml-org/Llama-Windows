@@ -1,3 +1,7 @@
+using System.Diagnostics;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using LlamaApp.Llama;
 using Xunit;
 
@@ -149,6 +153,86 @@ public sealed class ModelFileLocatorTests : IDisposable
         HubFile("org/vision-GGUF", "sha", Path.Combine("bf16", "vision-BF16-mmproj.gguf"));
 
         Assert.Null(Find("org/vision-GGUF:BF16"));
+    }
+
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public void AnUnreadableSubfolderDoesNotStopTheSubfolderSearch()
+    {
+        // "aaa" sorts before "fp16" and cannot be listed: the walk must go on.
+        var model = HubFile("org/model-GGUF", "sha", Path.Combine("fp16", "model-FP16.gguf"), size: 40);
+        var snapshot = Path.GetDirectoryName(Path.GetDirectoryName(model))!;
+        var locked = Directory.CreateDirectory(Path.Combine(snapshot, "aaa"));
+        var deny = new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!,
+            FileSystemRights.ListDirectory, AccessControlType.Deny);
+        var acl = locked.GetAccessControl();
+        acl.AddAccessRule(deny);
+        locked.SetAccessControl(acl);
+        try
+        {
+            var found = Find("org/model-GGUF:FP16");
+
+            Assert.NotNull(found);
+            Assert.Equal(model, found!.PrimaryFilePath);
+            Assert.Equal(40, found.TotalSizeBytes);
+        }
+        finally
+        {
+            acl.RemoveAccessRule(deny);
+            locked.SetAccessControl(acl);   // so the temp folder can be cleaned up
+        }
+    }
+
+    [Fact]
+    public void ADirectoryLoopInTheSnapshotDoesNotSpiralTheWalk()
+    {
+        // snapshot/loop -> snapshot: following it would never end.
+        var model = HubFile("org/model-GGUF", "sha", Path.Combine("fp16", "model-FP16.gguf"), size: 40);
+        var snapshot = Path.GetDirectoryName(Path.GetDirectoryName(model))!;
+        if (!TryCreateJunction(Path.Combine(snapshot, "loop"), snapshot)) return;   // no junction support here
+
+        var found = Find("org/model-GGUF:FP16");
+
+        Assert.NotNull(found);
+        Assert.Equal(model, found!.PrimaryFilePath);
+        Assert.Equal(40, found.TotalSizeBytes);
+    }
+
+    [Fact]
+    public void ASymlinkedModelFileInASubfolderIsFound()
+    {
+        // The hub cache stores snapshot files as symlinks into blobs/.
+        var blob = Path.Combine(_root, "blob-1");
+        File.WriteAllBytes(blob, new byte[300]);
+        var dir = Path.Combine(_root, "models--org--model-GGUF", "snapshots", "sha", "fp16");
+        Directory.CreateDirectory(dir);
+        var link = Path.Combine(dir, "model-FP16.gguf");
+        try { File.CreateSymbolicLink(link, blob); }
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }   // no symlink right here
+
+        var found = Find("org/model-GGUF:FP16");
+
+        Assert.NotNull(found);
+        Assert.Equal(link, found!.PrimaryFilePath);
+        Assert.Equal(300, found.TotalSizeBytes);   // the size of the blob, not of the link
+    }
+
+    private static bool TryCreateJunction(string link, string target)
+    {
+        try
+        {
+            using var mklink = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
+            {
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
+            mklink.StandardOutput.ReadToEnd();
+            mklink.StandardError.ReadToEnd();
+            mklink.WaitForExit();
+            return mklink.ExitCode == 0 && Directory.Exists(link);
+        }
+        catch { return false; }
     }
 
     [Fact]
