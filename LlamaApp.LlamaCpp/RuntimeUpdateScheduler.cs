@@ -20,7 +20,10 @@ namespace LlamaApp.Llama;
 /// <see cref="AppData.Root"/> (<c>.runtime-update-check</c>, UTC ISO 8601);
 /// at startup the check runs when the stamp is a week old or older, and an
 /// hourly <see cref="PeriodicTimer"/> loop keeps watching for the week
-/// elapsing during long sessions.</para>
+/// elapsing during long sessions. A manual check deferred by a busy server
+/// additionally records a pending install (see <see cref="LastCheckStore"/>)
+/// which the startup pass honors before the server launches — making the
+/// "installs at the next launch" promise true.</para>
 ///
 /// <para><b>When installing is safe.</b> <c>install.ps1</c> overwrites
 /// <c>llama.exe</c>, which Windows locks while the server runs — so an install
@@ -136,6 +139,16 @@ public sealed class RuntimeUpdateScheduler
             // failure is logged and the ensure still runs.
             try
             {
+                // Honor a deferred manual "Check for updates" first: the
+                // Settings card promises "it installs at the next launch",
+                // and this is the one point the binary is guaranteed idle
+                // (the server is Stopped — IsServerSafe(Stopped) — and
+                // ensureServer() has not launched anything yet). force
+                // bypasses the weekly gate; a transient failure keeps the
+                // marker so the next launch retries. Any exception falls
+                // through to the ensure below — the server must come up.
+                if (_store.IsPendingInstall())
+                    await RunCheckAsync(force: true, fetchBudget: StartupCheckBudget);
                 await CheckDueAsync(bounded: true);
             }
             catch (Exception ex)
@@ -182,6 +195,13 @@ public sealed class RuntimeUpdateScheduler
     /// (not managed, unparsable, up to date, install attempted) marks the
     /// weekly check done; transient failures (fetch) and deferrals (server
     /// busy) leave the stamp so the next tick retries.
+    ///
+    /// <para>Pending-install rules (the "installs at the next launch"
+    /// promise a manual check makes when the server is busy): a manual check
+    /// that defers records a pending install; every terminal outcome clears
+    /// it; transient outcomes (fetch failure, scheduled deferral) leave it
+    /// untouched so the intent survives across launches until
+    /// <see cref="StartAsync"/> honors it.</para>
     /// </summary>
     private async Task<CheckOutcome> RunCheckAsync(bool force, TimeSpan? fetchBudget)
     {
@@ -205,6 +225,9 @@ public sealed class RuntimeUpdateScheduler
             {
                 Log.Info($"runtime update skipped: installation is {manager.CurrentOrigin}, not app-managed");
                 _store.Save(DateTimeOffset.UtcNow);
+                // Terminal: an install will never run here — a pending
+                // intent must not outlive it.
+                _store.ClearPendingInstall();
                 return CheckOutcome.SkippedNotManaged;
             }
 
@@ -213,6 +236,12 @@ public sealed class RuntimeUpdateScheduler
             // start, which runs before the server launches).
             if (!IsServerSafe(manager.ServerStatus) || manager.State == LlamaManager.InstallState.Installing)
             {
+                // A manual check's deferral is a promise the UI makes ("it
+                // installs at the next launch") — record it FIRST so the
+                // next launch's startup pass honors it even though the
+                // weekly check isn't due. Scheduled defers need no marker:
+                // the hourly tick keeps retrying on its own cadence.
+                if (force) _store.SetPendingInstall();
                 Log.Debug("runtime update deferred: llama server is not idle");
                 return CheckOutcome.DeferredServerBusy;
             }
@@ -233,7 +262,8 @@ public sealed class RuntimeUpdateScheduler
             finally { boundedCts?.Dispose(); }
 
             // Transient failure (network, GitHub, unparsable tag) — the next
-            // tick retries, so this week's check stays "due".
+            // tick retries, so this week's check stays "due", and any pending
+            // install intent stays pending for the next launch.
             if (latest is null)
             {
                 Log.Warn("runtime update check failed: could not determine the latest llama.cpp release");
@@ -247,6 +277,9 @@ public sealed class RuntimeUpdateScheduler
                 // hourly won't change the answer, so stamp the check as done.
                 Log.Warn($"runtime update skipped: installed version '{manager.Version}' has no recognizable build number");
                 _store.Save(DateTimeOffset.UtcNow);
+                // Terminal: retrying won't change the answer — a pending
+                // intent goes with it.
+                _store.ClearPendingInstall();
                 return CheckOutcome.SkippedUnparsableVersion;
             }
 
@@ -254,6 +287,9 @@ public sealed class RuntimeUpdateScheduler
             {
                 Log.Info($"llama.cpp runtime is up to date (installed b{installed}, latest b{latest})");
                 _store.Save(DateTimeOffset.UtcNow);
+                // Terminal: there is nothing left to install — a pending
+                // intent (e.g. the update landed in the meantime) is served.
+                _store.ClearPendingInstall();
                 return CheckOutcome.UpToDate;
             }
 
@@ -261,6 +297,9 @@ public sealed class RuntimeUpdateScheduler
             // between (e.g. a sibling tool or a state change during the call).
             if (!IsServerSafe(manager.ServerStatus) || manager.State == LlamaManager.InstallState.Installing)
             {
+                // Same promise as the pre-fetch deferral — record the manual
+                // check's pending install intent first (see above).
+                if (force) _store.SetPendingInstall();
                 Log.Debug("runtime update deferred: llama server became busy during the check");
                 return CheckOutcome.DeferredServerBusy;
             }
@@ -268,16 +307,21 @@ public sealed class RuntimeUpdateScheduler
             Log.Info($"llama.cpp runtime update available: installed b{installed}, latest b{latest} — installing");
             try
             {
-                // Unattended: require a pinned script hash. While
-                // InstallScriptIntegrity.PinnedSha256 is null the install is
-                // refused (logged by InstallAsync) rather than executing an
-                // unverified remote script on a weekly timer.
+                // Unattended: require the pinned script hash
+                // (InstallScriptIntegrity.PinnedSha256) — a mismatch, or a
+                // build without a pin, refuses the install (logged by
+                // InstallAsync) rather than executing an unverified remote
+                // script on a weekly timer.
                 var installedOk = await manager.InstallAsync(
                     CancellationToken.None, allowUnpinnedInstall: false);
                 // Belt against phantom updates: a "successful" install that
                 // delivers the very same build is not an update — never toast
                 // a version that never appears.
                 var outcome = ClassifyInstallOutcome(installedOk, installed, manager.Version);
+                // Whatever the verdict, the attempt is terminal: the deferred
+                // intent is served (installed / confirmed up to date) or the
+                // failure is logged and the weekly cadence owns any retry.
+                _store.ClearPendingInstall();
                 if (outcome == CheckOutcome.Installed)
                     RuntimeUpdated?.Invoke(latest.Value);
                 else if (outcome == CheckOutcome.UpToDate)
@@ -510,13 +554,31 @@ public sealed class RuntimeUpdateScheduler
 /// cadence survives app restarts. Best-effort in both directions: a missing
 /// or unreadable file means "never checked", a failed write is logged and
 /// skipped — the worst case is a check that runs more often than weekly.
+///
+/// <para>Also owns the sibling <c>.runtime-update-pending</c> marker: a
+/// manual check deferred by a busy server records its "installs at the next
+/// launch" promise there, and <see cref="RuntimeUpdateScheduler.StartAsync"/>
+/// honors it before the server comes up. Same best-effort rules.</para>
 /// </summary>
 public sealed class LastCheckStore
 {
+    /// <summary>Sibling of the check stamp: exists ⇔ an install was deferred
+    /// and should run at the next launch.</summary>
+    private const string PendingMarkerFileName = ".runtime-update-pending";
+
     private readonly string _path;
+    private readonly string _pendingPath;
 
     public LastCheckStore(string? path = null)
-        => _path = path ?? Path.Combine(AppData.Root, ".runtime-update-check");
+    {
+        _path = path ?? Path.Combine(AppData.Root, ".runtime-update-check");
+        // Derived from the stamp's own directory so the two files are always
+        // siblings — a test that passes a temp stamp path gets an isolated
+        // pending marker with it.
+        var dir = Path.GetDirectoryName(_path);
+        _pendingPath = Path.Combine(
+            string.IsNullOrEmpty(dir) ? "." : dir, PendingMarkerFileName);
+    }
 
     /// <summary>The last completed check, or null when never / unreadable.</summary>
     public DateTimeOffset? Load()
@@ -548,6 +610,50 @@ public sealed class LastCheckStore
         catch (Exception ex)
         {
             Log.Warn(ex, "could not persist the runtime update check stamp");
+        }
+    }
+
+    /// <summary>True when a deferred install is waiting for the next launch.
+    /// A missing marker (the normal case) means nothing is pending.</summary>
+    public bool IsPendingInstall()
+    {
+        try
+        {
+            return File.Exists(_pendingPath);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "could not read the runtime update pending-install marker");
+            return false;
+        }
+    }
+
+    /// <summary>Records that an install was deferred and should run at the
+    /// next launch. Best-effort.</summary>
+    public void SetPendingInstall()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(_pendingPath)!);
+            File.WriteAllText(_pendingPath, DateTimeOffset.UtcNow.ToUniversalTime().ToString("o"));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "could not persist the runtime update pending-install marker");
+        }
+    }
+
+    /// <summary>Marks a pending install as handled (or moot — e.g. the check
+    /// found nothing left to install). Best-effort.</summary>
+    public void ClearPendingInstall()
+    {
+        try
+        {
+            File.Delete(_pendingPath);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "could not clear the runtime update pending-install marker");
         }
     }
 }

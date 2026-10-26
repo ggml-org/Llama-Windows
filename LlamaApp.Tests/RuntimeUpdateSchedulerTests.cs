@@ -186,6 +186,89 @@ public class RuntimeUpdateSchedulerTests
         Assert.Null(store.Load());
     }
 
+    // ---- LastCheckStore pending-install marker: a deferred manual check's
+    // "it installs at the next launch" promise survives restarts ----
+
+    [Fact]
+    public void Store_PendingMarker_SetLoadClear_RoundTrip()
+    {
+        var path = Path.Combine(TempDir(), "stamp");
+        var store = new LastCheckStore(path);
+
+        Assert.False(store.IsPendingInstall()); // nothing deferred
+
+        store.SetPendingInstall();
+        Assert.True(store.IsPendingInstall());
+        // Persisted, not in-memory: a fresh store (the next app launch) sees
+        // the pending intent.
+        Assert.True(new LastCheckStore(path).IsPendingInstall());
+
+        store.ClearPendingInstall();
+        Assert.False(store.IsPendingInstall());
+        Assert.False(new LastCheckStore(path).IsPendingInstall());
+    }
+
+    [Fact]
+    public void Store_PendingMarker_Is_Isolated_Per_Stamp_Path()
+    {
+        // The marker is a sibling of the stamp file, so stores with different
+        // stamp paths never share pending state.
+        var store = new LastCheckStore(Path.Combine(TempDir(), "stamp"));
+        store.SetPendingInstall();
+
+        Assert.False(new LastCheckStore(Path.Combine(TempDir(), "stamp")).IsPendingInstall());
+    }
+
+    // ---- CheckNowAsync: a busy binary defers — and a manual check keeps
+    // its "installs at the next launch" promise across restarts ----
+    //
+    // RunCheckAsync records the pending intent at BOTH DeferredServerBusy
+    // return sites when the check is manual (force) — this exercises the
+    // pre-fetch site; the post-fetch site runs the same two lines. StartAsync
+    // honors the marker on the next launch, before ensureServer(), while the
+    // server is still Stopped — that honor step is the other half of the
+    // promise (kept code-reviewed; driving StartAsync end-to-end would need
+    // seams for its fire-and-forget timer loop).
+
+    [Fact]
+    public async Task CheckNowAsync_WhenTheServerIsRunning_DefersAndLeavesAPendingInstall()
+    {
+        var path = Path.Combine(TempDir(), "stamp");
+        var store = new LastCheckStore(path);
+        var scheduler = new RuntimeUpdateScheduler(CreateBusyManager(), store);
+
+        var outcome = await scheduler.CheckNowAsync();
+
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.DeferredServerBusy, outcome);
+        Assert.True(store.IsPendingInstall());
+        // A fresh store — i.e. the next launch — sees the pending intent.
+        Assert.True(new LastCheckStore(path).IsPendingInstall());
+    }
+
+    /// <summary>
+    /// A <see cref="LlamaManager"/> that reads as "app-managed install, llama
+    /// server running" — the situation the Settings "Check for updates"
+    /// button meets. LlamaManager is a singleton whose constructor spins up a
+    /// background status supervisor (which would promptly re-derive any faked
+    /// status over HTTP), so the test builds an uninitialized instance and
+    /// writes the observable state through the property setters — no test
+    /// seam in production code, and the deferred path touches nothing the
+    /// constructor would have set up.
+    /// </summary>
+    private static LlamaManager CreateBusyManager()
+    {
+        var manager = (LlamaManager)System.Runtime.CompilerServices.RuntimeHelpers
+            .GetUninitializedObject(typeof(LlamaManager));
+        SetStateProperty(manager, nameof(LlamaManager.CurrentOrigin), LlamaManager.Origin.Managed);
+        SetStateProperty(manager, nameof(LlamaManager.ServerStatus), LlamaManager.ServerState.Running);
+        return manager;
+    }
+
+    private static void SetStateProperty(LlamaManager manager, string name, object value)
+        // The state properties have private setters — reflection invokes
+        // those just fine.
+        => typeof(LlamaManager).GetProperty(name)!.SetValue(manager, value);
+
     private static string TempDir()
     {
         var dir = Path.Combine(Path.GetTempPath(), "llama-scheduler-tests", Guid.NewGuid().ToString("N"));
