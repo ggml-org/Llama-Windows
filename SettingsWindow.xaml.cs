@@ -328,7 +328,7 @@ namespace LlamaApp
             CheckRuntimeUpdateButton.IsEnabled = false;
             CheckRuntimeUpdateRing.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
             CheckRuntimeUpdateRing.IsActive = true;
-            CheckRuntimeUpdateResultText.Text = "Checking GitHub for a newer llama.cpp release…";
+            CheckRuntimeUpdateResultText.Text = "Checking for a newer llama.cpp runtime…";
             try
             {
                 var outcome = await scheduler.CheckNowAsync();

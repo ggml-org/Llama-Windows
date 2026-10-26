@@ -43,6 +43,7 @@ public class RuntimeUpdateSchedulerTests
     [Theory]
     [InlineData("b6726", 6726u)]
     [InlineData(" b6726 ", 6726u)]
+    [InlineData("b11852\r\n", 11852u)]  // the install channel's plain-text latest marker
     [InlineData("b1", 1u)]
     public void ParseReleaseBuild_ParsesPlainBuildTags(string tag, uint expected)
     {
@@ -96,6 +97,43 @@ public class RuntimeUpdateSchedulerTests
     {
         // A line carrying both forms resolves to the explicit "build:" value.
         Assert.Equal(1234u, RuntimeUpdateScheduler.ParseInstalledBuild("b9553 (build: 1234)"));
+    }
+
+    // ---- ClassifyInstallOutcome: an install that changes nothing is not an update ----
+
+    [Fact]
+    public void ClassifyInstallOutcome_FailedInstall_IsAFailure()
+    {
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.InstallFailed,
+            RuntimeUpdateScheduler.ClassifyInstallOutcome(false, 11852u, "version: 11852 (abcdef)"));
+    }
+
+    [Fact]
+    public void ClassifyInstallOutcome_WhenTheBuildChanged_IsAnUpdate()
+    {
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.Installed,
+            RuntimeUpdateScheduler.ClassifyInstallOutcome(true, 11852u, "version: 11860 (abcdef)"));
+    }
+
+    [Fact]
+    public void ClassifyInstallOutcome_WhenTheBuildDidNotChange_IsUpToDate_NotAPhantomUpdate()
+    {
+        // The channel marker can lag the comparison source (or move between
+        // check and install): a "successful" install that delivers the very
+        // same build must never claim a version that never appears — that is
+        // the endless "it updates at the next launch" loop (issue #133
+        // follow-up).
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.UpToDate,
+            RuntimeUpdateScheduler.ClassifyInstallOutcome(true, 11852u, "version: 11852 (abcdef)"));
+    }
+
+    [Fact]
+    public void ClassifyInstallOutcome_UnreadablePostInstallVersion_KeepsTheBenefitOfTheDoubt()
+    {
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.Installed,
+            RuntimeUpdateScheduler.ClassifyInstallOutcome(true, 11852u, null));
+        Assert.Equal(RuntimeUpdateScheduler.CheckOutcome.Installed,
+            RuntimeUpdateScheduler.ClassifyInstallOutcome(true, null, "version: 11860 (abcdef)"));
     }
 
     // ---- IsServerSafe: installs only while the binary is idle ----
