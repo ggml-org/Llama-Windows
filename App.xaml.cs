@@ -12,6 +12,15 @@ namespace LlamaApp
         private Llama.RuntimeUpdateScheduler? _runtimeUpdates;
 
         /// <summary>
+        /// In-flight <c>llama://install</c> downloads by server model id
+        /// (<c>repo:quant</c>), for the install progress toast's Cancel
+        /// button — these downloads have no MainWindow row to own a
+        /// cancellation source until the poller adds one.
+        /// </summary>
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, CancellationTokenSource>
+            InstallDownloads = new();
+
+        /// <summary>
         /// Initializes the singleton application object.  This is the first line of authored code
         /// executed, and as such is the logical equivalent of main() or WinMain().
         /// </summary>
@@ -96,21 +105,40 @@ namespace LlamaApp
                         case Common.HandoffKind.ModelId:
                             Common.InstanceHandoff.WriteModelId(handoff.ModelId!);
                             break;
+                        case Common.HandoffKind.Install:
+                            Common.InstanceHandoff.WriteInstall(handoff.Repo!);
+                            break;
                     }
                     Common.InstanceHandoff.Signal();
 
                     // Redirect the activation to the running instance — the
                     // documented pattern for launch/file activations — EXCEPT
-                    // for shares: RedirectActivationToAsync does not support
-                    // ShareTarget activations (the ShareOperation cannot cross
-                    // processes, which is exactly why the payload travels via
-                    // the handoff above). Redirecting a share anyway leaves the
-                    // OS share machinery with an activation it cannot deliver,
-                    // and in practice this failed fast the second process
-                    // (0xC0000409 from the native share host).
+                    // for shares and protocol (deep-link) activations:
+                    //
+                    // - RedirectActivationToAsync does not support ShareTarget
+                    //   activations (the ShareOperation cannot cross processes,
+                    //   which is exactly why the payload travels via the handoff
+                    //   above). Redirecting a share anyway leaves the OS share
+                    //   machinery with an activation it cannot deliver, and in
+                    //   practice this failed fast the second process
+                    //   (0xC0000409 from the native share host).
+                    // - A redirected PROTOCOL activation is delivered into the
+                    //   running instance over RPC — and that delivery raises a
+                    //   native exception inside the Windows App Runtime's
+                    //   activation-marshalling code which fail-fast KILLS the
+                    //   running instance (0xC0000409 /
+                    //   FAST_FAIL_FATAL_APP_EXIT in ucrtbase — verified from
+                    //   the crash dump: the faulting thread is an RPC/COM
+                    //   thread whose stack is all Microsoft.WindowsAppRuntime
+                    //   frames, with no managed frames to catch it). The deep
+                    //   link's full payload already travels via the handoff
+                    //   file + named event above, so the redirect is redundant
+                    //   for it — and it is the crash vector.
                     var isShareActivation =
                         activatedArgs.Data is Windows.ApplicationModel.Activation.ShareTargetActivatedEventArgs;
-                    if (!isShareActivation)
+                    var isProtocolActivation =
+                        activatedArgs.Kind == Microsoft.Windows.AppLifecycle.ExtendedActivationKind.Protocol;
+                    if (!isShareActivation && !isProtocolActivation)
                         await Task.Run(() => instance.RedirectActivationToAsync(activatedArgs));
                 }
                 catch (Exception ex)
@@ -139,6 +167,7 @@ namespace LlamaApp
             var openModelFile = startupHandoff.Kind == Common.HandoffKind.ModelPath ? startupHandoff.ModelPath : null;
             var sharedPrompt = startupHandoff.Kind == Common.HandoffKind.Text ? startupHandoff.Text : null;
             var openModelId = startupHandoff.Kind == Common.HandoffKind.ModelId ? startupHandoff.ModelId : null;
+            var installRepo = startupHandoff.Kind == Common.HandoffKind.Install ? startupHandoff.Repo : null;
             openModelFile ??= FirstGgufOnCommandLine();
 
             // Create the llama-server manager singleton with the configured
@@ -319,7 +348,9 @@ namespace LlamaApp
                     ? Common.HandoffRequest.ForText(sharedPrompt)
                     : (openModelId is not null
                         ? Common.HandoffRequest.ForModelId(openModelId)
-                        : Common.InstanceHandoff.TryConsume()));
+                        : (installRepo is not null
+                            ? Common.HandoffRequest.ForInstall(installRepo)
+                            : Common.InstanceHandoff.TryConsume())));
             DispatchHandoff(startupRequest);
 
             // Speculative-decoding draft heads (issue #97): watch the server's
@@ -365,6 +396,9 @@ namespace LlamaApp
                     break;
                 case Common.HandoffKind.ModelId:
                     _ = LoadModelByIdAsync(request.ModelId!);
+                    break;
+                case Common.HandoffKind.Install:
+                    _ = InstallRepoByIdAsync(request.Repo!);
                     break;
                 default:
                     _trayIcon?.ShowFlyout();
@@ -440,6 +474,8 @@ namespace LlamaApp
                             return Common.HandoffRequest.ForText(prompt);
                         case Common.DeepLinkKind.LoadModel when link.ModelId is { } modelId:
                             return Common.HandoffRequest.ForModelId(modelId);
+                        case Common.DeepLinkKind.Install when link.Repo is { } repo:
+                            return Common.HandoffRequest.ForInstall(repo);
                         // llama://chat with no prompt behaves like a plain second launch.
                     }
                     return Common.HandoffRequest.None;
@@ -573,6 +609,246 @@ namespace LlamaApp
             {
                 Common.Log.Warn(ex, "deep link model load failed");
             }
+        }
+
+        /// <summary>
+        /// A <c>llama://install?repo=&lt;id&gt;</c> deep link: install a
+        /// Hugging Face repo's model — resolve the repo's quants and their
+        /// sizes, pick one that fits this machine (see
+        /// <see cref="QuantSelection.SelectQuant"/>), and download
+        /// it through the llama server (which fetches shards, mmproj and draft
+        /// sidecars itself) — mirroring the Mac app's <c>llama://install</c>
+        /// flow.
+        ///
+        /// <para>The repo id is remote-controlled (any app or site can open
+        /// one of these links) or user-writable (the handoff file), so it is
+        /// re-validated before it reaches a Hub URL. The download is
+        /// acknowledged immediately with a throttled progress toast carrying a
+        /// Cancel action (the link's only UI while the flyout is hidden); when
+        /// the model lands, the model list poller adds the row — nothing is
+        /// built here — and failures surface as a classified failure toast
+        /// (see <see cref="DownloadFailurePresentation"/>).</para>
+        /// </summary>
+        private async Task InstallRepoByIdAsync(string? repo)
+        {
+            // (a) Validate + normalize: trim, drop outer slashes, then the
+            // same safe-segment rules the link parser applies (defense in
+            // depth — the handoff file is writable outside the app).
+            repo = repo?.Trim().Trim('/') ?? "";
+            if (!Common.DeepLink.IsSafeRepo(repo))
+            {
+                Common.Log.Warn("deep link install: rejected an unsafe repo id");
+                Notifications.Show("Couldn't install model",
+                    "The link's repo id isn't a valid Hugging Face repo.");
+                return;
+            }
+
+            try
+            {
+                // (b) Resolve the repo's downloadable quants and their sizes
+                // (GET /api/models/{repo}?blobs=true). Rejections surface as
+                // typed statuses so a gated repo is never reported as missing.
+                var hub = new HuggingFace.HubClient(Settings.Current.HuggingFaceToken);
+                List<HuggingFace.HubClient.RepoFile> files;
+                try
+                {
+                    files = await hub.ListRepoFileSizesAsync(repo);
+                }
+                catch (HuggingFace.HubSearchException ex) when (ex.Status is 401 or 403)
+                {
+                    Common.Log.Warn($"deep link install: '{repo}' is gated ({ex.Status})");
+                    Notifications.Show($"Couldn't install {repo}",
+                        "The repo is gated — accept its license on Hugging Face (or set an access " +
+                        "token in Settings), then open the link again.");
+                    return;
+                }
+                catch (HuggingFace.HubSearchException ex) when (ex.Status == 404)
+                {
+                    Common.Log.Warn($"deep link install: '{repo}' not found (404)");
+                    Notifications.Show($"Couldn't install {repo}",
+                        "No Hugging Face repo with that name was found.");
+                    return;
+                }
+
+                var builds = QuantSelection.BuildsFor(repo, files);
+                if (builds.Count == 0)
+                {
+                    Common.Log.Warn($"deep link install: '{repo}' has no downloadable GGUF quants");
+                    Notifications.Show($"Couldn't install {repo}",
+                        "The repo doesn't contain downloadable GGUF files.");
+                    return;
+                }
+
+                // (c) Pick the quant: the largest one whose fit is Fit/Might
+                // against this machine's memory budget (free VRAM + the usable
+                // share of RAM), with the selector's conservative fallback
+                // when nothing fits or the sizes are unknown.
+                ulong budget = 0;
+                try
+                {
+                    budget = await Llama.LlamaManager.Shared.ContextMemoryBudgetAsync();
+                }
+                catch (Exception ex)
+                {
+                    Common.Log.Warn(ex, "deep link install: memory budget probe failed; picking blind");
+                }
+                var pick = QuantSelection.SelectQuant(builds, budget);
+                var quant = pick?.Quant ?? QuantSelection.ConservativeQuant;
+                var target = pick ?? new HuggingFace.Repository
+                {
+                    Name = repo,
+                    Quant = quant,
+                    Description = "",
+                    License = "",
+                    Parameters = "",
+                    Size = "",
+                    SizeBytes = 0,
+                    Vision = false,
+                };
+                Common.Log.Info($"deep link install: '{repo}' resolved {builds.Count} quant(s); " +
+                    $"chosen {quant} against a {budget}-byte budget");
+
+                // (d) Download through the server with a throttled progress
+                // toast (the row-driven counterpart lives in
+                // MainWindow.DownloadAndLaunchAsync).
+                await DownloadInstallAsync(target);
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Error(ex, $"deep link install of '{repo}' failed");
+                Notifications.Show($"Couldn't install {repo}",
+                    "Llama couldn't read the repo's file list. Check the connection and try again.");
+            }
+        }
+
+        /// <summary>
+        /// Drives one <c>llama://install</c> download: POSTs the
+        /// <c>repo:quant</c> to the llama server (which resolves shards and
+        /// sidecars itself) and mirrors the MainWindow download flow's
+        /// throttled progress toast — ~1 update/sec with a percent + speed
+        /// status line and a Cancel action — closing it on every terminal
+        /// path. On success nothing else happens here: the file lands in the
+        /// server's cache and the model list poller adds the row on its next
+        /// cycle. On failure the classified
+        /// <see cref="DownloadFailurePresentation"/> toast explains what to do.
+        /// </summary>
+        private async Task DownloadInstallAsync(HuggingFace.Repository target)
+        {
+            var serverId = target.ServerModelId;
+
+            // One download per repo:quant — a re-fired link while the download
+            // is in flight joins the existing toast instead of a second POST.
+            using var cts = new CancellationTokenSource();
+            if (!InstallDownloads.TryAdd(serverId, cts))
+            {
+                Common.Log.Info($"deep link install: {serverId} is already downloading");
+                return;
+            }
+
+            var toastTag = "install:" + serverId;
+            var toastShown = false;
+            try
+            {
+                var cancelToastAction = new ToastAction("Cancel",
+                    ("action", "cancelInstall"), ("id", serverId));
+
+                // Throttle toast updates to ~1/sec — each one is a
+                // notification-platform call — and EMA-smooth the speed
+                // between samples (same shape as DownloadAndLaunchAsync).
+                long lastToastMs = 0, lastSampleMs = 0, lastSampleBytes = 0;
+                double bytesPerSecond = 0;
+                Common.ModelDownloadProgress? failureReport = null;
+                var progress = new Progress<Common.ModelDownloadProgress>(p =>
+                {
+                    if (p.Failed) { failureReport = p; return; } // terminal — classified after the await
+                    if (p.Done || p.TotalBytes <= 0) return;
+
+                    var now = Environment.TickCount64;
+                    if (now - lastToastMs < 1000) return;
+                    lastToastMs = now;
+
+                    if (lastSampleMs != 0 && p.DownloadedBytes > lastSampleBytes)
+                    {
+                        var instantaneous = (p.DownloadedBytes - lastSampleBytes)
+                            * 1000.0 / Math.Max(1, now - lastSampleMs);
+                        bytesPerSecond = DownloadProgressPresentation.SmoothSpeed(bytesPerSecond, instantaneous);
+                    }
+                    lastSampleBytes = p.DownloadedBytes;
+                    lastSampleMs = now;
+
+                    toastShown = true;
+                    Notifications.ShowProgress(toastTag,
+                        "Downloading " + serverId,
+                        InstallToastStatus(p.Fraction, bytesPerSecond),
+                        p.Fraction, cancelToastAction);
+                });
+
+                Common.Log.Info($"deep link install: downloading {serverId}");
+                var ok = await Llama.LlamaManager.Shared.DownloadModelAsync(target, progress, cts.Token);
+                if (ok)
+                {
+                    Common.Log.Info($"deep link install: {serverId} downloaded — " +
+                        "the model list poller adds the row on its next cycle");
+                    return;
+                }
+
+                var failure = DownloadFailurePresentation.Classify(
+                    failureReport?.HttpStatus, failureReport?.Message, failureReport?.ExceptionType);
+                Common.Log.Warn($"deep link install: {serverId} failed — {failure.RawDetail ?? failure.Headline}");
+                Notifications.Show("Download failed",
+                    DownloadFailurePresentation.ToastBody(serverId, failure));
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancel button on the progress toast — the server has been
+                // asked to abort and drops the partial bytes.
+                Common.Log.Info($"deep link install: {serverId} canceled");
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Error(ex, $"deep link install: download of {serverId} failed unexpectedly");
+                var failure = DownloadFailurePresentation.Classify(null, ex.Message, ex.GetType().Name);
+                Notifications.Show("Download failed",
+                    DownloadFailurePresentation.ToastBody(serverId, failure));
+            }
+            finally
+            {
+                // Unregister + close before the `using` disposes so a late
+                // Cancel click can never reach a disposed source.
+                if (toastShown) Notifications.Close(toastTag);
+                InstallDownloads.TryRemove(serverId, out _);
+            }
+        }
+
+        /// <summary>
+        /// Cancels an in-flight <c>llama://install</c> download from its
+        /// progress toast's Cancel button. A stale toast (the download already
+        /// finished and cleaned up) is a no-op.
+        /// </summary>
+        private static void CancelInstallFromToast(string? serverModelId)
+        {
+            try
+            {
+                if (serverModelId is not null && InstallDownloads.TryGetValue(serverModelId, out var cts))
+                    cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The download finished between the lookup and the cancel.
+            }
+        }
+
+        /// <summary>
+        /// The install progress toast's status line — percent + smoothed
+        /// speed, e.g. "42% · 12.3 MB/s" (the same format as the row-driven
+        /// download toast; a stalled stream shows just the percent).
+        /// </summary>
+        private static string InstallToastStatus(double fraction, double bytesPerSecond)
+        {
+            var pct = (int)Math.Round(fraction * 100);
+            return bytesPerSecond > 0
+                ? $"{pct}% · {DownloadProgressPresentation.FormatBytes(bytesPerSecond)}/s"
+                : $"{pct}%";
         }
 
         /// <summary>
@@ -836,6 +1112,9 @@ namespace LlamaApp
                         return;
                     case "cancelDownload":
                         _window?.CancelDownloadFromToast(id);
+                        return;
+                    case "cancelInstall":
+                        CancelInstallFromToast(id);
                         return;
                     case "reloadDraftHead":
                         // A draft head was detected on a loaded model (issue

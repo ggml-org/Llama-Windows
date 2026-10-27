@@ -16,6 +16,7 @@ namespace LlamaApp.HuggingFace;
 [JsonSerializable(typeof(HubClient.HubUserInfoClient.UserInfoDto), TypeInfoPropertyName = "UserInfoDto")]
 [JsonSerializable(typeof(HubClient.UserAvatarDto), TypeInfoPropertyName = "UserAvatarDto")]
 [JsonSerializable(typeof(List<HubClient.RepoTreeEntryDto>), TypeInfoPropertyName = "RepoTreeEntryList")]
+[JsonSerializable(typeof(HubClient.RepoInfoDto), TypeInfoPropertyName = "RepoInfoDto")]
 [JsonSerializable(typeof(HubClient.HubModelDto[]), TypeInfoPropertyName = "HubModelArray")]
 [JsonSerializable(typeof(Catalog.CatalogFamily[]), TypeInfoPropertyName = "CatalogFamilyArray")]
 internal partial class HubJsonContext : JsonSerializerContext

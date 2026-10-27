@@ -96,4 +96,83 @@ public sealed class HubRepoFilesTests
         Assert.Equal(Common.DraftHeadKind.Dflash, kind);
         Assert.Equal("draft-dflash", Common.DraftHeads.SpecType(kind!.Value));
     }
+
+    // ---- ?blobs=true file sizes (the llama://install quant selection) ----
+
+    [Fact]
+    public void ParseRepoFileSizes_ReadsSiblingSizes()
+    {
+        var json = """
+            {
+              "id": "ggml-org/repo",
+              "siblings": [
+                { "rfilename": "model-Q4_K_M.gguf", "size": 123 },
+                { "rfilename": "model-Q8_0.gguf" },
+                { "rfilename": "readme.md", "size": null },
+                { "rfilename": "" }
+              ]
+            }
+            """;
+
+        var files = HubClient.ParseRepoFileSizes(json);
+
+        Assert.Equal(3, files.Count);
+        Assert.Equal(new HubClient.RepoFile("model-Q4_K_M.gguf", 123), files[0]);
+        Assert.Equal(new HubClient.RepoFile("model-Q8_0.gguf", 0), files[1]); // missing size = unknown
+        Assert.Equal(new HubClient.RepoFile("readme.md", 0), files[2]);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not json at all")]
+    [InlineData("[]")]
+    [InlineData("{ \"unexpected\": \"shape\" }")]
+    public void ParseRepoFileSizes_MalformedPayload_YieldsEmptyList(string json)
+    {
+        Assert.Empty(HubClient.ParseRepoFileSizes(json));
+    }
+
+    [Fact]
+    public async Task ListRepoFileSizes_KeepsTheRepoSlashLiteral()
+    {
+        // Same contract as the tree listing: owner/repo stays real path
+        // segments (the Hub 400-rejects owner%2Frepo).
+        HttpRequestMessage? captured = null;
+        using var http = new HttpClient(new CaptureHandler("{ \"siblings\": [] }", r => captured = r));
+        var client = new HubClient(null);
+
+        _ = await client.ListRepoFileSizesAsync(http, "ggml-org/Qwen3.8-27B-GGUF");
+
+        Assert.NotNull(captured);
+        Assert.Equal("https://huggingface.co/api/models/ggml-org/Qwen3.8-27B-GGUF?blobs=true",
+            captured!.RequestUri!.ToString());
+    }
+
+    [Theory]
+    [InlineData(404)]  // no such repo
+    [InlineData(403)]  // gated
+    [InlineData(401)]  // bad token
+    public async Task ListRepoFileSizes_SurfacesRejections_AsTypedStatuses(int status)
+    {
+        // Unlike ListRepoFilesAsync (best-effort), the install flow must tell
+        // "repo not found" apart from "gated" — so the status rides out on a
+        // HubSearchException.
+        using var http = new HttpClient(new StatusHandler(status));
+        var client = new HubClient(null);
+
+        var ex = await Assert.ThrowsAsync<HubSearchException>(
+            () => client.ListRepoFileSizesAsync(http, "org/name"));
+
+        Assert.Equal(status, ex.Status);
+    }
+
+    private sealed class StatusHandler(int status) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(new HttpResponseMessage((System.Net.HttpStatusCode)status)
+            {
+                Content = new StringContent(""),
+            });
+    }
 }
