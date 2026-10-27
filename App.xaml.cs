@@ -21,6 +21,12 @@ namespace LlamaApp
             InstallDownloads = new();
 
         /// <summary>
+        /// At most one deep-link install download at a time — N rapid links
+        /// must not start N parallel multi-GB downloads.
+        /// </summary>
+        private static readonly System.Threading.SemaphoreSlim InstallGate = new(1, 1);
+
+        /// <summary>
         /// Initializes the singleton application object.  This is the first line of authored code
         /// executed, and as such is the logical equivalent of main() or WinMain().
         /// </summary>
@@ -675,7 +681,7 @@ namespace LlamaApp
                 {
                     Common.Log.Warn($"deep link install: '{repo}' has no downloadable GGUF quants");
                     Notifications.Show($"Couldn't install {repo}",
-                        "The repo doesn't contain downloadable GGUF files.");
+                        "The repo doesn't contain GGUF files with a recognizable quant tag.");
                     return;
                 }
 
@@ -693,25 +699,54 @@ namespace LlamaApp
                     Common.Log.Warn(ex, "deep link install: memory budget probe failed; picking blind");
                 }
                 var pick = QuantSelection.SelectQuant(builds, budget);
-                var quant = pick?.Quant ?? QuantSelection.ConservativeQuant;
-                var target = pick ?? new HuggingFace.Repository
+                if (pick is null)
                 {
-                    Name = repo,
-                    Quant = quant,
-                    Description = "",
-                    License = "",
-                    Parameters = "",
-                    Size = "",
-                    SizeBytes = 0,
-                    Vision = false,
-                };
+                    Common.Log.Warn($"deep link install: '{repo}' resolved {builds.Count} quant(s), none fit a {budget}-byte budget");
+                    Notifications.Show($"Couldn't install {repo}",
+                        "None of this repo's quants fit this machine's memory.");
+                    return;
+                }
                 Common.Log.Info($"deep link install: '{repo}' resolved {builds.Count} quant(s); " +
-                    $"chosen {quant} against a {budget}-byte budget");
+                    $"chosen {pick.Quant} against a {budget}-byte budget");
+
+                // Disk-space preflight: a deep link starts a multi-GB download
+                // with no row to block it, so refuse up front when the cache
+                // drive can't hold the selected build (a failed probe never
+                // blocks).
+                if (pick.SizeBytes > 0 &&
+                    !Common.DiskSpace.HasEnoughSpace(
+                        Settings.Current.CacheDirectory, pick.SizeBytes, out var freeBytes))
+                {
+                    Common.Log.Info($"deep link install: '{repo}' blocked — {pick.SizeBytes} bytes needed, {freeBytes} free");
+                    Notifications.Show($"Couldn't install {repo}",
+                        "Not enough disk space for the selected model.");
+                    return;
+                }
+
+                // Cold start: the install may fire while the server is still
+                // coming up. DownloadModelAsync hard-fails on a non-Running
+                // server, so wait (bounded) for it before starting the download.
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+                while (Llama.LlamaManager.Shared.ServerStatus != Llama.LlamaManager.ServerState.Running)
+                {
+                    if (Llama.LlamaManager.Shared.ServerStatus == Llama.LlamaManager.ServerState.Failed ||
+                        Llama.LlamaManager.Shared.State == Llama.LlamaManager.InstallState.Failed ||
+                        DateTime.UtcNow >= deadline)
+                        break;
+                    await Task.Delay(500);
+                }
+                if (Llama.LlamaManager.Shared.ServerStatus != Llama.LlamaManager.ServerState.Running)
+                {
+                    Common.Log.Warn($"deep link install: '{repo}' — server not running, cannot download");
+                    Notifications.Show($"Couldn't install {repo}",
+                        "The llama server isn't running yet — try again in a moment.");
+                    return;
+                }
 
                 // (d) Download through the server with a throttled progress
                 // toast (the row-driven counterpart lives in
                 // MainWindow.DownloadAndLaunchAsync).
-                await DownloadInstallAsync(target);
+                await DownloadInstallAsync(pick);
             }
             catch (Exception ex)
             {
@@ -734,6 +769,27 @@ namespace LlamaApp
         /// </summary>
         private async Task DownloadInstallAsync(HuggingFace.Repository target)
         {
+            // Global single-flight: at most one deep-link install download at a
+            // time — N rapid links must not start N parallel multi-GB downloads.
+            if (!InstallGate.Wait(0))
+            {
+                Common.Log.Info("deep link install: another install is already in flight");
+                Notifications.Show("Install in progress",
+                    "Another model is already downloading — try again when it finishes.");
+                return;
+            }
+            try
+            {
+                await DownloadInstallCoreAsync(target);
+            }
+            finally
+            {
+                InstallGate.Release();
+            }
+        }
+
+        private async Task DownloadInstallCoreAsync(HuggingFace.Repository target)
+        {
             var serverId = target.ServerModelId;
 
             // One download per repo:quant — a re-fired link while the download
@@ -745,7 +801,7 @@ namespace LlamaApp
                 return;
             }
 
-            var toastTag = "install:" + serverId;
+            var toastTag = ToastTagForInstall(serverId);
             var toastShown = false;
             try
             {
@@ -798,11 +854,20 @@ namespace LlamaApp
                 Notifications.Show("Download failed",
                     DownloadFailurePresentation.ToastBody(serverId, failure));
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
             {
                 // Cancel button on the progress toast — the server has been
                 // asked to abort and drops the partial bytes.
                 Common.Log.Info($"deep link install: {serverId} canceled");
+            }
+            catch (OperationCanceledException ex)
+            {
+                // A timeout (the 30 s POST budget's TaskCanceledException, not
+                // the user's Cancel) — surface it instead of vanishing.
+                Common.Log.Error(ex, $"deep link install: download of {serverId} timed out");
+                var failure = DownloadFailurePresentation.Classify(null, "The download timed out.", "Timeout");
+                Notifications.Show("Download failed",
+                    DownloadFailurePresentation.ToastBody(serverId, failure));
             }
             catch (Exception ex)
             {
@@ -821,6 +886,20 @@ namespace LlamaApp
         }
 
         /// <summary>
+        /// A bounded toast tag for an install download: the platform toast tag
+        /// has a short length limit, and the repo id is remote-controlled (up
+        /// to 200 chars), so truncate plus a stable short hash keeps tags unique
+        /// without overflowing the notification API.
+        /// </summary>
+        private static string ToastTagForInstall(string serverId)
+        {
+            const int head = 40;
+            var prefix = serverId.Length > head ? serverId[..head] : serverId;
+            return "install:" + prefix + "#" +
+                   serverId.GetHashCode(StringComparison.Ordinal).ToString("x");
+        }
+
+        /// <summary>
         /// Cancels an in-flight <c>llama://install</c> download from its
         /// progress toast's Cancel button. A stale toast (the download already
         /// finished and cleaned up) is a no-op.
@@ -832,9 +911,11 @@ namespace LlamaApp
                 if (serverModelId is not null && InstallDownloads.TryGetValue(serverModelId, out var cts))
                     cts.Cancel();
             }
-            catch (ObjectDisposedException)
+            catch (Exception ex)
             {
-                // The download finished between the lookup and the cancel.
+                // The download finished (or is finishing) between the lookup
+                // and the cancel — either way there's nothing left to cancel.
+                Common.Log.Warn(ex, "deep link install: cancel failed (download may already be gone)");
             }
         }
 

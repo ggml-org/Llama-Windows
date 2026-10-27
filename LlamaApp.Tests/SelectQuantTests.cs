@@ -8,10 +8,10 @@ namespace LlamaApp.Tests;
 /// (<see cref="QuantSelection.SelectQuant"/>) and the build derivation it
 /// works on (<see cref="QuantSelection.BuildsFor"/>): the rule is
 /// "prefer the largest quant whose fit is Fit/Might for this machine's
-/// budget", with a documented conservative fallback when nothing fits or the
-/// sizes can't be ranked — so the tests pin exactly those cases
-/// (largest-fitting, none-fits fallback, unknown-sizes default) plus the
-/// sidecar/shard handling that feeds it.
+/// budget", refuse when nothing fits on a KNOWN budget, and fall back to a
+/// conservative known quant when the budget is unknown or the sizes can't be
+/// ranked — so the tests pin largest-fitting, refuse, and the conservative /
+/// deterministic fallbacks, plus the sidecar/shard handling that feeds it.
 /// </summary>
 public sealed class SelectQuantTests
 {
@@ -64,16 +64,14 @@ public sealed class SelectQuantTests
     }
 
     [Fact]
-    public void SelectQuant_SingleNoWayBuild_IsTheFallbackPick()
+    public void SelectQuant_SingleNoWayBuild_Refuses()
     {
-        // One build, comfortably past the optimistic band: the largest-
-        // fitting rule yields nothing, so the none-fits fallback applies —
-        // and the only build the repo offers (the smallest) is the pick.
+        // One build, comfortably past the optimistic band on a KNOWN budget:
+        // the machine can't run it, so the selector refuses instead of
+        // silently downloading it.
         var builds = new List<Repository> { Build("F16", 20_000_000_000) };
 
-        var pick = QuantSelection.SelectQuant(builds, Budget);
-
-        Assert.Equal("F16", pick?.Quant);
+        Assert.Null(QuantSelection.SelectQuant(builds, Budget));
     }
 
     [Fact]
@@ -96,11 +94,11 @@ public sealed class SelectQuantTests
     // ---- none-fits fallback ----
 
     [Fact]
-    public void SelectQuant_WhenNoneFits_FallsBackToTheConservativeKnownQuant()
+    public void SelectQuant_WhenNoneFits_OnAKnownBudget_Refuses()
     {
-        // Budget of 1 GB: every build is NoWay. The fallback is the
-        // conservative known quant (Q4_K_M — llama.cpp's default tag), NOT
-        // the smallest build.
+        // Budget of 1 GB, and every build is NoWay: nothing is acceptable, so
+        // the selector refuses — a remote link must not start a download the
+        // machine can't run.
         var builds = new List<Repository>
         {
             Build("Q2_K", 2_000_000_000),
@@ -108,25 +106,22 @@ public sealed class SelectQuantTests
             Build("Q6_K", 6_000_000_000),
         };
 
-        var pick = QuantSelection.SelectQuant(builds, 1_000_000_000);
-
-        Assert.Equal("Q4_K_M", pick?.Quant);
+        Assert.Null(QuantSelection.SelectQuant(builds, 1_000_000_000));
     }
 
     [Fact]
-    public void SelectQuant_WhenNoneFits_AndNoConservativeQuant_TakesTheSmallest()
+    public void SelectQuant_WhenNoneFits_WithoutConservativeTag_Refuses()
     {
-        // No Q4_K_M/Q4_0/Q8_0 in the repo: the most conservative build the
-        // repo actually offers is the smallest one.
+        // No Q4_K_M/Q4_0 in the repo, everything NoWay: still refuse — the
+        // conservative fallback is for an UNKNOWN budget, not for a known
+        // budget where nothing fits.
         var builds = new List<Repository>
         {
             Build("Q6_K", 6_000_000_000),
             Build("Q5_K_S", 5_000_000_000),
         };
 
-        var pick = QuantSelection.SelectQuant(builds, 1_000_000_000);
-
-        Assert.Equal("Q5_K_S", pick?.Quant);
+        Assert.Null(QuantSelection.SelectQuant(builds, 1_000_000_000));
     }
 
     // ---- unknown-sizes default ----
@@ -149,17 +144,20 @@ public sealed class SelectQuantTests
     }
 
     [Fact]
-    public void SelectQuant_WhenSizesAreUnknown_AndNoConservativeQuant_YieldsNull()
+    public void SelectQuant_WhenSizesAreUnknown_AndNoConservativeTag_PicksDeterministically()
     {
-        // Nothing to rank and no conservative tag: null tells the caller to
-        // request the conservative quant (repo:Q4_K_M) directly.
+        // Nothing to rank and no conservative tag: the selector still names a
+        // build deterministically instead of returning null (the caller must
+        // not request repo:Q4_K_M blindly when the repo doesn't ship it).
         var builds = new List<Repository>
         {
             Build("F16", 0),
             Build("Q8_0", 0),
         };
 
-        Assert.Null(QuantSelection.SelectQuant(builds, Budget));
+        var pick = QuantSelection.SelectQuant(builds, Budget);
+
+        Assert.Equal("F16", pick?.Quant);
     }
 
     [Fact]
@@ -183,6 +181,23 @@ public sealed class SelectQuantTests
     {
         Assert.Null(QuantSelection.SelectQuant([], Budget));
         Assert.Null(QuantSelection.SelectQuant([], 0));
+    }
+
+    [Fact]
+    public void SelectQuant_OnAnUnknownBudget_NeverPicksTheLargest()
+    {
+        // A failed probe (budget 0) must not flip everything to Fit and select
+        // the biggest build (F16/F32): it goes conservative instead. The
+        // no-devices/no-RAM signal (ulong.MaxValue) is the same case.
+        var builds = new List<Repository>
+        {
+            Build("Q8_0", 12_000_000_000),
+            Build("Q4_K_M", 5_000_000_000),
+            Build("Q4_0", 3_000_000_000),
+        };
+
+        Assert.Equal("Q4_K_M", QuantSelection.SelectQuant(builds, 0)?.Quant);
+        Assert.Equal("Q4_K_M", QuantSelection.SelectQuant(builds, ulong.MaxValue)?.Quant);
     }
 
     // ---- BuildsFor: files → builds ----

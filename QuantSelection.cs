@@ -9,19 +9,17 @@ namespace LlamaApp;
 /// chooses which quant to request — no HTTP, no XAML, no hardware probes, so
 /// the choice is fully unit-testable (the caller supplies the budget).
 ///
-/// <para><b>The selection rule</b> (<see cref="SelectQuant"/>): each build's
-/// fit is classified with <see cref="HardwareFitHeuristic"/> against the
-/// memory budget (free VRAM + the usable share of RAM, as everywhere else),
-/// and among the builds whose fit is <b>Fit or Might</b> the <b>largest</b>
-/// one wins — the highest-fidelity quant this machine can plausibly run
-/// (Might is the honest "it may run" band; NoWay is never picked). When
-/// nothing fits, or the sizes are unknown and nothing can be ranked, the
-/// pick falls back to a <b>conservative known quant</b> —
-/// <see cref="ConservativeQuant"/> (Q4_K_M, llama.cpp's default download tag)
-/// when the repo ships it, else Q4_0 (the Mac app's fallback pair) — and only
-/// if the repo ships neither (and no size is measurable) does the selector
-/// return null, for the caller to request <see cref="ConservativeQuant"/>
-/// blindly.</para>
+/// <para><b>The selection rule</b> (<see cref="SelectQuant"/>): on a KNOWN
+/// memory budget, each build's fit is classified with
+/// <see cref="HardwareFitHeuristic"/> and the <b>largest</b> Fit-or-Might
+/// build wins — the highest-fidelity quant this machine can plausibly run.
+/// If NOTHING fits on a known budget, the selector returns null so the caller
+/// refuses rather than downloading a build the machine can't run. On an
+/// UNKNOWN budget (probe failed/unavailable) or when the sizes can't be
+/// ranked, it falls back to a <b>conservative known quant</b> — the
+/// <see cref="ConservativeLadder"/> tag the repo ships, else the smallest
+/// measurable build, else the deterministic first nameable build (never null
+/// for a non-empty list — the caller never requests a quant blindly).</para>
 ///
 /// <para>Pure and static so it stays unit-testable, mirroring
 /// <see cref="HardwareFitHeuristic"/>.</para>
@@ -48,48 +46,45 @@ internal static class QuantSelection
 
     /// <summary>
     /// Chooses the quant to install from a repo's <paramref name="builds"/>
-    /// (one per quant — see <see cref="BuildsFor"/>) against a memory
-    /// <paramref name="budgetBytes"/> (free VRAM + the usable share of RAM;
-    /// 0 when the hardware probe failed).
-    ///
-    /// <para>Rule, in order:</para>
-    /// <list type="number">
-    /// <item>Fit per build = <see cref="HardwareFitHeuristic.Classify(ulong, ulong)"/>
-    /// of its size against the budget. Fit and Might are acceptable (an
-    /// unknown size or an unknown budget lands on Might — the heuristic's
-    /// fail-open convention); NoWay is excluded.</item>
-    /// <item><b>Largest-fitting:</b> among the acceptable builds with a
-    /// known size, the largest one is picked (highest fidelity that still
-    /// plausibly runs; ties broken by quant tag then name for determinism).
-    /// Unknown-size builds rank below every measurable one.</item>
-    /// <item><b>None-fits fallback / unknown-sizes default:</b> when no
-    /// acceptable build is measurable (nothing fits, or the sizes are
-    /// unknown), fall back to a conservative known quant — the first
-    /// <see cref="ConservativeLadder"/> tag the pool offers (the pool is the
-    /// acceptable builds when there are any, else all builds), else the
-    /// smallest measurable build.</item>
-    /// <item>Null only when there is nothing to name: an empty list, or no
-    /// ladder tag and no measurable build at all — the caller then requests
-    /// <c>repo:</c><see cref="ConservativeQuant"/>.</item>
-    /// </list>
+    /// against a memory <paramref name="budgetBytes"/>. Returns null only when
+    /// there is nothing to install: an empty list, or a KNOWN budget where
+    /// every build is NoWay (the caller then refuses). Any non-null result is
+    /// a concrete build the caller can download without inventing a quant.
     /// </summary>
     internal static Repository? SelectQuant(IReadOnlyList<Repository> builds, ulong budgetBytes)
     {
         if (builds.Count == 0) return null;
 
+        // An unknown budget (0 = probe failed, ulong.MaxValue = no devices and
+        // no RAM number) carries no fit signal: the largest pick would be pure
+        // size (F32) on a measurement error, so go conservative instead.
+        if (budgetBytes == 0 || budgetBytes == ulong.MaxValue)
+            return ConservativePick(builds);
+
         var acceptable = builds
             .Where(b => HardwareFitHeuristic.Classify(b.SizeBytes, budgetBytes) != HardwareFitLevel.NoWay)
             .ToList();
+        if (acceptable.Count == 0)
+            return null; // known budget, nothing fits — the caller must refuse
 
         // Largest-fitting: the largest acceptable build whose size we know.
         var measurable = acceptable.Where(b => b.SizeBytes > 0).ToList();
         if (measurable.Count > 0)
             return BySize(measurable, largest: true);
 
-        // Nothing measurable passed the fit test — fall back to the
-        // conservative known quant (a well-known safe choice), then to the
-        // smallest measurable build, then to null.
-        var pool = acceptable.Count > 0 ? acceptable : builds;
+        // Acceptable, but no size to rank by — conservative default.
+        return ConservativePick(acceptable);
+    }
+
+    /// <summary>
+    /// Conservative fallback for a non-empty pool: the first well-known ladder
+    /// tag the pool ships (<see cref="ConservativeLadder"/>), else the smallest
+    /// measurable build, else the deterministic first nameable build. Never
+    /// null for a non-empty pool — the caller must not request
+    /// <c>repo:Q4_K_M</c> blindly when the repo doesn't ship it.
+    /// </summary>
+    private static Repository ConservativePick(IReadOnlyList<Repository> pool)
+    {
         foreach (var tag in ConservativeLadder)
         {
             var tagged = pool
@@ -100,7 +95,13 @@ internal static class QuantSelection
         }
 
         var known = pool.Where(b => b.SizeBytes > 0).ToList();
-        return known.Count > 0 ? BySize(known, largest: false) : null;
+        if (known.Count > 0)
+            return BySize(known, largest: false);
+
+        return pool
+            .OrderBy(b => b.Quant, StringComparer.Ordinal)
+            .ThenBy(b => b.Name, StringComparer.Ordinal)
+            .First();
     }
 
     /// <summary>
