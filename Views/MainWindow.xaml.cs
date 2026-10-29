@@ -116,9 +116,12 @@ namespace LlamaApp.Views
         /// both sections: the browse section lists the families directly, the
         /// installed section uses the flattened form to enrich server-
         /// reported models (display name, params, size, brand logo). Resolved
-        /// before the per-section loaders run.
+        /// before the per-section loaders run. Starts as a completed EMPTY
+        /// task: the real fetch is deferred to the first flyout show (see
+        /// <see cref="EnsureStartupWork"/>), and a completed task keeps any
+        /// stray pre-show awaiter fail-soft instead of null-reference.
         /// </summary>
-        private Task<List<ModelFamily>> _familiesTask = null!;
+        private Task<List<ModelFamily>> _familiesTask = Task.FromResult(new List<ModelFamily>());
 
         // <summary>
         // The catalog reshaped into a bare-repo-id → <see cref="Repository"/>
@@ -129,8 +132,10 @@ namespace LlamaApp.Views
         // once no matter how many callers race it or how often the 1s poller
         // fires. Previously <see cref="GetCatalogByRepoAsync"/> re-projected the
         // catalog on every call, allocating a fresh dictionary each second.
+        // Completed-empty until the first flyout show, like _familiesTask.
         // </summary>
-        private Task<Dictionary<string, Repository>> _catalogByRepoTask = null!;
+        private Task<Dictionary<string, Repository>> _catalogByRepoTask =
+            Task.FromResult(new Dictionary<string, Repository>(StringComparer.OrdinalIgnoreCase));
 
         // Re-entry guard for LoadLocalModelsAsync: 0 idle, 1 running.
         // StateChanged can re-trigger a load while an earlier invocation is
@@ -238,13 +243,14 @@ namespace LlamaApp.Views
             // per-Add rebuild was O(N² + N×F) Items mutations per burst.
             LocalModels.CollectionChanged += (_, _) => ScheduleListRebuild();
 
-            LoadModels();
+            // Cheap local-only init stays here; the expensive startup fan-out
+            // (remote catalog fetch, HF avatar, GitHub update check, GPU device
+            // probe) is deferred to the first flyout show — the app launches at
+            // every login as a tray icon, and none of that work is needed while
+            // the flyout is never opened (see EnsureStartupWork).
             LoadVersionInfo();
             UpdateServerStatusUI();
-            _ = UpdateGpuIndicatorAsync();
             UpdateEmptyState();
-            _ = LoadAvatarAsync();
-            _ = CheckForAppUpdateAsync();
 
             // Refresh the footer's llama.cpp version as the binary is
             // detected/installed. LlamaManager.EnsureLlamaOrDownloadAsync runs
@@ -263,6 +269,33 @@ namespace LlamaApp.Views
         }
 
         // ---- Data ----
+
+        // True once the deferred startup work has run (first flyout show).
+        // Gates the poller/state-change handlers below so they don't start
+        // the expensive work (or race the deferred populate) while the flyout
+        // has never been opened.
+        private bool _startupWorkDone;
+
+        /// <summary>
+        /// Runs the flyout's expensive startup work exactly once, on first
+        /// show: the remote catalog fetch + model populate (<see cref="LoadModels"/>),
+        /// the HF avatar fetch, the GitHub update check, and the GPU device
+        /// probe (which can spawn <c>llama.exe --list-devices</c>). The app is
+        /// tray-only and launches at every login — deferring all of this keeps
+        /// a no-show session at zero network/process fan-out. Every path that
+        /// reveals the flyout (tray click/menu, Open With, share handoff,
+        /// toast activation) funnels through <see cref="ShowAsFlyout"/>.
+        /// </summary>
+        private void EnsureStartupWork()
+        {
+            if (_startupWorkDone) return;
+            _startupWorkDone = true;
+
+            LoadModels();
+            _ = LoadAvatarAsync();
+            _ = CheckForAppUpdateAsync();
+            _ = UpdateGpuIndicatorAsync();
+        }
 
         /// <summary>
         /// Populates the model list. The browse section (catalog families)
@@ -2398,7 +2431,10 @@ namespace LlamaApp.Views
             {
                 LoadVersionInfo();
                 UpdateServerStatusUI();
-                _ = UpdateGpuIndicatorAsync();
+                // The GPU probe can spawn llama.exe --list-devices — deferred
+                // until the first flyout show like the ctor's initial call.
+                if (_startupWorkDone)
+                    _ = UpdateGpuIndicatorAsync();
 
                 // A binary just appeared (resolved after startup or freshly
                 // installed): the first fit evaluation may have run without
@@ -2463,7 +2499,8 @@ namespace LlamaApp.Views
                 // before the server was ready (or /models was momentarily empty).
                 // Only triggers while the list is empty, so an in-flight download
                 // row is never clobbered.
-                if (LlamaManager.Shared.ServerStatus == LlamaManager.ServerState.Running &&
+                if (_startupWorkDone &&
+                    LlamaManager.Shared.ServerStatus == LlamaManager.ServerState.Running &&
                     LocalModels.Count == 0)
                 {
                     _ = LoadLocalModelsAsync();
@@ -2499,6 +2536,13 @@ namespace LlamaApp.Views
         /// </summary>
         private async Task ReconcileAsync(IReadOnlyList<LlamaManager.ServerModel> serverModels)
         {
+            // The poller fires as soon as the server is Running — at every
+            // login, before the flyout was ever opened. Row state is invisible
+            // then and the reconcile costs per-row disk probes
+            // (FindModelFilePath), so stay inert until the first show; the
+            // deferred LoadModels() populates from the live snapshot instead.
+            if (!_startupWorkDone) return;
+
             // If the initial populate hasn't run yet, let LoadLocalModelsAsync
             // build the list (and the index) once — reconcile only updates
             // existing rows. Avoid racing the first populate.
@@ -2943,8 +2987,14 @@ namespace LlamaApp.Views
             HideFlyout();
 
             var w = new SettingsWindow();
-            // The token may have changed — re-resolve the header avatar.
-            w.Closed += (_, _) => _ = LoadAvatarAsync();
+            // The token may have changed — re-resolve the header avatar. Skip
+            // when the flyout was never shown (Settings is reachable from the
+            // tray menu): the header isn't visible, and the first show's
+            // EnsureStartupWork resolves the avatar with the latest token.
+            w.Closed += (_, _) =>
+            {
+                if (_startupWorkDone) _ = LoadAvatarAsync();
+            };
             w.Activate();
         }
 
@@ -3530,6 +3580,7 @@ namespace LlamaApp.Views
         /// </summary>
         public void ShowAsFlyout(Point anchor)
         {
+            EnsureStartupWork();
             PositionNear(anchor);
             _lastShownMs = Environment.TickCount64;
             _allowHideOnDeactivate = false; // suppress deactivations during the show sequence
