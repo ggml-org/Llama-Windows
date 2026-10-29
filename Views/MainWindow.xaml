@@ -1274,6 +1274,31 @@
                       VerticalAlignment="Center"
                       Visibility="Collapsed"
                       AutomationProperties.Name="No accelerator detected" />
+            <!-- API-key indicator: a closed lock when the server requires the
+                 app-generated API key (mandatory beyond localhost, opt-in on
+                 loopback — Settings → Llama), an open lock when it doesn't.
+                 Click copies the key to the clipboard (llama.cpp's WebUI
+                 reads its key from a typed dialog) and flashes "Copied!". -->
+            <Button x:Name="ApiKeyLockButton"
+                    Click="ApiKeyLock_Click"
+                    Padding="4"
+                    MinWidth="0"
+                    MinHeight="0"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="Server API key — copy to clipboard">
+                <FontIcon x:Name="ApiKeyLockIcon"
+                          Glyph="&#xE785;"
+                          FontSize="12"
+                          Opacity="0.7" />
+            </Button>
+            <TextBlock x:Name="ApiKeyCopiedText"
+                       Text="Copied!"
+                       FontSize="11"
+                       VerticalAlignment="Center"
+                       Visibility="Collapsed"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             <Button x:Name="ServerRestartButton"
                     Click="ServerRestart_Click"
                     Padding="4"
