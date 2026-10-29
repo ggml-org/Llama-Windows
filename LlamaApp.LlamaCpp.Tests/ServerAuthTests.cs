@@ -25,6 +25,20 @@ public sealed class ServerAuthTests
         Assert.Equal(expected, ServerAuth.RequiresApiKey(address));
     }
 
+    [Theory]
+    // Loopback: only the user's opt-in (the Settings → Llama checkbox) turns the key on.
+    [InlineData(false, "127.0.0.1", false)]
+    [InlineData(true, "127.0.0.1", true)]
+    [InlineData(true, null, true)]
+    // Non-loopback: mandatory regardless of the checkbox.
+    [InlineData(false, "0.0.0.0", true)]
+    [InlineData(false, "192.168.1.42", true)]
+    [InlineData(true, "0.0.0.0", true)]
+    public void IsApiKeyRequired_UnionsUserOptInAndNonLoopbackBind(bool userEnabled, string? address, bool expected)
+    {
+        Assert.Equal(expected, ServerAuth.IsApiKeyRequired(userEnabled, address));
+    }
+
     [Fact]
     public void GenerateApiKey_Is64LowercaseHexChars()
     {
