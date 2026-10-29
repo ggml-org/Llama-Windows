@@ -112,6 +112,9 @@ namespace LlamaApp
             ModelFolderList.ItemsSource = _modelFolders;
             PortBox.Value = s.ServerPort;
             PopulateListenAddressBox();
+            // Set before selecting the listen address: the selection change
+            // fires UpdateApiKeyPanel, which reads this choice.
+            _apiKeyRequiredChoice = s.RequireServerApiKey;
             SelectComboBoxTag(ListenAddressBox, s.ListenAddress, Common.ListenAddresses.Localhost);
             UpdateApiKeyPanel();
             // Select the idle-unload choice matching the saved seconds; an
@@ -165,44 +168,41 @@ namespace LlamaApp
             ListenAddressBox.SelectionChanged += ListenAddressBox_SelectionChanged;
         }
 
+        // The user's unsaved checkbox choice. Tracked separately from
+        // ApiKeyRequiredBox.IsChecked because the box is force-checked while a
+        // non-loopback listen address is selected — that forced state must not
+        // overwrite the user's loopback preference.
+        private bool _apiKeyRequiredChoice;
+
         /// <summary>
-        /// Shows the app-generated server API key when the selected (or saved)
-        /// listen address exposes the server beyond this machine. llama.cpp's
-        /// WebUI reads its key from a typed dialog — there is no URL form — so
-        /// the user must be able to see and copy it; Llama's own client and the
-        /// chat overlay connect with it automatically.
+        /// Reflects the API-key requirement for the selected listen address:
+        /// beyond localhost the key is mandatory (box checked and disabled);
+        /// on loopback it is the user's opt-in (defense in depth against other
+        /// local processes). The key itself is never displayed here — the
+        /// flyout footer's lock glyph mirrors the state and copies the key
+        /// (llama.cpp's WebUI reads its key from a typed dialog, so the user
+        /// pastes it there); Llama's own client and the chat overlay connect
+        /// automatically.
         /// </summary>
         private void UpdateApiKeyPanel()
         {
             var selected = (ListenAddressBox.SelectedItem as ComboBoxItem)?.Tag as string;
-            var needsKey = Common.ServerAuth.RequiresApiKey(selected);
+            var forced = Common.ServerAuth.RequiresApiKey(selected);
 
-            ApiKeyPanel.Visibility = needsKey
-                ? Microsoft.UI.Xaml.Visibility.Visible
-                : Microsoft.UI.Xaml.Visibility.Collapsed;
-            if (!needsKey) return;
-
-            // The key is generated at save/startup; before that the placeholder
-            // says so.
-            var key = Settings.Current.ServerApiKey;
-            ApiKeyBox.Text = string.IsNullOrWhiteSpace(key) ? "" : key;
-            CopyApiKeyButton.IsEnabled = !string.IsNullOrWhiteSpace(key);
+            ApiKeyRequiredBox.IsEnabled = !forced;
+            ApiKeyRequiredBox.IsChecked = forced || _apiKeyRequiredChoice;
+            ApiKeyNoteText.Text = forced
+                ? "Required — the server is reachable from other devices on your network. " +
+                  "Copy the key from the lock icon in the Llama flyout's footer if the WebUI asks for it."
+                : "Optional on localhost — when on, other apps on this PC also need the key. " +
+                  "Copy it from the lock icon in the Llama flyout's footer if the WebUI asks for it.";
         }
 
         private void ListenAddressBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
             => UpdateApiKeyPanel();
 
-        /// <summary>Copies the server API key to the clipboard.</summary>
-        private void CopyApiKey_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
-        {
-            var key = ApiKeyBox.Text;
-            if (string.IsNullOrWhiteSpace(key)) return;
-
-            var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
-            package.SetText(key);
-            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
-            Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
-        }
+        private void ApiKeyRequiredBox_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+            => _apiKeyRequiredChoice = ApiKeyRequiredBox.IsChecked == true;
 
         /// <summary>
         /// Selects the ComboBox item whose <c>Tag</c> matches
@@ -529,8 +529,8 @@ namespace LlamaApp
                     confirmed = await ConfirmAsync(
                         "Expose the llama server?",
                         "Devices on your network will be able to reach the llama server. " +
-                        "Llama protects it with an API key — shown in Settings so you can " +
-                        "copy it if the WebUI asks — but anyone who learns the key " +
+                        "Llama protects it with an API key — copy it from the lock icon " +
+                        "in the Llama flyout's footer if the WebUI asks — but anyone who learns the key " +
                         "can load, run and delete your models. Continue?");
                 }
                 catch (Exception ex)
@@ -544,13 +544,20 @@ namespace LlamaApp
             }
 
             s.ListenAddress = selectedListen;
-            // Ensure an app-generated key exists for a non-loopback bind; it is
-            // handed to the server via the LLAMA_API_KEY environment variable at
-            // the next launch and surfaced in the Listen On card for copy.
-            if (Common.ServerAuth.RequiresApiKey(selectedListen) && string.IsNullOrWhiteSpace(s.ServerApiKey))
+            // The user's loopback opt-in (the forced non-loopback requirement
+            // is derived from the listen address, not stored here).
+            s.RequireServerApiKey = _apiKeyRequiredChoice;
+            // Ensure an app-generated key exists when one is required (forced
+            // beyond localhost, opted-in on loopback); it is handed to the
+            // server via the LLAMA_API_KEY environment variable at the next
+            // launch and copied via the flyout footer's lock glyph. A disabled
+            // requirement keeps the stored key, so re-enabling (or a later
+            // non-loopback bind, or an adopted server) reuses it.
+            if (Common.ServerAuth.IsApiKeyRequired(s.RequireServerApiKey, selectedListen) &&
+                string.IsNullOrWhiteSpace(s.ServerApiKey))
             {
                 s.ServerApiKey = Common.ServerAuth.GenerateApiKey();
-                Common.Log.Info("generated an API key for the non-loopback listen address");
+                Common.Log.Info("generated a server API key");
             }
 
             // The ComboBox items carry the seconds in their Tag. Applied the

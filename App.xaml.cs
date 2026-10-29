@@ -199,11 +199,14 @@ namespace LlamaApp
                 Common.Log.Warn(
                     $"listen address '{Settings.Current.ListenAddress}' is not assigned to this machine; using {resolvedListen.Address}");
 
-            // Non-loopback binds get an app-generated API key so the server
-            // isn't an open control API on the network. Generated once and
-            // persisted, so an adopted server (and a later app start) agree.
+            // A key is required when the bind reaches beyond this machine
+            // (mandatory — the server would otherwise be an open control API
+            // on the network) or when the user opted in via Settings → Llama
+            // (defense in depth on loopback). Generated once and persisted,
+            // so an adopted server (and a later app start) agree.
             string? apiKey = null;
-            if (Common.ServerAuth.RequiresApiKey(resolvedListen.Address))
+            if (Common.ServerAuth.IsApiKeyRequired(
+                    Settings.Current.RequireServerApiKey, resolvedListen.Address))
             {
                 if (string.IsNullOrWhiteSpace(Settings.Current.ServerApiKey))
                 {
