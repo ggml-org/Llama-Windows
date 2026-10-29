@@ -117,6 +117,16 @@ namespace LlamaApp
                     }
                     Common.InstanceHandoff.Signal();
 
+                    // Donate this process's foreground right to the running
+                    // instance: the shell launched US from the user's click,
+                    // so we may set the foreground window — but the running
+                    // instance receives no activation for a protocol/share
+                    // handoff (the redirect below is skipped for them), and
+                    // without a foreground right its SetForegroundWindow is
+                    // denied: the flyout it shows for this request stays
+                    // hidden behind the caller's window.
+                    AllowSetForegroundToRunningInstance();
+
                     // Redirect the activation to the running instance — the
                     // documented pattern for launch/file activations — EXCEPT
                     // for shares and protocol (deep-link) activations:
@@ -411,6 +421,34 @@ namespace LlamaApp
                     break;
             }
         }
+
+        /// <summary>
+        /// Lets the running instance take the foreground (for the flyout it
+        /// shows on this handoff). The shell gave the foreground right to
+        /// THIS short-lived process; hand it to the instance that owns the
+        /// window before exiting. A failure is harmless — the flyout then
+        /// stays unfocused, as before.
+        /// </summary>
+        private static void AllowSetForegroundToRunningInstance()
+        {
+            try
+            {
+                var self = Environment.ProcessId;
+                var instances = Microsoft.Windows.AppLifecycle.AppInstance.GetInstances();
+                var owner = instances.FirstOrDefault(i => i.ProcessId != self && i.Key == "Llama")
+                    ?? instances.FirstOrDefault(i => i.ProcessId != self);
+                if (owner is not null)
+                    AllowSetForegroundWindow(unchecked((int)owner.ProcessId));
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "foreground-right donation to the running instance failed");
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", ExactSpelling = true)]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool AllowSetForegroundWindow(int dwProcessId);
 
         /// <summary>
         /// The app-wide runtime update scheduler (created in OnLaunched) —
