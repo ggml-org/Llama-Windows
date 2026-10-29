@@ -112,6 +112,58 @@ public sealed class InstanceHandoffTests : IDisposable
         Assert.Equal("prompt two", second.Text);
     }
 
+    // ---- Install requests (llama://install deep link) ----
+
+    [Fact]
+    public void WriteInstallThenConsume_RoundTrips_Once()
+    {
+        InstanceHandoff.WriteInstall("unsloth/flint-GGUF", Pending);
+
+        var taken = InstanceHandoff.TryConsume(Pending);
+        Assert.Equal(HandoffKind.Install, taken.Kind);
+        Assert.Equal("unsloth/flint-GGUF", taken.Repo);
+        Assert.Null(taken.ModelPath);
+        Assert.Null(taken.Text);
+        Assert.Null(taken.ModelId);
+
+        // Consumed exactly once.
+        Assert.Equal(HandoffKind.None, InstanceHandoff.TryConsume(Pending).Kind);
+    }
+
+    [Fact]
+    public void InstallMarker_RoundTrips_WithCrlfTolerance()
+    {
+        // The file-format marker is "install\n<repo>" — a hand-edited or
+        // externally-written request may carry CR.
+        var request = InstanceHandoff.Parse("install\r\nunsloth/flint-GGUF\r\n");
+
+        Assert.Equal(HandoffKind.Install, request.Kind);
+        Assert.Equal("unsloth/flint-GGUF", request.Repo);
+    }
+
+    [Theory]
+    [InlineData("install")]
+    [InlineData("install\n")]
+    [InlineData("install\n   ")]
+    public void InstallMarker_WithNoRepo_YieldsNone(string content)
+    {
+        Assert.Equal(HandoffKind.None, InstanceHandoff.Parse(content).Kind);
+    }
+
+    [Fact]
+    public void InstallMarker_WrittenByANewBuild_IsSafeForOldBuilds()
+    {
+        // (Documented compat: an old build sees an unrecognized marker and
+        // the payload is not a .gguf path, so it yields None — never a bogus
+        // model path. The new build reads its own writes correctly.)
+        var request = InstanceHandoff.Parse("install\nunsloth/flint-GGUF");
+        Assert.Equal(HandoffKind.Install, request.Kind);
+
+        // The legacy bare-path format still parses alongside it.
+        var legacy = InstanceHandoff.Parse(@"C:\models\old-format.gguf");
+        Assert.Equal(HandoffKind.ModelPath, legacy.Kind);
+    }
+
     // ---- Parse: format handling ----
 
     [Fact]

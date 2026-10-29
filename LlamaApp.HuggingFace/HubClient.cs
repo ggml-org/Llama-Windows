@@ -299,6 +299,87 @@ public class HubClient(string? token)
         }
     }
 
+    /// <summary>One file in a Hub repo, with its blob size (0 when the Hub
+    /// doesn't report one).</summary>
+    public sealed record RepoFile(string Path, ulong SizeBytes);
+
+    /// <summary>
+    /// Lists ALL of a Hub repo's files (every directory) with their blob
+    /// sizes: <c>GET /api/models/{repo}?blobs=true</c> — the <c>blobs</c>
+    /// flag populates <c>siblings[].size</c>, so a repo's quants can be
+    /// ranked (and fit-checked) without HEAD-ing each file. Feeds the
+    /// <c>llama://install</c> quant selection.
+    ///
+    /// <para>Unlike <see cref="ListRepoFilesAsync"/> (best-effort, empty on
+    /// every failure) this surfaces rejections as
+    /// <see cref="HubSearchException"/> with the numeric status, so callers
+    /// can report a missing repo (404) differently from a gated/private one
+    /// (401/403) — the Mac app's <c>ResolveError</c> split. Transport and
+    /// parse failures follow the <c>SearchModels</c> contract: transport
+    /// exceptions propagate, malformed JSON yields an empty list.</para>
+    /// </summary>
+    public async Task<List<RepoFile>> ListRepoFileSizesAsync(
+        string repoId, CancellationToken cancel = default)
+    {
+        return await ListRepoFileSizesAsync(Http, repoId, cancel);
+    }
+
+    // Split from the public overload so tests can drive the HTTP path with
+    // a mock handler (same pattern as ListRepoFilesAsync). Auth goes
+    // per-request (see SearchModels).
+    internal async Task<List<RepoFile>> ListRepoFileSizesAsync(
+        HttpClient client, string repoId, CancellationToken cancel = default)
+    {
+        if (string.IsNullOrWhiteSpace(repoId)) return [];
+
+        // The repo id's '/' must stay a literal path separator: escaping the
+        // whole id (owner%2Frepo) is rejected by the Hub (HTTP 400, verified)
+        // — each SEGMENT is escaped instead.
+        var segments = repoId.Split('/').Select(Uri.EscapeDataString);
+        var url = $"{HUGGINGFACE_HUB_BASE_URL}/models/{string.Join("/", segments)}?blobs=true";
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        if (!string.IsNullOrWhiteSpace(token))
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var resp = await client.SendAsync(req, cancel);
+        if (!resp.IsSuccessStatusCode) throw new HubSearchException((int)resp.StatusCode);
+        var json = await resp.Content.ReadAsStringAsync(cancel);
+        return ParseRepoFileSizes(json);
+    }
+
+    /// <summary>model-info response DTO — only the sibling file list.</summary>
+    internal sealed class RepoInfoDto
+    {
+        [JsonPropertyName("siblings")] public List<RepoSiblingDto>? Siblings { get; set; }
+    }
+
+    /// <summary>one sibling file — path plus blob size (with <c>?blobs=true</c>).</summary>
+    internal sealed class RepoSiblingDto
+    {
+        [JsonPropertyName("rfilename")] public string? RFilename { get; set; }
+        [JsonPropertyName("size")] public long? Size { get; set; }
+    }
+
+    /// <summary>
+    /// Parses a <c>?blobs=true</c> model-info payload into the repo's files
+    /// with sizes (0 when a sibling carries no size). Malformed JSON yields
+    /// an empty list.
+    /// </summary>
+    internal static List<RepoFile> ParseRepoFileSizes(string json)
+    {
+        try
+        {
+            var info = JsonSerializer.Deserialize(json, HubJsonContext.Default.RepoInfoDto);
+            return info?.Siblings?
+                .Where(s => !string.IsNullOrEmpty(s.RFilename))
+                .Select(s => new RepoFile(s.RFilename!, s.Size is > 0 ? (ulong)s.Size.Value : 0))
+                .ToList() ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
     /// <summary>
     /// Fetches a Hub user's/org's avatar image bytes: GET
     /// <c>/api/users/{name}/avatarUrl</c> resolves the CDN URL, a second

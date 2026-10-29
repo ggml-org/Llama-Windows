@@ -17,16 +17,20 @@ public enum HandoffKind
     /// to load and chat with.</summary>
     ModelId,
 
+    /// <summary>A Hugging Face repo id (from a <c>llama://install?repo=</c>
+    /// deep link) to install — download a fittable quant.</summary>
+    Install,
+
     /// <summary>No payload — a plain second launch, which re-opens the flyout.</summary>
     None,
 }
 
 /// <summary>
 /// A request consumed by the running instance: a model file path, a
-/// server-known model id, or shared text (exactly one non-null field, per
-/// <see cref="HandoffKind"/>).
+/// server-known model id, a repo id to install, or shared text (exactly one
+/// non-null field, per <see cref="HandoffKind"/>).
 /// </summary>
-public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string? Text, string? ModelId)
+public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string? Text, string? ModelId, string? Repo = null)
 {
     public static readonly HandoffRequest None = new(HandoffKind.None, null, null, null);
 
@@ -37,6 +41,8 @@ public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string?
     public static HandoffRequest ForImage(string path) => new(HandoffKind.Image, path, null, null);
 
     public static HandoffRequest ForModelId(string modelId) => new(HandoffKind.ModelId, null, null, modelId);
+
+    public static HandoffRequest ForInstall(string repo) => new(HandoffKind.Install, null, null, null, repo);
 }
 
 /// <summary>
@@ -57,11 +63,14 @@ public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string?
 /// broken redirect had been silently losing.</para>
 ///
 /// <para><b>File format:</b> a kind marker line (<c>model</c> / <c>text</c> /
-/// <c>image</c> / <c>modelid</c>)
-/// followed by the payload — a single path or id line for models, the remainder of
+/// <c>image</c> / <c>modelid</c> / <c>install</c>)
+/// followed by the payload — a single path, id, or repo line for models and
+/// installs, the remainder of
 /// the file for (multi-line) text. A file with no recognized marker is a bare
 /// model path — the pre-share format — so an in-flight handoff from an older
-/// build still reads correctly.</para>
+/// build still reads correctly. An <c>install</c> handoff from a NEW build read
+/// by an OLDER one is equally safe: the marker is unrecognized there and the
+/// payload is not a .gguf path, so the old build treats it as no request.</para>
 /// </summary>
 public static class InstanceHandoff
 {
@@ -91,6 +100,11 @@ public static class InstanceHandoff
     public static void WriteModelId(string modelId, string? pendingPath = null) =>
         Write(HandoffRequest.ForModelId(modelId), pendingPath ?? PendingPath);
 
+    /// <summary>Records a pending install request (a <c>llama://install/</c> deep
+    /// link), replacing any previous.</summary>
+    public static void WriteInstall(string repo, string? pendingPath = null) =>
+        Write(HandoffRequest.ForInstall(repo), pendingPath ?? PendingPath);
+
     /// <summary>Testable core of the Write* methods with an explicit request path.</summary>
     public static void Write(HandoffRequest request, string pendingPath)
     {
@@ -103,6 +117,7 @@ public static class InstanceHandoff
                 HandoffKind.Text => "text\n" + request.Text,
                 HandoffKind.Image => "image\n" + request.ModelPath,
                 HandoffKind.ModelId => "modelid\n" + request.ModelId,
+                HandoffKind.Install => "install\n" + request.Repo,
                 _ => null,
             };
             if (payload is null) return;
@@ -140,7 +155,8 @@ public static class InstanceHandoff
     /// <summary>
     /// Parses the handoff payload: <c>model\n&lt;path&gt;</c>,
     /// <c>text\n&lt;multi-line text&gt;</c>, <c>image\n&lt;path&gt;</c>,
-    /// <c>modelid\n&lt;id&gt;</c>, or a bare model path (the pre-share format).
+    /// <c>modelid\n&lt;id&gt;</c>, <c>install\n&lt;repo&gt;</c>, or a bare model
+    /// path (the pre-share format).
     /// Unrecognized content yields <see cref="HandoffRequest.None"/>.
     /// CRLF line endings are tolerated (the app writes bare LF, but a
     /// hand-edited or externally-written request may carry CR). Pure.
@@ -172,6 +188,11 @@ public static class InstanceHandoff
         if (string.Equals(marker, "modelid", StringComparison.Ordinal))
             return payload.Trim().Length > 0
                 ? HandoffRequest.ForModelId(payload.Trim())
+                : HandoffRequest.None;
+
+        if (string.Equals(marker, "install", StringComparison.Ordinal))
+            return payload.Trim().Length > 0
+                ? HandoffRequest.ForInstall(payload.Trim())
                 : HandoffRequest.None;
 
         // No marker: the original Open With format — a bare model path.

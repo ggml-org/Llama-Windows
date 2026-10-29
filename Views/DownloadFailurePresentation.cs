@@ -71,6 +71,11 @@ namespace LlamaApp.Views
         }
 
         private static string Truncate(string value)
-            => value.Length > RawDetailLimit ? value[..RawDetailLimit] + "…" : value;
+        {
+            // Strip line breaks first — the echo appends raw detail to a
+            // toast body, and a CR/LF could otherwise fake a second line.
+            value = value.Replace('\r', ' ').Replace('\n', ' ');
+            return value.Length > RawDetailLimit ? value[..RawDetailLimit] + "…" : value;
+        }
     }
 }

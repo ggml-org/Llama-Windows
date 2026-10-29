@@ -94,6 +94,68 @@ public sealed class DeepLinkTests
         Assert.Equal(DeepLinkRequest.None, DeepLink.Parse($"llama://model/{id}"));
     }
 
+    // ---- install links ----
+
+    [Theory]
+    [InlineData("llama://install?repo=unsloth/flint-GGUF", "unsloth/flint-GGUF")]
+    [InlineData("llama://install?repo=unsloth%2Fflint-GGUF", "unsloth/flint-GGUF")]     // percent-encoded slash decodes
+    [InlineData("llama://install/?repo=gpt2", "gpt2")]                                   // trailing slash after the host; org-less Hub id
+    [InlineData("llama://INSTALL?repo=Mixed-Case_Repo.1/x", "Mixed-Case_Repo.1/x")]     // host case-insensitive
+    [InlineData("LLAMA://install?repo=org/name", "org/name")]                           // scheme case-insensitive
+    [InlineData("llama://install?repo=first/one&repo=second/two", "first/one")]         // first repo param wins
+    [InlineData("llama://install?repo=org/name&quant=Q4_K_M", "org/name")]              // extra params are forgiven
+    public void InstallLinks_ProduceInstallRequests(string uri, string expectedRepo)
+    {
+        var link = DeepLink.Parse(uri);
+
+        Assert.Equal(DeepLinkKind.Install, link.Kind);
+        Assert.Equal(expectedRepo, link.Repo);
+        Assert.Null(link.Prompt);
+        Assert.Null(link.ModelId);
+    }
+
+    [Theory]
+    [InlineData("llama://install")]                        // no query at all
+    [InlineData("llama://install?repo=")]                  // empty repo
+    [InlineData("llama://install?other=1")]                // no repo parameter
+    [InlineData("llama://install?repo=a/b/c")]             // three segments
+    [InlineData("llama://install?repo=a//b")]              // empty segment
+    [InlineData("llama://install?repo=a/../b")]            // traversal segment
+    [InlineData("llama://install?repo=..")]                // bare traversal
+    [InlineData("llama://install?repo=a%5Cb")]             // backslash
+    [InlineData("llama://install?repo=my%20repo/x")]       // whitespace
+    [InlineData("llama://install?repo=a/b:c")]             // a colon (server-id shaped, not a repo)
+    [InlineData("llama://install?repo=a|b")]               // arbitrary punctuation
+    public void UnsafeOrMissingInstallRepo_IsRejected(string uri)
+    {
+        Assert.Equal(DeepLinkRequest.None, DeepLink.Parse(uri));
+    }
+
+    [Fact]
+    public void OversizedInstallRepo_IsRejected()
+    {
+        var repo = "org/" + new string('a', DeepLink.MaxRepoChars);
+
+        Assert.Equal(DeepLinkRequest.None, DeepLink.Parse($"llama://install?repo={repo}"));
+    }
+
+    [Fact]
+    public void InstallRepo_IsValidated_LikeSafeModelIdSegments()
+    {
+        // The documented safe-segment rules (the ModelFileLocator ones): one
+        // or two segments of [A-Za-z0-9._-], never "."/".." — so an org-less
+        // Hub id is fine, traversal and odd characters are not.
+        Assert.True(DeepLink.IsSafeRepo("gpt2"));
+        Assert.True(DeepLink.IsSafeRepo("unsloth/flint-GGUF"));
+        Assert.True(DeepLink.IsSafeRepo("org/a..b"));              // dots inside a segment are fine
+        Assert.False(DeepLink.IsSafeRepo(null));
+        Assert.False(DeepLink.IsSafeRepo(""));
+        Assert.False(DeepLink.IsSafeRepo("a/../b"));
+        Assert.False(DeepLink.IsSafeRepo("a\\b"));
+        Assert.False(DeepLink.IsSafeRepo("a/b/c"));
+        Assert.False(DeepLink.IsSafeRepo("../x"));
+    }
+
     // ---- rejections ----
 
     [Theory]
