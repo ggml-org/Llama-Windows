@@ -805,6 +805,13 @@ namespace LlamaApp
             var toastShown = false;
             try
             {
+                // Surface the download: a deep link fires with the flyout
+                // hidden, and the progress toast only appears with the first
+                // byte — without this the click feels like a no-op. The
+                // model-list poller turns the download into a row on its
+                // next cycle.
+                _trayIcon?.ShowFlyout();
+
                 var cancelToastAction = new ToastAction("Cancel",
                     ("action", "cancelInstall"), ("id", serverId));
 
