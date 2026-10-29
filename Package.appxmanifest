@@ -9,7 +9,7 @@
   <Identity
     Name="HuggingFaceInc.LlamaApp"
     Publisher="CN=Hugging Face, O=Hugging Face, L=Brooklyn, S=New York, C=US, PostalCode=11201"
-    Version="0.13.0.0" />
+    Version="0.14.0.0" />
 
   <Properties>
     <DisplayName>Llama App</DisplayName>
