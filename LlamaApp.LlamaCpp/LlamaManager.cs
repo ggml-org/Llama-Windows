@@ -856,12 +856,12 @@ public sealed class LlamaManager
     /// (Re)installs the app-managed binary by downloading and executing
     /// <see cref="InstallScriptUrl"/>. Also, the retry entry point.
     /// </summary>
-    public async Task<bool> InstallAsync(CancellationToken cancel = default, bool allowUnpinnedInstall = true)
+    public async Task<bool> InstallAsync(CancellationToken cancel = default)
     {
         State = InstallState.Installing;
         try
         {
-            await DownloadAndRunInstallerAsync(allowUnpinnedInstall, cancel);
+            await DownloadAndRunInstallerAsync(cancel);
             // Exit code 0 = success (DownloadAndRunInstallerAsync throws
             // otherwise): llama is now on PATH. Resolve its absolute path
             // dynamically ("which") instead of assuming a fixed location —
@@ -3471,13 +3471,12 @@ public sealed class LlamaManager
     /// download is pinned to the exact HTTPS URL and bounded in size (see
     /// <see cref="InstallScriptIntegrity"/>); redirects are refused rather
     /// than followed, and the body's SHA-256 is logged so an install is
-    /// auditable after the fact. When <paramref name="allowUnpinned"/> is
-    /// false (the unattended weekly update) the script must also match
-    /// <see cref="InstallScriptIntegrity.PinnedSha256"/> — otherwise it is
-    /// refused rather than executed unverified. Throws on any integrity
-    /// failure, a non-zero exit code, or a download failure.
+    /// auditable after the fact; it is deliberately not pinned to a
+    /// build-time hash — install.ps1 is revised independently of the app, and
+    /// a stale pin blocked runtime upgrades. Throws on any integrity failure,
+    /// a non-zero exit code, or a download failure.
     /// </summary>
-    private static async Task DownloadAndRunInstallerAsync(bool allowUnpinned, CancellationToken cancel)
+    private static async Task DownloadAndRunInstallerAsync(CancellationToken cancel)
     {
         byte[] scriptBytes;
 
@@ -3516,18 +3515,10 @@ public sealed class LlamaManager
         // The script itself never touches the disk — see EncodeCommand.
         Log.Info($"install.ps1 downloaded from {InstallScriptUrl}: {scriptBytes.Length} bytes, sha256={sha256}");
 
-        var hashVerdict = InstallScriptIntegrity.ValidateHash(sha256);
-        if (hashVerdict == InstallScriptVerdict.HashMismatch ||
-            (hashVerdict == InstallScriptVerdict.Unpinned && !allowUnpinned))
-        {
-            throw new IOException(
-                $"Refusing to run install.ps1: {InstallScriptIntegrity.Describe(hashVerdict)}.");
-        }
-
         // Fileless execution: base64(UTF-16LE) of the validated script for
         // PowerShell's -EncodedCommand. Nothing is written to disk — the
-        // body travels from the (hash-logged, optionally hash-pinned)
-        // response through memory into the interpreter. The payload is
+        // body travels from the (hash-logged) response through memory into
+        // the interpreter. The payload is
         // public script content, so its brief visibility on the child's
         // command line (WMI/process listings) leaks nothing; the size
         // guard keeps it inside the CreateProcess command-line limit.
