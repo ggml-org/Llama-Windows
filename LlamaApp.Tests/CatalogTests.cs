@@ -118,7 +118,7 @@ public class CatalogTests
           {
             "name": "Gemma 3",
             "brand": "Google",
-            "description": "Multimodal model",
+            "description": "**Multimodal** model",
             "details": "...",
             "released": "2025-03",
             "license": "Gemma",
@@ -147,6 +147,8 @@ public class CatalogTests
         Assert.Equal("Google", repo.Brand);
         Assert.True(repo.Vision);
         Assert.False(repo.Featured);
+        // The description's markdown bold is stripped.
+        Assert.Equal("Multimodal model", repo.Description);
         // repo:quant is the id form POST /models/load requires.
         Assert.Equal("ggml-org/gemma-3-4b-it-GGUF:Q4_K_M", repo.ServerModelId);
     }
