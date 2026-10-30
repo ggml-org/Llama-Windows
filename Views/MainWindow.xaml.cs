@@ -2243,15 +2243,18 @@ namespace LlamaApp.Views
         // ---- Version footer ----
 
         /// <summary>
-        /// Fills the footer version line: the app's assembly version (no name)
-        /// and the resolved llama.cpp version, separated by " - ". Only the
-        /// version strings are shown, centered and bold white.
+        /// Fills the footer version line, matching the Mac app: the app's
+        /// version and the llama.cpp build tag, e.g.
+        /// "0.14.1 · llama.cpp b11941". Just the app version until the
+        /// binary's build is known.
         /// </summary>
         private void LoadVersionInfo()
         {
-            var appVer = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "";
-            VersionText.Text = LlamaRunner.Version is { } v
-                ? $"{appVer} - {v}"
+            // Three parts: the fourth is always 0 (MSIX requires four) and
+            // only adds noise.
+            var appVer = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "";
+            VersionText.Text = LlamaRunner.Tag is { } tag
+                ? $"{appVer} · llama.cpp {tag}"
                 : appVer;
             DevBuildBadge.Visibility = IsPackaged()
                 ? Microsoft.UI.Xaml.Visibility.Collapsed

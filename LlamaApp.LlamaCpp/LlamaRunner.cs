@@ -17,6 +17,15 @@ public static class LlamaRunner
     public static string? Version => VersionCache;
 
     /// <summary>
+    /// The resolved binary's build tag, e.g. <c>b11941</c> — the short form
+    /// for display (llama.cpp's own release tags use it). <c>null</c> when no
+    /// binary is installed or its <see cref="Version"/> line carries no
+    /// recognizable build number.
+    /// </summary>
+    public static string? Tag =>
+        RuntimeUpdateScheduler.ParseInstalledBuild(VersionCache) is { } build ? $"b{build}" : null;
+
+    /// <summary>
     /// Set by <see cref="LlamaManager"/> whenever it resolves (or fails to
     /// resolve) a binary, so <see cref="Version"/> reflects the current state
     /// without callers needing to subscribe to <see cref="LlamaManager.StateChanged"/>.
