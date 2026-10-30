@@ -302,7 +302,9 @@ namespace LlamaApp
         /// </summary>
         private void UpdateRuntimeUpdateCard()
         {
-            var version = Llama.LlamaManager.Shared.Version;
+            // The build tag ("b11941"), like the footer -- not the CLI's raw
+            // --version line.
+            var version = Llama.LlamaRunner.Tag;
             var scheduler = (App.Current as App)?.RuntimeUpdates;
             var lastCheck = scheduler?.LastCheckUtc;
             RuntimeUpdateDescriptionText.Text =

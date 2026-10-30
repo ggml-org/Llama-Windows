@@ -70,6 +70,8 @@ public class RuntimeUpdateSchedulerTests
     [InlineData("llama-server (llama) b9553 (abcdef)", 9553u)]
     [InlineData("version: 6726 (abcdef)", 6726u)]
     [InlineData("llama.cpp build: 1234", 1234u)]
+    // Since b10398: semantic version first, build number in the parenthetical.
+    [InlineData("version: 0.7.0-dev (build 11941, commit 19ff817fb)", 11941u)]
     public void ParseInstalledBuild_ParsesKnownFormats(string line, uint expected)
     {
         Assert.Equal(expected, RuntimeUpdateScheduler.ParseInstalledBuild(line));

@@ -501,16 +501,21 @@ public sealed class RuntimeUpdateScheduler
     /// <summary>
     /// Extracts the build number from the llama binary's <c>--version</c>
     /// output — the first line llama.cpp prints, e.g.
-    /// <c>llama-server (llama) b9553 (abcdef)</c> or <c>version: 6726 (abcdef)</c>.
+    /// <c>llama-server (llama) b9553 (abcdef)</c>, <c>version: 6726 (abcdef)</c>,
+    /// or — since llama.cpp adopted semantic versions —
+    /// <c>version: 0.7.0-dev (build 11941, commit 19ff817fb)</c>.
     /// Null when no recognizable build number is present.
     /// </summary>
     internal static uint? ParseInstalledBuild(string? versionLine)
     {
         if (string.IsNullOrWhiteSpace(versionLine)) return null;
 
-        // "build: 9553" / "version: 6726" — the explicit labels first, then a
-        // bare b-number token ("b9553") anywhere in the line.
-        foreach (var pattern in new[] { @"build:\s*(\d+)", @"version:\s*(\d+)", @"\bb(\d{2,7})\b" })
+        // "build: 9553" / "(build 11941, ..." / "version: 6726" — the explicit
+        // labels first, then a bare b-number token ("b9553") anywhere in the
+        // line. The build label must win over "version:": in the semver format,
+        // "version: 0.7.0-dev" would otherwise parse as build 0, making every
+        // installed runtime look outdated.
+        foreach (var pattern in new[] { @"\bbuild:?\s*(\d+)", @"version:\s*(\d+)", @"\bb(\d{2,7})\b" })
         {
             var match = Regex.Match(versionLine, pattern, RegexOptions.IgnoreCase);
             // uint: dev builds print the 0xFFFFFFFF sentinel, which overflows
