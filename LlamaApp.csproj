@@ -93,6 +93,36 @@
         </Content>
     </ItemGroup>
 
+    <!-- Trimming (Release publish, see Properties/PublishProfiles) is limited
+         to the .NET libraries, the bulk of the self-contained payload. These
+         assemblies are kept whole because they break at runtime when trimmed,
+         with no build-time signal (their trim warnings are CsWinRT noise the
+         publish gate has to filter out):
+         - CsWinRT and the WinRT projections: CsWinRT finds the marshaling
+           helpers for objects handed to WinUI by reflection. Trimmed, binding
+           an ObservableCollection to ItemsSource throws NullReferenceException
+           and the flyout's model list stays empty.
+         - the app's own assemblies (~1.4 MB, so little to gain): StartupHelper's
+           [ComImport] interfaces are positional vtables, and the trimmer drops
+           the methods the app never calls, shifting the slots: SetShowCmd
+           then calls the wrong native method and the process crashes. -->
+    <ItemGroup>
+        <TrimmerRootAssembly Include="WinRT.Runtime" />
+        <TrimmerRootAssembly Include="Microsoft.Windows.SDK.NET" />
+        <TrimmerRootAssembly Include="Microsoft.WinUI" />
+        <TrimmerRootAssembly Include="Microsoft.InteractiveExperiences.Projection" />
+        <TrimmerRootAssembly Include="Microsoft.Web.WebView2.Core.Projection" />
+        <TrimmerRootAssembly Include="LlamaApp" />
+        <TrimmerRootAssembly Include="LlamaApp.Common" />
+        <TrimmerRootAssembly Include="LlamaApp.HuggingFace" />
+        <TrimmerRootAssembly Include="LlamaApp.LlamaCpp" />
+    </ItemGroup>
+    <PropertyGroup>
+        <!-- Trimming switches built-in COM off; StartupHelper needs it for the
+             startup shortcut (NotSupportedException on Save otherwise). -->
+        <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    </PropertyGroup>
+
     <ItemGroup>
         <None Remove="LlamaApp.slnx"/>
     </ItemGroup>
