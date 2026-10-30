@@ -63,7 +63,9 @@ public sealed class Catalog : IModelSource
     {
         Name = family.Name,
         Brand = family.Brand,
-        Description = family.Description,
+        // The catalog marks a highlight in each description as markdown bold
+        // (llama.app renders it); the app shows descriptions as plain text.
+        Description = family.Description.Replace("**", ""),
         License = family.License,
         Featured = family.Featured,
         Sizes =
