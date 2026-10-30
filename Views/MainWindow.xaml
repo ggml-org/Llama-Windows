@@ -41,8 +41,11 @@
     <!-- Esc dismisses the flyout (the same convention as the chat overlay,
          whose pattern this copies). KeyboardAccelerators live on Control, not
          Window, so the root Grid is wrapped in a UserControl; window-level
-         accelerators are processed regardless of which element has focus. -->
-    <UserControl>
+         accelerators are processed regardless of which element has focus.
+         KeyboardAcceleratorPlacementMode="Hidden": otherwise WinUI shows the
+         accelerator's key ("Esc") as a tooltip when hovering anywhere in the
+         window that has no tooltip of its own. -->
+    <UserControl KeyboardAcceleratorPlacementMode="Hidden">
         <UserControl.KeyboardAccelerators>
             <KeyboardAccelerator Key="Escape" Invoked="EscapeAccelerator_Invoked" />
         </UserControl.KeyboardAccelerators>
@@ -74,8 +77,7 @@
                       CornerRadius="{ThemeResource ControlCornerRadius}"
                       Background="Transparent"
                       PointerEntered="Row_PointerEntered"
-                      PointerExited="Row_PointerExited"
-                      ToolTipService.ToolTip="{x:Bind Model.RowToolTip}">
+                      PointerExited="Row_PointerExited">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -604,8 +606,7 @@
                             HorizontalContentAlignment="Stretch"
                             AutomationProperties.Name="{x:Bind Family.AccessibleName}"
                             AutomationProperties.HelpText="Open family details"
-                            Opacity="{x:Bind Family.RowOpacity, Mode=OneWay}"
-                            ToolTipService.ToolTip="{x:Bind Family.RowToolTip, Mode=OneWay}">
+                            Opacity="{x:Bind Family.RowOpacity, Mode=OneWay}">
                         <Grid ColumnSpacing="10">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />

@@ -643,32 +643,14 @@ namespace LlamaApp.Views
                 var rows = Families.ToList();
                 foreach (var family in rows)
                 {
-                    // The note quotes the least-demanding build that still
-                    // didn't fit — the family's best shot — so the tooltip
-                    // reads honest ("even the smallest doesn't fit").
-                    MemoryFitResult? bestFit = null;
-                    foreach (var size in family.Family.Sizes)
-                    {
-                        foreach (var build in size.Builds)
-                        {
-                            var estimate = ModelMemoryEstimator.Estimate(
-                                size.Params, build.Quant, build.SizeBytes);
-                            var fit = MemoryFit.Check(estimate, devices, availableRam);
-                            if (fit.Fits)
-                            {
-                                bestFit = fit;
-                                break;
-                            }
-                            if (bestFit is null || fit.RequiredBytes < bestFit.RequiredBytes)
-                                bestFit = fit;
-                        }
-                        if (bestFit is { Fits: true }) break;
-                    }
-
-                    // Note first, then the flag: the RowToolTip notification
-                    // from FitsOnDevice already carries the reason.
-                    family.FitNote = bestFit is { Fits: true } ? null : DescribeFitFailure(bestFit!);
-                    family.FitsOnDevice = bestFit is not { Fits: false };
+                    // A family with no builds stays at full strength (fail open).
+                    var builds = family.Family.Sizes
+                        .SelectMany(size => size.Builds, (size, build) => (size, build))
+                        .ToList();
+                    family.FitsOnDevice = builds.Count == 0 || builds.Any(b =>
+                        MemoryFit.Check(
+                            ModelMemoryEstimator.Estimate(b.size.Params, b.build.Quant, b.build.SizeBytes),
+                            devices, availableRam).Fits);
                 }
 
                 // Fitting families on top, the rest sink below them (still
@@ -695,22 +677,6 @@ namespace LlamaApp.Views
             {
                 _fitEvaluationRunning = false;
             }
-        }
-
-        /// <summary>
-        /// The dimmed family's tooltip line: what even its smallest build
-        /// needs versus what the machine has. Wording mirrors
-        /// <see cref="ShowInsufficientMemoryFlyout"/> so the dimmed hint and
-        /// the click-time flyout tell the same story.
-        /// </summary>
-        private static string DescribeFitFailure(MemoryFitResult fit)
-        {
-            var required = MemoryFit.FormatBytes(fit.RequiredBytes);
-            return fit.Devices.Count > 0
-                ? $"May not fit: needs about {required}, more than the free memory on " +
-                  $"{DescribeDevices(fit.Devices)} and the usable system memory."
-                : $"May not fit: needs about {required}, but only " +
-                  $"{MemoryFit.FormatBytes(fit.AvailableBytes)} of system memory is usable.";
         }
 
         /// <summary>
