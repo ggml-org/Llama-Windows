@@ -8,8 +8,9 @@ namespace LlamaApp.LlamaCpp.Tests;
 /// Tests the installer provenance policy. The app executes the downloaded
 /// <c>install.ps1</c> with <c>-ExecutionPolicy Bypass</c>, so every check here
 /// is a barrier between a hostile/compromised endpoint and arbitrary code
-/// execution: exact URL, no redirects, bounded size, and a hash pin for
-/// unattended installs.
+/// execution: exact URL, no redirects, and a bounded size. (There is no hash
+/// pin: install.ps1 is revised independently of the app, and a stale pin
+/// blocked runtime upgrades — the hash is logged for audit instead.)
 /// </summary>
 public class InstallScriptIntegrityTests
 {
@@ -104,67 +105,6 @@ public class InstallScriptIntegrityTests
     public void IsExpectedUri_Checks(string uri, bool expected)
     {
         Assert.Equal(expected, InstallScriptIntegrity.IsExpectedUri(new Uri(uri)));
-    }
-
-    // ---- ValidateHash ----
-
-    [Fact]
-    public void PinnedSha256_Is_Set_To_The_Published_Script_Hash()
-    {
-        // The pin is the documented "re-enables automatic updates" step: while
-        // it is null every unattended (scheduler-driven) install is refused.
-        // It must match the SHA-256 of the install.ps1 published at
-        // https://llama.app/install.ps1 — update it with each script revision.
-        Assert.Equal(
-            "3d53d22286b5cbe83741da2a4b6d2be5d0c4a9347fe92c19c7d88dd8298f3f10",
-            InstallScriptIntegrity.PinnedSha256);
-    }
-
-    [Fact]
-    public void Default_Pin_Accepts_The_Published_Hash_And_Refuses_Anything_Else()
-    {
-        // Uses the ValidateHash default argument — i.e. what the unattended
-        // install path actually enforces.
-        Assert.False(string.IsNullOrWhiteSpace(InstallScriptIntegrity.PinnedSha256));
-        Assert.Equal(
-            InstallScriptVerdict.Ok,
-            InstallScriptIntegrity.ValidateHash(InstallScriptIntegrity.PinnedSha256));
-        Assert.Equal(
-            InstallScriptVerdict.Ok,
-            InstallScriptIntegrity.ValidateHash(InstallScriptIntegrity.PinnedSha256!.ToUpperInvariant()));
-        Assert.Equal(
-            InstallScriptVerdict.HashMismatch,
-            InstallScriptIntegrity.ValidateHash(new string('0', 64)));
-    }
-
-    [Fact]
-    public void Unpinned_When_No_Pin_Configured()
-    {
-        Assert.Equal(
-            InstallScriptVerdict.Unpinned,
-            InstallScriptIntegrity.ValidateHash("abc123", pinned: null));
-        Assert.Equal(
-            InstallScriptVerdict.Unpinned,
-            InstallScriptIntegrity.ValidateHash("abc123", pinned: "   "));
-    }
-
-    [Fact]
-    public void Matches_Pin_CaseInsensitively()
-    {
-        Assert.Equal(
-            InstallScriptVerdict.Ok,
-            InstallScriptIntegrity.ValidateHash("ABCDEF", pinned: "abcdef"));
-    }
-
-    [Fact]
-    public void Mismatched_Pin_Is_Fatal()
-    {
-        Assert.Equal(
-            InstallScriptVerdict.HashMismatch,
-            InstallScriptIntegrity.ValidateHash("abcdef", pinned: "123456"));
-        Assert.Equal(
-            InstallScriptVerdict.HashMismatch,
-            InstallScriptIntegrity.ValidateHash(null, pinned: "123456"));
     }
 
     // ---- Sha256Hex ----

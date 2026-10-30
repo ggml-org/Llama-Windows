@@ -328,13 +328,11 @@ public sealed class RuntimeUpdateScheduler
             Log.Info($"llama.cpp runtime update available: installed b{installed}, latest b{latest} — installing");
             try
             {
-                // Unattended: require the pinned script hash
-                // (InstallScriptIntegrity.PinnedSha256) — a mismatch, or a
-                // build without a pin, refuses the install (logged by
-                // InstallAsync) rather than executing an unverified remote
-                // script on a weekly timer.
-                var installedOk = await manager.InstallAsync(
-                    CancellationToken.None, allowUnpinnedInstall: false);
+                // Unattended: the exact-URL / no-redirect / bounded-size
+                // policy in InstallScriptIntegrity gates the script; its
+                // SHA-256 is logged for audit but not pinned (a build-time
+                // pin went stale and blocked runtime upgrades).
+                var installedOk = await manager.InstallAsync(CancellationToken.None);
                 // Belt against phantom updates: a "successful" install that
                 // delivers the very same build is not an update — never toast
                 // a version that never appears.
