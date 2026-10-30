@@ -170,11 +170,10 @@ jobs:
       # `GenerateMsixPackage` target (which runs MakeAppx via
       # `_GenerateAppxPackageFile`). The legacy `GenerateAppxPackage=true` is a
       # no-op passthrough in WinAppSDK 1.6 and produces NO .msix.
-      # PublishTrimmed=false: ReadyToRun stays off (unvalidated) and the
-      # MSIX is deliberately still UNTRIMMED — the trimmed zip channel
-      # (publish.yml) soaks first; flip this after a smoke pass over the
-      # rarely-exercised paths (startup shortcut toggle, settings, overlay,
-      # download). The zip channel enforces zero IL trim warnings.
+      # PublishTrimmed=true: trims the .NET libraries (~198 -> ~123 MB
+      # unpacked). LlamaApp.csproj keeps CsWinRT, the WinRT projections and
+      # the app's own assemblies whole -- trimming them breaks the app at
+      # runtime (see the comment there). ReadyToRun stays off (unvalidated).
       - name: Build & package unsigned MSIX (${{ matrix.rid }})
         run: >
           msbuild LlamaApp.csproj
@@ -185,7 +184,7 @@ jobs:
           -p:RuntimeIdentifier=${{ matrix.rid }}
           -p:GenerateAppxPackageOnBuild=true
           -p:AppxPackageSigningEnabled=false
-          -p:PublishTrimmed=false
+          -p:PublishTrimmed=true
           -p:PublishReadyToRun=false
           -p:PublishSingleFile=false
           -p:AppxPackageDir="${{ github.workspace }}\packages\${{ matrix.rid }}\"
