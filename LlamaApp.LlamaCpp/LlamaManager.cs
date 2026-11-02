@@ -54,9 +54,11 @@ public sealed class LlamaManager
     /// Creates the <see cref="Shared"/> singleton bound to
     /// <paramref name="serverPort"/> and <paramref name="listenAddress"/>.
     /// Must be called once at startup, before the first
-    /// <see cref="Shared"/> access: both are baked in at construction and
-    /// every health probe / launch argument / REST URL derives from them, so
-    /// changed settings only take effect on the next app launch. A null,
+    /// <see cref="Shared"/> access: every health probe / launch argument /
+    /// REST URL derives from the construction values. Later changes go
+    /// through <see cref="ApplyLaunchSettings"/> (which rebinds the client
+    /// and, via <see cref="RestartServerAsync"/>, relaunches the server).
+    /// A null,
     /// blank, or unparseable address falls back to loopback. When
     /// <paramref name="apiKey"/> is non-empty it is sent as a Bearer token on
     /// every request and passed to the server via the <c>LLAMA_API_KEY</c>
@@ -355,23 +357,24 @@ public sealed class LlamaManager
     };
 
     /// <summary>
-    /// Port the local llama server listens on (matches the flyout link). Fixed
-    /// at construction via <see cref="Initialize"/> — the supervisor loop,
-    /// health probes, server launch arguments and every REST URL are built
-    /// from it.
+    /// Port the local llama server listens on (matches the flyout link). Set
+    /// at construction via <see cref="Initialize"/> and re-applied by
+    /// <see cref="ApplyLaunchSettings"/> when the setting changes — the
+    /// supervisor loop, health probes, server launch arguments and every
+    /// REST URL are built from it.
     /// </summary>
-    public int ServerPort { get; }
+    public int ServerPort { get; private set; }
 
     /// <summary>
     /// IPv4 address the llama server binds to via <c>--host</c>: the loopback
     /// <c>127.0.0.1</c> (the default), <c>0.0.0.0</c> for every interface, or
-    /// a specific interface's address. Fixed at construction via
-    /// <see cref="Initialize"/>, like the port — the app's own REST client
+    /// a specific interface's address. Set at construction via
+    /// <see cref="Initialize"/>, like the port, and re-applied by
+    /// <see cref="ApplyLaunchSettings"/> — the app's own REST client
     /// follows it (loopback when the server binds all interfaces, so the
-    /// client and the bind address never disagree). A changed value takes
-    /// effect on the next app launch.
+    /// client and the bind address never disagree).
     /// </summary>
-    public string ListenAddress { get; }
+    public string ListenAddress { get; private set; }
 
     /// <summary>
     /// The address the app's own REST client and user-facing URLs connect to:
@@ -380,7 +383,7 @@ public sealed class LlamaManager
     /// destination). Kept separate from <see cref="ListenAddress"/> so the
     /// bind flag and the client never disagree.
     /// </summary>
-    public string ConnectAddress { get; }
+    public string ConnectAddress { get; private set; }
 
     /// <summary>
     /// API key the app generated for a non-loopback bind, or null for the
@@ -394,7 +397,7 @@ public sealed class LlamaManager
     /// the Authorization header, and Settings shows it for copy if the
     /// server's WebUI ever asks for it.
     /// </summary>
-    public string? ApiKey { get; }
+    public string? ApiKey { get; private set; }
 
     /// <summary>
     /// The address the app's REST client connects to for a given bind address:
@@ -562,9 +565,15 @@ public sealed class LlamaManager
     /// cause of "browser gets 200 OK, HttpClient fails"). The client-level
     /// timeout is infinite; each call bounds itself with a linked token
     /// (<see cref="WithTimeout"/>) so SSE streams can run unbounded while
-    /// probes stay snappy.
+    /// probes stay snappy. Not readonly: <see cref="ApplyLaunchSettings"/>
+    /// swaps the client atomically when the endpoint changes — a
+    /// <c>BaseAddress</c> can't be modified once requests have started, so a
+    /// fresh client is the only way to rebind. Reads are bare field reads
+    /// (reference reads are atomic); the replaced client is disposed, which
+    /// faults any in-flight request exactly like the server restart that
+    /// accompanies the swap.
     /// </summary>
-    private readonly HttpClient _http;
+    private HttpClient _http;
 
     /// <summary>Current installation state.</summary>
     public InstallState State
@@ -669,18 +678,7 @@ public sealed class LlamaManager
         var connectAddress = ConnectAddressFor(listenAddress);
         ConnectAddress = connectAddress;
         ApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
-        _http = new HttpClient(new SocketsHttpHandler { UseProxy = false })
-        {
-            BaseAddress = new Uri($"http://{connectAddress}:{serverPort}"),
-            Timeout = Timeout.InfiniteTimeSpan,
-        };
-        // Same User-Agent as the internet-facing clients — the loopback
-        // server logs then identify the caller consistently.
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
-        // A non-loopback server requires an API key; set it once here so every
-        // probe, poll, SSE stream and chat request carries it.
-        if (ApiKey is not null)
-            _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
+        _http = CreateServerClient(connectAddress, serverPort, ApiKey);
 
         // The supervisor is the ONLY source of truth for server status: it
         // polls the HTTP API for the app's whole lifetime and derives
@@ -688,6 +686,179 @@ public sealed class LlamaManager
         // Fire-and-forget: the loop is inert while Stopped and every tick is
         // guarded, so it can't fault the process.
         _ = Task.Run(SupervisorLoopAsync);
+    }
+
+    /// <summary>
+    /// Builds the REST client for a server endpoint: no system proxy (a
+    /// proxy/VPN must never intercept local traffic), no client-level
+    /// timeout (each call bounds itself, SSE streams run unbounded), and the
+    /// API key as a Bearer header when a non-loopback bind requires one, so
+    /// every probe, poll, SSE stream and chat request carries it.
+    /// </summary>
+    private static HttpClient CreateServerClient(string connectAddress, int serverPort, string? apiKey)
+    {
+        var http = new HttpClient(new SocketsHttpHandler { UseProxy = false })
+        {
+            BaseAddress = new Uri($"http://{connectAddress}:{serverPort}"),
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        // Same User-Agent as the internet-facing clients — the loopback
+        // server logs then identify the caller consistently.
+        http.DefaultRequestHeaders.UserAgent.ParseAdd(HttpUserAgent.Value);
+        if (apiKey is not null)
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        return http;
+    }
+
+    /// <summary>
+    /// Snapshot of the settings that shape the server process at launch: the
+    /// endpoint (<see cref="ServerPort"/>, <see cref="ListenAddress"/>,
+    /// <see cref="ApiKey"/>), the launch flags (idle unload, models-max, KV
+    /// cache types, custom arguments) and the launch environment (HF cache
+    /// directory, HF token). <see cref="ApplyLaunchSettings"/> diffs a fresh
+    /// snapshot against the live one. Not the preset-INI channel (context
+    /// lengths, spec types, enrolled folders) — those reach a running server
+    /// via <see cref="ReloadModelPresetsAsync"/> without a restart.
+    /// </summary>
+    public sealed record LaunchSettings(
+        int ServerPort,
+        string ListenAddress,
+        string? ApiKey,
+        string? CacheDirectory,
+        string? HuggingFaceToken,
+        int IdleUnloadSeconds,
+        int MaxLoadedModels,
+        string CacheTypeK,
+        string CacheTypeV,
+        string? CustomServeArguments);
+
+    /// <summary>
+    /// The endpoint part of a snapshot: a change here means the REST client
+    /// must be rebuilt, not just the server relaunched.
+    /// </summary>
+    internal static bool EndpointDiffers(LaunchSettings a, LaunchSettings b)
+        => a.ServerPort != b.ServerPort
+           || a.ListenAddress != b.ListenAddress
+           || a.ApiKey != b.ApiKey;
+
+    /// <summary>
+    /// True when any launch-affecting value differs between two snapshots —
+    /// the server needs a relaunch to pick the change up.
+    /// </summary>
+    internal static bool LaunchDiffers(LaunchSettings a, LaunchSettings b)
+        => EndpointDiffers(a, b)
+           || a.CacheDirectory != b.CacheDirectory
+           || a.HuggingFaceToken != b.HuggingFaceToken
+           || a.IdleUnloadSeconds != b.IdleUnloadSeconds
+           || a.MaxLoadedModels != b.MaxLoadedModels
+           || a.CacheTypeK != b.CacheTypeK
+           || a.CacheTypeV != b.CacheTypeV
+           || a.CustomServeArguments != b.CustomServeArguments;
+
+    /// <summary>The live values as a <see cref="LaunchSettings"/> snapshot.</summary>
+    internal LaunchSettings CurrentLaunchSettings => new(
+        ServerPort, ListenAddress, ApiKey, CacheDirectory, HuggingFaceToken,
+        IdleUnloadSeconds, MaxLoadedModels, CacheTypeK, CacheTypeV, CustomServeArguments);
+
+    /// <summary>
+    /// Applies a fresh settings snapshot (the user saved Settings while the
+    /// app is running). Launch-flag and environment values simply replace
+    /// the live ones — the next <see cref="StartServerAsync"/> reads them.
+    /// An endpoint change (port, listen address, API key) additionally
+    /// rebuilds the REST client so probes, polls and model URLs follow the
+    /// new bind. Returns true when anything launch-affecting changed — the
+    /// caller typically follows up with <see cref="RestartServerAsync"/>;
+    /// this method never restarts by itself, so a stopped server just picks
+    /// the values up on its next start.
+    /// </summary>
+    public bool ApplyLaunchSettings(LaunchSettings next)
+    {
+        // Same defensive normalization as Initialize: a hand-edited
+        // settings.json must not push the client to a foreign endpoint. An
+        // out-of-range port keeps the current one (App range-checks too —
+        // this is the backstop), a bad or IPv6 address falls back to
+        // loopback, a blank API key reads as none.
+        next = next with
+        {
+            ServerPort = next.ServerPort is < 1 or > 65535 ? ServerPort : next.ServerPort,
+            ListenAddress =
+                System.Net.IPAddress.TryParse(next.ListenAddress, out var parsed) &&
+                parsed.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                    ? next.ListenAddress
+                    : Common.ListenAddresses.Localhost,
+            ApiKey = string.IsNullOrWhiteSpace(next.ApiKey) ? null : next.ApiKey.Trim(),
+        };
+
+        var current = CurrentLaunchSettings;
+        if (!LaunchDiffers(current, next)) return false;
+
+        if (EndpointDiffers(current, next))
+        {
+            Log.Info($"server endpoint changing: {ConnectAddress}:{ServerPort} → " +
+                     $"{ConnectAddressFor(next.ListenAddress)}:{next.ServerPort}" +
+                     (next.ApiKey is null ? "" : " (API key required)"));
+            ServerPort = next.ServerPort;
+            ListenAddress = next.ListenAddress;
+            ConnectAddress = ConnectAddressFor(next.ListenAddress);
+            ApiKey = next.ApiKey;
+            Interlocked.Exchange(ref _http, CreateServerClient(ConnectAddress, ServerPort, ApiKey)).Dispose();
+        }
+
+        CacheDirectory = next.CacheDirectory;
+        HuggingFaceToken = next.HuggingFaceToken;
+        IdleUnloadSeconds = next.IdleUnloadSeconds;
+        MaxLoadedModels = next.MaxLoadedModels;
+        CacheTypeK = next.CacheTypeK;
+        CacheTypeV = next.CacheTypeV;
+        CustomServeArguments = next.CustomServeArguments;
+        return true;
+    }
+
+    /// <summary>
+    /// Restarts the app-managed server so changed launch settings take
+    /// effect: a deliberate <see cref="StopServer"/> (the supervisor treats
+    /// it as intentional and stays out of the way) followed by a normal
+    /// <see cref="StartServerAsync"/>. Only a server the app owns — this
+    /// session's process handle, or the PID file of a crashed instance's
+    /// server — is touched; an external server is left alone (its launch
+    /// flags are the user's own). No-op when the server isn't running: a
+    /// stopped or failed server picks the values up on its next start, and
+    /// a mid-start server (<see cref="ServerState.Starting"/>) is left to
+    /// finish — interrupting it could race the in-flight launch, so the
+    /// change applies on the start after. Serialized through
+    /// <see cref="_ensureGate"/> like every other launch path, so a
+    /// concurrent <see cref="EnsureLlamaOrDownloadAsync"/> or a second
+    /// restart queues instead of racing a duplicate spawn.
+    /// </summary>
+    public async Task<bool> RestartServerAsync(CancellationToken cancel = default)
+    {
+        if (ServerStatus is not ServerState.Running)
+        {
+            Log.Debug("server restart skipped: not running — settings apply on the next start");
+            return false;
+        }
+
+        await _ensureGate.WaitAsync(cancel);
+        try
+        {
+            // Re-check inside the gate: a concurrent ensure or restart may
+            // have changed the picture while waiting.
+            if (ServerStatus is not ServerState.Running)
+            {
+                Log.Debug("server restart skipped: no longer running (gate re-check)");
+                return false;
+            }
+            if (_serverProcess is null && ReadLiveManagedPid(PidFilePath) is null)
+            {
+                Log.Info("server restart skipped: the running server was not launched by the app — settings apply when it is restarted");
+                return false;
+            }
+
+            Log.Info("restarting the llama server to apply changed settings");
+            StopServer();
+            return await StartServerAsync(cancel);
+        }
+        finally { _ensureGate.Release(); }
     }
 
     /// <summary>

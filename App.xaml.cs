@@ -189,42 +189,11 @@ namespace LlamaApp
             // Create the llama-server manager singleton with the configured
             // port and listen address BEFORE anything else can touch
             // LlamaManager.Shared — the MainWindow constructor below already
-            // subscribes to its events. Both are baked into the manager at
-            // construction, so values changed in Settings only take effect on
-            // the next launch.
-            var serverPort = Settings.Current.ServerPort;
-            if (serverPort is < 1 or > 65535)
-            {
-                Common.Log.Warn($"configured server port {serverPort} is out of range; falling back to {Llama.LlamaManager.DefaultServerPort}");
-                serverPort = Llama.LlamaManager.DefaultServerPort;
-            }
-            // The saved listen address may no longer be assigned to this
-            // machine (DHCP change, a different network, or a hand-edited
-            // settings.json). Resolve it against the live interfaces so the
-            // app never targets — or adopts a server from — a foreign host;
-            // fall back to loopback and warn when it can't be used.
-            var resolvedListen = Common.ListenAddresses.Resolve(
-                Settings.Current.ListenAddress, Common.ListenAddresses.List());
-            if (resolvedListen.FellBack)
-                Common.Log.Warn(
-                    $"listen address '{Settings.Current.ListenAddress}' is not assigned to this machine; using {resolvedListen.Address}");
-
-            // Non-loopback binds get an app-generated API key so the server
-            // isn't an open control API on the network. Generated once and
-            // persisted, so an adopted server (and a later app start) agree.
-            string? apiKey = null;
-            if (Common.ServerAuth.RequiresApiKey(resolvedListen.Address))
-            {
-                if (string.IsNullOrWhiteSpace(Settings.Current.ServerApiKey))
-                {
-                    Settings.Current.ServerApiKey = Common.ServerAuth.GenerateApiKey();
-                    Settings.Current.Save();
-                }
-                apiKey = Settings.Current.ServerApiKey;
-            }
+            // subscribes to its events.
+            var serverConfig = ResolveServerConfiguration();
             Common.Log.Info(
-                $"listen address: {resolvedListen.Address}{(apiKey is null ? "" : " (API key required)")}");
-            Llama.LlamaManager.Initialize(serverPort, resolvedListen.Address, apiKey);
+                $"listen address: {serverConfig.Listen.Address}{(serverConfig.ApiKey is null ? "" : " (API key required)")}");
+            Llama.LlamaManager.Initialize(serverConfig.Port, serverConfig.Listen.Address, serverConfig.ApiKey);
 
             // The app is tray-only: the main window is created but never shown
             // on launch. It is revealed on demand as a flyout anchored to the
@@ -254,10 +223,10 @@ namespace LlamaApp
             // flyout; so does a redirected second-launch activation.
             Notifications.Initialize();
             // Surface a listen-address fallback once notifications exist.
-            if (resolvedListen.FellBack)
+            if (serverConfig.Listen.FellBack)
                 Notifications.Show("Listen address unavailable",
                     $"The configured listen address ({Settings.Current.ListenAddress}) isn't assigned to this machine. " +
-                    $"The llama server will listen on {resolvedListen.Address} instead.");
+                    $"The llama server will listen on {serverConfig.Listen.Address} instead.");
             Notifications.Invoked += args => _dispatcher.TryEnqueue(() => HandleToastActivation(args));
             instance.Activated += (sender, args) => _dispatcher.TryEnqueue(() =>
             {
@@ -274,13 +243,7 @@ namespace LlamaApp
             // download the binary via install.ps1 then launch. Fire-and-forget;
             // once reachable the MainWindow fetches the Available model list via
             // GET /models.
-            Llama.LlamaManager.Shared.CacheDirectory = Settings.Current.CacheDirectory;
-            Llama.LlamaManager.Shared.HuggingFaceToken = Settings.Current.HuggingFaceToken;
-            Llama.LlamaManager.Shared.IdleUnloadSeconds = Settings.Current.IdleUnloadSeconds;
-            Llama.LlamaManager.Shared.MaxLoadedModels = Settings.Current.MaxLoadedModels;
-            Llama.LlamaManager.Shared.CacheTypeK = Settings.Current.CacheTypeK;
-            Llama.LlamaManager.Shared.CacheTypeV = Settings.Current.CacheTypeV;
-            Llama.LlamaManager.Shared.CustomServeArguments = Settings.Current.CustomServeArguments;
+            Llama.LlamaManager.Shared.ApplyLaunchSettings(BuildLaunchSettings(serverConfig));
             // Shared by reference: the details view mutates this dictionary when
             // the user picks a context length, and the manager renders it into
             // the server's --models-preset INI (see ReloadModelPresetsAsync).
@@ -379,6 +342,95 @@ namespace LlamaApp
             // removed on disk refreshes the server's view without a restart
             // (fire-and-forget; the watcher owns its own threading).
             EnrolledFolderWatch.StartWatching();
+        }
+
+        // ---- Server configuration (startup + live settings apply) ----
+
+        /// <summary>The resolved server endpoint settings, ready to hand to the manager.</summary>
+        private sealed record ServerConfiguration(
+            int Port, Common.ListenAddresses.ResolvedAddress Listen, string? ApiKey);
+
+        /// <summary>
+        /// Reads the server endpoint settings and resolves them into
+        /// launch-ready values: the port (range-checked against the
+        /// default), the listen address (validated against the live
+        /// interfaces — a stale or hand-edited value falls back to loopback
+        /// with a warning, so the app never targets, or adopts a server
+        /// from, a foreign host) and the API key a non-loopback bind
+        /// requires (generated once and persisted, so an adopted server and
+        /// a later app start agree). Shared by startup (which Initializes
+        /// the manager) and the Settings save path (which applies the
+        /// values live).
+        /// </summary>
+        private static ServerConfiguration ResolveServerConfiguration()
+        {
+            var serverPort = Settings.Current.ServerPort;
+            if (serverPort is < 1 or > 65535)
+            {
+                Common.Log.Warn($"configured server port {serverPort} is out of range; falling back to {Llama.LlamaManager.DefaultServerPort}");
+                serverPort = Llama.LlamaManager.DefaultServerPort;
+            }
+
+            var resolvedListen = Common.ListenAddresses.Resolve(
+                Settings.Current.ListenAddress, Common.ListenAddresses.List());
+            if (resolvedListen.FellBack)
+                Common.Log.Warn(
+                    $"listen address '{Settings.Current.ListenAddress}' is not assigned to this machine; using {resolvedListen.Address}");
+
+            string? apiKey = null;
+            if (Common.ServerAuth.RequiresApiKey(resolvedListen.Address))
+            {
+                if (string.IsNullOrWhiteSpace(Settings.Current.ServerApiKey))
+                {
+                    Settings.Current.ServerApiKey = Common.ServerAuth.GenerateApiKey();
+                    Settings.Current.Save();
+                }
+                apiKey = Settings.Current.ServerApiKey;
+            }
+            return new(serverPort, resolvedListen, apiKey);
+        }
+
+        /// <summary>
+        /// The full launch-settings snapshot for the manager: the resolved
+        /// endpoint plus the launch flags and launch environment straight
+        /// from <see cref="Settings.Current"/>.
+        /// </summary>
+        private static Llama.LlamaManager.LaunchSettings BuildLaunchSettings(ServerConfiguration cfg)
+            => new(
+                cfg.Port, cfg.Listen.Address, cfg.ApiKey,
+                Settings.Current.CacheDirectory,
+                Settings.Current.HuggingFaceToken,
+                Settings.Current.IdleUnloadSeconds,
+                Settings.Current.MaxLoadedModels,
+                Settings.Current.CacheTypeK,
+                Settings.Current.CacheTypeV,
+                Settings.Current.CustomServeArguments);
+
+        /// <summary>
+        /// Pushes just-saved Settings into the llama manager and, when a
+        /// launch-affecting value changed, restarts the app-managed server
+        /// so the change takes effect immediately — a stopped server picks
+        /// the values up on its next start, an external server is left
+        /// alone (see <see cref="Llama.LlamaManager.RestartServerAsync"/>).
+        /// Called from the Settings window after Save; fire-and-forget safe
+        /// (all failures are logged, never thrown at the caller).
+        /// </summary>
+        internal async Task ApplyLlamaSettingsAsync()
+        {
+            try
+            {
+                var manager = Llama.LlamaManager.Shared;
+                if (!manager.ApplyLaunchSettings(BuildLaunchSettings(ResolveServerConfiguration())))
+                    return;
+
+                Common.Log.Info("launch-affecting llama settings changed; restarting the server if it is running and app-managed");
+                if (await manager.RestartServerAsync())
+                    Notifications.Show("Llama server restarted", "The new llama settings are now in effect.");
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "applying changed llama settings failed");
+            }
         }
 
         /// <summary>

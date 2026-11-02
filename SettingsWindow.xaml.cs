@@ -505,16 +505,16 @@ namespace LlamaApp
             s.CacheDirectory = CacheBox.Text.Trim();
 
             // The NumberBox clamps to 1–65535 while editing; an empty box
-            // reads as NaN — fall back to the default port in that case. The
-            // value is applied the next time the app starts (the manager
-            // singleton's port is fixed at construction).
+            // reads as NaN — fall back to the default port in that case.
+            // Applied live after Save: a running app-managed server restarts
+            // on the new endpoint (see ApplyLlamaSettingsAsync).
             s.ServerPort = double.IsNaN(PortBox.Value)
                 ? Llama.LlamaManager.DefaultServerPort
                 : (int)PortBox.Value;
 
             // The ComboBox items carry the IPv4 address in their Tag. Applied
-            // the next time the app starts (the manager's bind address and REST
-            // client are fixed at construction).
+            // live like the port — the manager rebinds its REST client and
+            // restarts the server.
             var selectedListen = (ListenAddressBox.SelectedItem as ComboBoxItem)?.Tag as string
                 ?? Common.ListenAddresses.Localhost;
 
@@ -555,22 +555,22 @@ namespace LlamaApp
                 Common.Log.Info("generated an API key for the non-loopback listen address");
             }
 
-            // The ComboBox items carry the seconds in their Tag. Applied the
-            // next time the server starts (it's a launch argument), so no
-            // live server restart here.
+            // The ComboBox items carry the seconds in their Tag. A launch
+            // argument — applied live via the post-save server restart.
             if ((IdleUnloadBox.SelectedItem as Microsoft.UI.Xaml.Controls.ComboBoxItem)?.Tag is string idleTag
                 && int.TryParse(idleTag, out var idleSeconds))
                 s.IdleUnloadSeconds = idleSeconds;
 
             // 0 = unlimited; the NumberBox enforces non-negative values, and an
             // empty box reads as NaN — fall back to the default (unlimited).
+            // A launch flag: applied live via the post-save server restart.
             s.MaxLoadedModels = double.IsNaN(ModelsMaxBox.Value)
                 ? 0
                 : (int)Math.Clamp(ModelsMaxBox.Value, 0, int.MaxValue);
 
             // The K/V ComboBox items carry the cache type in their Tag.
-            // Applied the next time the server starts (launch arguments), so
-            // no live server restart here.
+            // Launch arguments — applied live via the post-save server
+            // restart.
             s.CacheTypeK = (KvCacheKBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "f16";
             s.CacheTypeV = (KvCacheVBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "f16";
 
@@ -633,6 +633,15 @@ namespace LlamaApp
             catch (Exception ex) { Common.Log.Warn(ex, "model-folder preset reload failed"); }
 
             s.Save();
+
+            // Push the launch-affecting settings (endpoint, launch flags,
+            // launch env) into the manager; a running app-managed server
+            // restarts to pick them up. Fire-and-forget — the window closes
+            // regardless and the apply path logs its own failures. The
+            // preset-INI settings (context lengths, model folders) already
+            // reached the server via the reload above, no restart needed.
+            try { _ = (App.Current as App)?.ApplyLlamaSettingsAsync(); }
+            catch (Exception ex) { Common.Log.Warn(ex, "llama settings apply failed"); }
             Close();
         }
 
