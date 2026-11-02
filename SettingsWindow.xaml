@@ -442,8 +442,8 @@
                                             account. Create one at
                                             <Hyperlink NavigateUri="https://huggingface.co/settings/tokens">
                                                 huggingface.co/settings/tokens
-                                            </Hyperlink>. Changes apply the next time the app starts —
-                                            the running server keeps the previous token until then.
+                                            </Hyperlink>. Saving restarts a running server so it
+                                            picks up the new token.
                                         </Paragraph>
                                     </RichTextBlock>
                                     <!-- Control: full card width -->
@@ -531,7 +531,7 @@
                                                    VerticalAlignment="Center" />
                                     </Grid>
                                     <TextBlock Grid.Row="1"
-                                               Text="Port the local llama server listens on (1–65535). Takes effect the next time Llama starts."
+                                               Text="Port the local llama server listens on (1–65535). Llama restarts a running server to apply the change."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
@@ -585,7 +585,7 @@
                                                    VerticalAlignment="Center" />
                                     </Grid>
                                     <TextBlock Grid.Row="1"
-                                               Text="Network address the llama server binds to — localhost (127.0.0.1, this machine only), a specific interface's IP, or all interfaces (0.0.0.0). Beyond localhost the server is reachable from other devices on your network; Llama then requires an API key it generates for you. Takes effect the next time the app starts."
+                                               Text="Network address the llama server binds to — localhost (127.0.0.1, this machine only), a specific interface's IP, or all interfaces (0.0.0.0). Beyond localhost the server is reachable from other devices on your network; Llama then requires an API key it generates for you. Llama restarts a running server to apply the change."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
@@ -664,7 +664,7 @@
                                                    VerticalAlignment="Center" />
                                     </Grid>
                                     <TextBlock Grid.Row="1"
-                                               Text="Free the model's memory after it's been idle for a while. The model stays available — the next chat request reloads it automatically. Applies the next time the llama server starts."
+                                               Text="Free the model's memory after it's been idle for a while. The model stays available — the next chat request reloads it automatically. Llama restarts a running server to apply the change."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
@@ -719,7 +719,7 @@
                                                    VerticalAlignment="Center" />
                                     </Grid>
                                     <TextBlock Grid.Row="1"
-                                               Text="Maximum number of models the router keeps loaded at the same time. 0 means unlimited. Applies the next time the llama server starts."
+                                               Text="Maximum number of models the router keeps loaded at the same time. 0 means unlimited. Llama restarts a running server to apply the change."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
@@ -765,7 +765,7 @@
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock Text="Quantize the key and value tensors independently. Lower precision shrinks the KV cache, which can make a larger context window fit on consumer/prosumer GPUs, with some quality trade-off. Applies the next time the llama server starts."
+                                    <TextBlock Text="Quantize the key and value tensors independently. Lower precision shrinks the KV cache, which can make a larger context window fit on consumer/prosumer GPUs, with some quality trade-off. Llama restarts a running server to apply the change."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
@@ -845,7 +845,7 @@
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock Text="Extra arguments appended after the built-in ones, so they can override them. Use the same syntax as the llama.cpp command line — quote values that contain spaces. The server's bind flags (--host, --port), --api-key, --models-preset and --models-dir are managed by Llama and can't be used here. Applies the next time the llama server starts; if the server rejects a flag, the failure reason appears on the status dot."
+                                    <TextBlock Text="Extra arguments appended after the built-in ones, so they can override them. Use the same syntax as the llama.cpp command line — quote values that contain spaces. The server's bind flags (--host, --port), --api-key, --models-preset and --models-dir are managed by Llama and can't be used here. Llama restarts a running server to apply the change; if the server rejects a flag, the failure reason appears on the status dot."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
