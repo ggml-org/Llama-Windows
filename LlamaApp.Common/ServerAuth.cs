@@ -30,6 +30,15 @@ public static class ServerAuth
     }
 
     /// <summary>
+    /// Effective key requirement: the user's opt-in (<paramref name="userEnabled"/>,
+    /// the Settings → Llama checkbox — defense in depth on loopback, so other
+    /// local processes can't drive the server) OR a bind that reaches beyond
+    /// this machine, where the key is mandatory.
+    /// </summary>
+    public static bool IsApiKeyRequired(bool userEnabled, string? listenAddress)
+        => userEnabled || RequiresApiKey(listenAddress);
+
+    /// <summary>
     /// A fresh 256-bit key as 64 lower-case hex characters. Hex avoids shell
     /// and URL quoting surprises when the key is pasted into a request or a
     /// query string.

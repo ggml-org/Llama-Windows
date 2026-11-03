@@ -84,6 +84,20 @@ public sealed class Settings
     public string ListenAddress { get; set; } = LlamaApp.Common.ListenAddresses.Localhost;
 
     /// <summary>
+    /// User opt-in to require the server API key even on a loopback bind (the
+    /// Settings → Llama checkbox; defense in depth so other local processes
+    /// can't drive the server). A non-loopback <see cref="ListenAddress"/>
+    /// always requires the key regardless of this flag — see
+    /// <see cref="Common.ServerAuth.IsApiKeyRequired"/>. Applied on save: a
+    /// running app-managed server is restarted with the new requirement (see
+    /// <c>App.ApplyLlamaSettingsAsync</c> and
+    /// <c>App.ResolveServerConfiguration</c>); otherwise it takes effect the
+    /// next time the server starts. The flyout footer's lock glyph mirrors
+    /// this state and copies the key.
+    /// </summary>
+    public bool RequireServerApiKey { get; set; }
+
+    /// <summary>
     /// Key the app generates and hands to the llama server via the
     /// <c>LLAMA_API_KEY</c> environment variable
     /// when <see cref="ListenAddress"/> is not loopback, so a network-exposed

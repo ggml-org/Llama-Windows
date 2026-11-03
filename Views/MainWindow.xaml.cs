@@ -250,6 +250,9 @@ namespace LlamaApp.Views
             // the flyout is never opened (see EnsureStartupWork).
             LoadVersionInfo();
             UpdateServerStatusUI();
+            // Local-only (Settings + the running key): no network/process
+            // fan-out, so it stays out of the deferred startup work.
+            UpdateApiKeyIndicator();
             UpdateEmptyState();
 
             // Refresh the footer's llama.cpp version as the binary is
@@ -2387,6 +2390,75 @@ namespace LlamaApp.Views
             else dq.TryEnqueue(Apply);
         }
 
+        // ---- Footer API-key indicator ----
+
+        // Generation guard for the "Copied!" flash: a second click before the
+        // first flash expires must not let the first flash's delay hide the
+        // text early.
+        private int _apiKeyCopiedFlash;
+
+        /// <summary>
+        /// Mirrors the server API-key requirement in the footer's lock glyph:
+        /// closed lock when a key is required (mandatory beyond localhost,
+        /// opt-in on loopback via Settings → Llama), open lock otherwise. The
+        /// glyph reflects the CONFIGURED state; saving Settings applies it —
+        /// a running app-managed server restarts with the new requirement, an
+        /// unmanaged one keeps its own until it is restarted, so when the two
+        /// disagree the tooltip says so.
+        /// </summary>
+        private void UpdateApiKeyIndicator()
+        {
+            var required = Common.ServerAuth.IsApiKeyRequired(
+                Settings.Current.RequireServerApiKey, Settings.Current.ListenAddress);
+            ApiKeyLockIcon.Glyph = required ? "\uE72E" : "\uE785"; // Lock / Unlock
+            ApiKeyLockIcon.Opacity = required ? 0.9 : 0.5;
+
+            var runningHasKey = LlamaManager.Shared.ApiKey is not null;
+            var tooltip = required
+                ? "The llama server requires an API key — click to copy it (the WebUI may ask for it once)."
+                : "The llama server requires no API key (localhost only). Enable one in Settings → Llama.";
+            if (required != runningHasKey)
+                tooltip += " Applies when the llama server (re)starts.";
+            Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(ApiKeyLockButton, tooltip);
+        }
+
+        /// <summary>
+        /// Copies the server API key to the clipboard and flashes "Copied!".
+        /// llama.cpp's WebUI reads its key from a typed dialog — there is no
+        /// URL form — so the user needs to paste it there; Llama's own client
+        /// and the chat overlay send it automatically. A no-op when no key is
+        /// configured (the open-lock state).
+        /// </summary>
+        private async void ApiKeyLock_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Prefer the running server's key; fall back to the persisted
+                // one (a just-enabled requirement is already saved, so the
+                // key the WebUI will ask for is this one even before the
+                // post-save restart reaches the server).
+                var key = LlamaManager.Shared.ApiKey;
+                if (string.IsNullOrWhiteSpace(key))
+                    key = Settings.Current.ServerApiKey;
+                if (string.IsNullOrWhiteSpace(key)) return;
+
+                var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+                package.SetText(key);
+                Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+                Windows.ApplicationModel.DataTransfer.Clipboard.Flush();
+
+                var flash = ++_apiKeyCopiedFlash;
+                ApiKeyCopiedText.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+                await Task.Delay(1500);
+                if (flash == _apiKeyCopiedFlash)
+                    ApiKeyCopiedText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(ex, "copying the server API key failed");
+            }
+        }
+
         /// <summary>
         /// Relaunch button (footer, visible only when the server is down):
         /// re-runs the full ensure pipeline — adopt a server if one reappeared,
@@ -2994,9 +3066,12 @@ namespace LlamaApp.Views
             // when the flyout was never shown (Settings is reachable from the
             // tray menu): the header isn't visible, and the first show's
             // EnsureStartupWork resolves the avatar with the latest token.
+            // The API-key requirement may have changed too — refresh the
+            // footer glyph (local-only, so no startup gate).
             w.Closed += (_, _) =>
             {
                 if (_startupWorkDone) _ = LoadAvatarAsync();
+                UpdateApiKeyIndicator();
             };
             w.Activate();
         }
@@ -3691,6 +3766,10 @@ namespace LlamaApp.Views
                 // the watcher filtered out. The /models poller reconciles the
                 // result into the rows.
                 EnrolledFolderWatch.RefreshOnOpen();
+                // The requirement may have changed in Settings while the
+                // flyout was hidden (the post-save apply restarts the server,
+                // but the glyph mirrors the configured state immediately).
+                UpdateApiKeyIndicator();
             }
         }
 
