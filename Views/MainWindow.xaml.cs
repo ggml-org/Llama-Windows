@@ -1970,12 +1970,12 @@ namespace LlamaApp.Views
                 Size = build.Size,
                 SizeBytes = build.SizeBytes,
                 License = family.License,
-                Vision = size.Vision,
                 Quant = build.Quant,
                 Downloadable = true,
                 Brand = family.Brand,
                 Logo = ModelItem.ResolveLogoOrGeneric(family.Brand),
             };
+            item.ApplyInputModalities(size.InputModalities);
             _ = StartVariantDownloadAsync(item);
 
             // Await the preflights (disk + memory): IsDownloading only flips

@@ -12,6 +12,35 @@ namespace LlamaApp.Tests;
 /// </summary>
 public class CatalogTests
 {
+    [Theory]
+    [InlineData("\"vision\":true,", "text,image", true)]
+    [InlineData("\"vision\":false,", "text", false)]
+    [InlineData("", "text", false)]
+    [InlineData("\"inputModalities\":null,", "text", false)]
+    [InlineData("\"vision\":true,\"inputModalities\":[],", "", false)]
+    [InlineData("\"vision\":true,\"inputModalities\":[\"text\"],", "text", false)]
+    [InlineData("\"inputModalities\":[\"image\"],", "image", true)]
+    [InlineData("\"inputModalities\":[\"audio\"],", "audio", false)]
+    [InlineData("\"inputModalities\":[\"video\"],", "video", false)]
+    [InlineData("\"inputModalities\":[\"text\",\"image\",\"audio\",\"video\"],", "text,image,audio,video", true)]
+    [InlineData("\"inputModalities\":[\"future-input\"],", "future-input", false)]
+    public void Published_Inputs_Survive_Source_Generated_Decoding_And_Every_Build(
+        string fields, string inputs, bool vision)
+    {
+        var json = "[{\"sizes\":[{" + fields
+            + "\"builds\":[{\"repo\":\"example/model\",\"quant\":\"Q4_0\"},{\"repo\":\"example/model\",\"quant\":\"Q8_0\"}]}]}]";
+        var families = JsonSerializer.Deserialize(json, HubJsonContext.Default.CatalogFamilyArray)!;
+
+        var repos = Catalog.Flatten(families);
+
+        Assert.Equal(2, repos.Count);
+        Assert.All(repos, repo =>
+        {
+            Assert.Equal(inputs, string.Join(",", repo.InputModalities));
+            Assert.Equal(vision, repo.Vision);
+        });
+    }
+
     // ----- Flatten ----------------------------------------------------------
 
     [Fact]
