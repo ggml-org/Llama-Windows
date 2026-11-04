@@ -2096,7 +2096,10 @@ public sealed class LlamaManager
                 !string.Equals(x.Path, y.Path, StringComparison.Ordinal) ||
                 !string.Equals(x.Source, y.Source, StringComparison.Ordinal) ||
                 x.CanRemove != y.CanRemove ||
-                x.SupportsImage != y.SupportsImage)
+                x.SupportsImage != y.SupportsImage ||
+                !x.InputModalities.SequenceEqual(y.InputModalities, StringComparer.Ordinal) ||
+                x.IsFailed != y.IsFailed ||
+                x.LoadExitCode != y.LoadExitCode)
                 return false;
         }
         return true;
