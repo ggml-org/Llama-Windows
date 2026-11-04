@@ -27,7 +27,8 @@
 
         <!-- Ship only English satellite resources: the ~40 locale folders
              add file count (and some MB) for strings this app doesn't
-             localize. -->
+             localize. (Only covers .NET satellite assemblies — WinUI's .mui
+             payload needs ExcludeNonEnglishWinAppSdkPayload below.) -->
         <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
 
         <!-- WinAppSDK 2.3.1+ XAML performance opt-ins (compiled into the
@@ -59,7 +60,7 @@
              AssemblyVersion). Keep in sync with Identity@Version in
              Package.appxmanifest — single-project MSIX takes the package
              version from the manifest, not from here. -->
-        <Version>0.14.1.0</Version>
+        <Version>0.15.0.0</Version>
         <!-- Never emit a .msixbundle from the per-arch build. Shipping assets
              at several scales (Square44x44Logo.scale-*.png etc.) makes MakePri
              split resources into scale-* resource packages, and the default
@@ -86,6 +87,41 @@
         <Title>Llama</Title>
         <RepositoryUrl>https://github.com/ggml-org/llama-windows</RepositoryUrl>
     </PropertyGroup>
+
+    <!-- Actually ship only English resources: SatelliteResourceLanguages
+         filters .NET satellite assemblies, but WinUI's .mui payload —
+         Microsoft.ui.xaml.dll.mui / Microsoft.UI.Xaml.Phone.dll.mui, one
+         folder per locale, 86 folders / 172 files in the output and the
+         MSIX — is unaffected by it. The files come from the WinAppSDK
+         self-contained payload glob in
+         AddMicrosoftWindowsAppSDKPayloadFilesFromComponents
+         (Microsoft.WindowsAppSDK.SelfContained.targets), which removes
+         @(MicrosoftWindowsAppSDKFilesExcluded) from the payload before
+         wiring it into None (the bin/ copy) and the package — the
+         upstream extension point this uses. The en-* folders stay as a
+         fallback safety net (English WinUI strings are compiled into
+         the DLLs regardless). Verified safe: deps.json carries no .mui
+         entries, so the host never probes for them. Also dropped: the
+         Visual Basic runtime pair — no VB anywhere in the app or its
+         dependencies. Kept on purpose: Microsoft.CSharp (backs the
+         `dynamic` binder, too cheap to risk a MissingMethod in some
+         third-party path), Microsoft.DiaSymReader.Native (the VS
+         managed debugger loads it into the debuggee) and
+         Microsoft.UI.Designer (part of the InteractiveExperiences
+         runtimes-framework payload). -->
+    <Target Name="ExcludeNonEnglishWinAppSdkPayload" BeforeTargets="AddMicrosoftWindowsAppSDKPayloadFilesFromComponents">
+        <ItemGroup>
+            <MicrosoftWindowsAppSDKFilesExcluded
+                Include="%(WindowsAppSdkComponentPackages.Identity)runtimes-framework\win-$(NativePlatform)\native\**\*.mui"
+                Exclude="%(WindowsAppSdkComponentPackages.Identity)runtimes-framework\win-$(NativePlatform)\native\en*\*.mui" />
+        </ItemGroup>
+    </Target>
+    <Target Name="StripUnusedFrameworkDlls" BeforeTargets="_CopyFilesMarkedCopyLocal">
+        <ItemGroup>
+            <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)"
+                Condition="'%(ReferenceCopyLocalPaths.Filename)' == 'Microsoft.VisualBasic.Core' or '%(ReferenceCopyLocalPaths.Filename)' == 'Microsoft.VisualBasic'" />
+        </ItemGroup>
+    </Target>
 
     <ItemGroup>
         <Content Include="Assets\**">
