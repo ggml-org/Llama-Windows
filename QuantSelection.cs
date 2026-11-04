@@ -156,7 +156,6 @@ internal static class QuantSelection
             Parameters = "",
             Size = g.Value.Size > 0 ? MemoryFit.FormatBytes(g.Value.Size) : "",
             SizeBytes = g.Value.Size,
-            Vision = false,
         }).ToList();
     }
 

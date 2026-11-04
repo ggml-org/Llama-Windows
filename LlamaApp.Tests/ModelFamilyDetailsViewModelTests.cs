@@ -17,6 +17,39 @@ namespace LlamaApp.Tests;
 /// </summary>
 public sealed class ModelFamilyDetailsViewModelTests
 {
+    [Fact]
+    public void Inputs_Follow_Selected_Size_And_Download()
+    {
+        var host = new FakeHost();
+        var family = new ModelFamily
+        {
+            Sizes =
+            [
+                new ModelFamilySize { InputModalities = ["text", "audio"], Builds = [Q4] },
+                new ModelFamilySize { InputModalities = ["text", "image", "video"], Builds = [BigQ4] },
+            ],
+        };
+        var vm = new ModelFamilyDetailsViewModel(family, host);
+        Assert.Equal("Text, Audio", vm.InputsText);
+        var notifications = new List<string?>();
+        vm.PropertyChanged += (_, e) => notifications.Add(e.PropertyName);
+
+        vm.SelectSize(vm.Sizes[1]);
+
+        Assert.Equal("Text, Image, Video", vm.InputsText);
+        Assert.Contains(nameof(vm.InputsText), notifications);
+        vm.DownloadVariant(Assert.Single(vm.Variants));
+        Assert.Same(family.Sizes[1], Assert.Single(host.Downloads).size);
+    }
+
+    [Fact]
+    public void Empty_Family_And_Empty_Inputs_Have_Visible_Outcomes()
+    {
+        Assert.Equal("Unknown", new ModelFamilyDetailsViewModel(new ModelFamily(), new FakeHost()).InputsText);
+        var family = new ModelFamily { Sizes = [new ModelFamilySize { InputModalities = [] }] };
+        Assert.Equal("None declared", new ModelFamilyDetailsViewModel(family, new FakeHost()).InputsText);
+    }
+
     private sealed class FakeHost : IModelFamilyDetailsHost
     {
         public HashSet<string> InstalledIds { get; } = new(StringComparer.OrdinalIgnoreCase);

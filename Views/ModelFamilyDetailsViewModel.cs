@@ -304,6 +304,16 @@ namespace LlamaApp.Views
         public string Provider => string.IsNullOrWhiteSpace(Family.Brand) ? "Unknown" : Family.Brand;
         public string License => string.IsNullOrWhiteSpace(Family.License) ? "Unknown" : Family.License;
         public string Format => "GGUF";
+        public string InputsText => SelectedSize?.Size.InputModalities is { } inputs
+            ? inputs.Count == 0 ? "None declared" : string.Join(", ", inputs.Select(input => input switch
+            {
+                "text" => "Text",
+                "image" => "Image",
+                "audio" => "Audio",
+                "video" => "Video",
+                _ => input,
+            }))
+            : "Unknown";
 
         // ---- Size selection ----
 
@@ -322,6 +332,7 @@ namespace LlamaApp.Views
                 _selectedSize = value;
                 if (value != null) value.IsSelected = true;
                 OnPropertyChanged();
+                OnPropertyChanged(nameof(InputsText));
                 RebuildVariants();
             }
         }

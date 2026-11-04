@@ -28,7 +28,6 @@ public sealed class SelectQuantTests
         Parameters = "",
         Size = "",
         SizeBytes = sizeBytes,
-        Vision = false,
     };
 
     // ---- largest-fitting ----

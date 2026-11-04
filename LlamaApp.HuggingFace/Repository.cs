@@ -30,7 +30,8 @@ public record Repository : IModel
     /// <summary>Human-readable download size, e.g. "12.1 GB".</summary>
     public required string Size { get; init; }
 
-    public required bool Vision { get; init; }
+    public IReadOnlyList<string> InputModalities { get; init; } = [];
+    public bool Vision => InputModalities.Contains("image", StringComparer.OrdinalIgnoreCase);
 
     // ---- Extra catalog metadata (not part of IModel) ----
 

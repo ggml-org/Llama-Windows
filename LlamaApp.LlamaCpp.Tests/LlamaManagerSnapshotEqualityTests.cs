@@ -77,6 +77,36 @@ public class LlamaManagerSnapshotEqualityTests
         Assert.False(LlamaManager.SnapshotsEqual(a, b));
     }
 
+    [Theory]
+    [InlineData("audio")]
+    [InlineData("video")]
+    [InlineData("future-input")]
+    public void Input_Modality_Changes_Are_Published(string modality)
+    {
+        var before = Model() with { InputModalities = ["text"] };
+        var after = before with { InputModalities = ["text", modality] };
+        Assert.False(LlamaManager.SnapshotsEqual([before], [after]));
+        Assert.False(LlamaManager.SnapshotsEqual([after], [before]));
+    }
+
+    [Fact]
+    public void Separate_Modality_Lists_With_Equal_Contents_Are_Equal()
+    {
+        var a = Model() with { InputModalities = new[] { "text", "audio", "video" } };
+        var b = Model() with { InputModalities = new[] { "text", "audio", "video" } };
+        Assert.True(LlamaManager.SnapshotsEqual([a], [b]));
+    }
+
+    [Fact]
+    public void Failure_Details_Are_Published_Without_A_Status_Change()
+    {
+        var before = Model();
+        var failed = before with { IsFailed = true, LoadExitCode = 7 };
+        Assert.False(LlamaManager.SnapshotsEqual([before], [failed]));
+        Assert.False(LlamaManager.SnapshotsEqual([failed], [failed with { LoadExitCode = 9 }]));
+        Assert.False(LlamaManager.SnapshotsEqual([failed], [failed with { IsFailed = false }]));
+    }
+
     [Fact]
     public void Load_State_Flip_Is_A_Change()
     {
