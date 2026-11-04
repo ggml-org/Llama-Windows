@@ -30,8 +30,11 @@
          in a UserControl. Window-level accelerators defined here are processed by
          the input system regardless of focus — they fire even when focus is inside
          the nested WebView2 (a separate HWND), which a Grid/Window KeyDown handler
-         would miss. -->
-    <UserControl>
+         would miss.
+         KeyboardAcceleratorPlacementMode="Hidden": otherwise WinUI shows the
+         accelerator's key ("Esc") as a tooltip when hovering anywhere in the
+         window that has no tooltip of its own. -->
+    <UserControl KeyboardAcceleratorPlacementMode="Hidden">
         <UserControl.KeyboardAccelerators>
             <KeyboardAccelerator Key="Escape" Invoked="EscapeAccelerator_Invoked" />
         </UserControl.KeyboardAccelerators>

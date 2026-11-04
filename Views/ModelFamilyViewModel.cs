@@ -111,32 +111,11 @@ namespace LlamaApp.Views
             }
         }
 
-        /// <summary>
-        /// The row tooltip: the family name plus what it is — and the
-        /// <see cref="FitNote"/> on a last line when the fit evaluation
-        /// flagged every build as too big for this machine. Notifies (via
-        /// <see cref="FitsOnDevice"/>/<see cref="FitNote"/>) because the fit
-        /// evaluation lands after the rows are rendered.
-        /// </summary>
-        public string RowToolTip
-        {
-            get
-            {
-                var head = string.IsNullOrWhiteSpace(Description)
-                    ? Name
-                    : Name + "\n" + Description;
-                return string.IsNullOrWhiteSpace(FitNote)
-                    ? head
-                    : head + "\n" + FitNote;
-            }
-        }
-
         // ---- Device-fit state (dims family rows the machine can't run) ----
         // Mirrors ModelItem's fit state: the evaluation
         // (MainWindow.EvaluateFamilyFitsAsync) lands after the rows render.
 
         private bool _fitsOnDevice = true;
-        private string? _fitNote;
 
         /// <summary>
         /// Whether this machine can run any build of the family — defaults to
@@ -154,24 +133,6 @@ namespace LlamaApp.Views
                 _fitsOnDevice = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(RowOpacity));
-                OnPropertyChanged(nameof(RowToolTip));
-            }
-        }
-
-        /// <summary>
-        /// Short reason the family doesn't fit, surfaced as the tooltip's
-        /// last line; <c>null</c> while some build fits or the evaluation
-        /// hasn't run.
-        /// </summary>
-        public string? FitNote
-        {
-            get => _fitNote;
-            set
-            {
-                if (_fitNote == value) return;
-                _fitNote = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(RowToolTip));
             }
         }
 
