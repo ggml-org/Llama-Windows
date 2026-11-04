@@ -213,6 +213,30 @@
                                           HorizontalAlignment="Center"
                                           VerticalAlignment="Center" />
                             </Border>
+                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="4,0"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind Model.Audio, Mode=OneWay}"
+                                    ToolTipService.ToolTip="Supports audio input">
+                                <TextBlock Text="Audio"
+                                           FontSize="10"
+                                           VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Border>
+                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="4,0"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind Model.Video, Mode=OneWay}"
+                                    ToolTipService.ToolTip="Supports video input">
+                                <TextBlock Text="Video"
+                                           FontSize="10"
+                                           VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Border>
                             <!-- Subtitle: the file size at rest (the params
                                  ride in the chip ahead of it); while a
                                  download runs, the live detail line instead

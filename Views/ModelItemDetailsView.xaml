@@ -70,12 +70,11 @@
                 <StackPanel Grid.Column="1"
                             VerticalAlignment="Center"
                             Spacing="2">
-                    <!-- Name with the tags inline: the name column is capped so
-                         a long name ellipsizes instead of pushing the chips
-                         out of view. -->
+                    <!-- Let the name shrink for all input badges; keep the cap
+                         so a long name cannot push the chips out of view. -->
                     <Grid ColumnSpacing="6">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" MaxWidth="215" />
+                            <ColumnDefinition Width="*" MaxWidth="215" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0"
@@ -119,6 +118,30 @@
                                           FontSize="11"
                                           Opacity="0.55"
                                           VerticalAlignment="Center" />
+                            </Border>
+                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="4,0"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind ViewModel.Model.Audio, Mode=OneWay}"
+                                    ToolTipService.ToolTip="Supports audio input">
+                                <TextBlock Text="Audio"
+                                           FontSize="10"
+                                           VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </Border>
+                            <Border CornerRadius="{ThemeResource ControlCornerRadius}"
+                                    Background="{ThemeResource ControlFillColorSecondaryBrush}"
+                                    Padding="4,0"
+                                    Height="16"
+                                    VerticalAlignment="Center"
+                                    Visibility="{x:Bind ViewModel.Model.Video, Mode=OneWay}"
+                                    ToolTipService.ToolTip="Supports video input">
+                                <TextBlock Text="Video"
+                                           FontSize="10"
+                                           VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             </Border>
                         </StackPanel>
                     </Grid>
