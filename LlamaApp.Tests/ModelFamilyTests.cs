@@ -15,6 +15,31 @@ namespace LlamaApp.Tests;
 /// </summary>
 public class ModelFamilyTests
 {
+    [Fact]
+    public void Public_Family_Flatten_Preserves_Size_Inputs()
+    {
+        var family = Family("Example", sizes:
+        [
+            new ModelFamilySize
+            {
+                Name = "Small", InputModalities = ["text", "audio"],
+                Builds = [Build("Q4_0", "2 GB", 2_000_000_000, "example/small")],
+            },
+            new ModelFamilySize
+            {
+                Name = "Large", InputModalities = ["text", "image", "video"],
+                Builds = [Build("Q8_0", "4 GB", 4_000_000_000, "example/large")],
+            },
+        ]);
+
+        var repos = Catalog.Flatten((IReadOnlyList<ModelFamily>)[family]);
+
+        Assert.Equal(new[] { "text", "audio" }, repos[0].InputModalities);
+        Assert.False(repos[0].Vision);
+        Assert.Equal(new[] { "text", "image", "video" }, repos[1].InputModalities);
+        Assert.True(repos[1].Vision);
+    }
+
     private static ModelFamily Family(
         string name, bool featured = false, params ModelFamilySize[] sizes) => new()
     {

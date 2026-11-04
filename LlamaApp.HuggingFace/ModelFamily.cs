@@ -40,8 +40,10 @@ namespace LlamaApp.HuggingFace
         /// <summary>Human-readable parameter count, e.g. "4B".</summary>
         public string Params { get; init; } = "";
 
-        /// <summary>Whether this size supports image input.</summary>
-        public bool Vision { get; init; }
+        /// <summary>Declared inputs for this size, independent of sibling sizes.</summary>
+        public IReadOnlyList<string> InputModalities { get; init; } = [];
+
+        public bool Vision => InputModalities.Contains("image", StringComparer.OrdinalIgnoreCase);
 
         /// <summary>The downloadable builds (one per quant) in catalog order.</summary>
         public IReadOnlyList<ModelFamilyBuild> Builds { get; init; } = new List<ModelFamilyBuild>();

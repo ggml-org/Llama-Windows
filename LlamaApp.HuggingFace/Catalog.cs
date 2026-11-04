@@ -74,7 +74,9 @@ public sealed class Catalog : IModelSource
             {
                 Name = size.Name,
                 Params = size.Params,
-                Vision = size.Vision,
+                // Released v1 catalogs contain only vision. Normalize here;
+                // an explicit list (including []) overrides the legacy flag.
+                InputModalities = size.InputModalities ?? (size.Vision ? ["text", "image"] : ["text"]),
                 Builds =
                 [
                     .. size.Builds.Select(build => new ModelFamilyBuild
@@ -107,7 +109,7 @@ public sealed class Catalog : IModelSource
                 License = family.License,
                 Parameters = size.Params,
                 Size = build.Size,
-                Vision = size.Vision,
+                InputModalities = size.InputModalities,
                 DisplayName = size.Name,
                 Brand = family.Brand,
                 Quant = build.Quant,
@@ -220,7 +222,7 @@ public sealed class Catalog : IModelSource
                             // Prefer the actual on-disk size over the catalog's
                             // (which is the download size, not necessarily what landed).
                             Size = sizeBytes.HasValue ? FormatBytes(sizeBytes.Value) : matched.Size,
-                            Vision = matched.Vision,
+                            InputModalities = matched.InputModalities,
                             DisplayName = matched.DisplayName,
                             Brand = matched.Brand,
                             Quant = matched.Quant,
@@ -238,7 +240,6 @@ public sealed class Catalog : IModelSource
                             License = "Unknown",
                             Parameters = "",
                             Size = sizeBytes.HasValue ? FormatBytes(sizeBytes.Value) : "",
-                            Vision = false,
                             DisplayName = fileName,
                             Brand = repoId.Split('/', StringSplitOptions.None).FirstOrDefault(),
                             Quant = ExtractQuant(fileName),
@@ -330,6 +331,7 @@ public sealed class Catalog : IModelSource
         [JsonPropertyName("name")] public string Name { get; set; } = "";
         [JsonPropertyName("params")] public string Params { get; set; } = "";
         [JsonPropertyName("vision")] public bool Vision { get; set; }
+        [JsonPropertyName("inputModalities")] public string[]? InputModalities { get; set; }
         [JsonPropertyName("builds")] public CatalogBuild[] Builds { get; set; } = [];
     }
 
