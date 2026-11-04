@@ -46,6 +46,61 @@ public sealed class ModelsPresetSpecTests
             ini);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void EnrolledModel_MergesPathsAndOverridesIntoOneSection(bool hasContext, bool hasSpec)
+    {
+        var ini = Render(
+            contexts: hasContext ? new Dictionary<string, int> { ["local"] = 4096 } : NoContexts,
+            specs: hasSpec ? new Dictionary<string, string> { ["local"] = "draft-mtp" } : [],
+            enrolledModels:
+            [
+                new("local", @"D:\models\local.gguf",
+                    @"D:\models\mmproj-local.gguf", @"D:\models\mtp-local.gguf"),
+            ]);
+
+        Assert.Equal(
+            "[local]\n" +
+            (hasContext ? "ctx-size = 4096\n" : "") +
+            (hasSpec ? "spec-type = draft-mtp\n" : "") +
+            "model = D:\\models\\local.gguf\n" +
+            "mmproj = D:\\models\\mmproj-local.gguf\n" +
+            "spec-draft-model = D:\\models\\mtp-local.gguf\n\n",
+            ini);
+    }
+
+    [Fact]
+    public void MixedModelSources_KeepDistinctModelsInSeparateSections()
+    {
+        var ini = Render(
+            contexts: new Dictionary<string, int>
+            {
+                ["org/repo:Q4_0"] = 4096,
+                ["local"] = 8192,
+            },
+            specs: new Dictionary<string, string>
+            {
+                ["local"] = "draft-mtp",
+                ["org/other:Q8_0"] = "draft-dflash",
+            },
+            enrolledModels:
+            [
+                new("local", @"D:\models\local.gguf", null, null),
+                new("plain", @"D:\models\plain.gguf", null, null),
+            ]);
+
+        Assert.Equal(
+            "[org/repo:Q4_0]\nctx-size = 4096\n\n" +
+            "[local]\nctx-size = 8192\nspec-type = draft-mtp\n" +
+            "model = D:\\models\\local.gguf\n\n" +
+            "[org/other:Q8_0]\nspec-type = draft-dflash\n\n" +
+            "[plain]\nmodel = D:\\models\\plain.gguf\n\n",
+            ini);
+    }
+
     [Fact]
     public void NegativeCacheEntries_AreNotRendered()
     {
@@ -140,6 +195,7 @@ public sealed class ModelsPresetSpecTests
 
     private static string Render(
         IReadOnlyDictionary<string, int> contexts,
-        IReadOnlyDictionary<string, string> specs) =>
-        Llama.LlamaManager.RenderModelsPresetIni(contexts, specs);
+        IReadOnlyDictionary<string, string> specs,
+        IEnumerable<Llama.EnrolledFolderModel>? enrolledModels = null) =>
+        Llama.LlamaManager.RenderModelsPresetIni(contexts, specs, enrolledModels);
 }

@@ -1564,11 +1564,11 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Renders the llama.cpp <c>--models-preset</c> INI: one
-    /// <c>[repo:quant]</c> section per model that has a custom context length
-    /// and/or a speculative-decoding spec type, as
-    /// <c>ctx-size = N</c> / <c>spec-type = draft-…</c> lines. A model with
-    /// both appears once with both lines. Ids that can't head a section
-    /// safely (brackets, control characters) and values that can't sit on a
+    /// <c>[id]</c> section per model, merging custom context lengths,
+    /// speculative-decoding types, and enrolled model/sidecar paths.
+    /// Repeated sections would discard earlier keys in llama.cpp's parser.
+    /// Ids that can't head a section safely (brackets, control characters)
+    /// and values that can't sit on a
     /// line safely are dropped rather than rendered — see
     /// <see cref="IsSafeSectionId"/>/<see cref="IsSafeIniValue"/>. Pure so the
     /// exact shape — the section spelling and key names the router's INI
@@ -1577,29 +1577,31 @@ public sealed class LlamaManager
     /// </summary>
     internal static string RenderModelsPresetIni(
         IEnumerable<KeyValuePair<string, int>> contextLengths,
-        IEnumerable<KeyValuePair<string, string>>? speculativeTypes = null)
+        IEnumerable<KeyValuePair<string, string>>? speculativeTypes = null,
+        IEnumerable<EnrolledFolderModel>? enrolledModels = null)
     {
+        var contexts = contextLengths.Where(kv => kv.Value > 0).ToDictionary();
         var spec = speculativeTypes?.Where(kv => IsSafeIniValue(kv.Value)).ToDictionary() ?? [];
+        var enrolled = enrolledModels?.ToDictionary(model => model.Name) ?? [];
 
         var sb = new StringBuilder();
-        foreach (var (id, ctx) in contextLengths)
-        {
-            if (ctx <= 0 || !IsSafeSectionId(id)) continue;
-            sb.Append('[').Append(id).Append(']').Append('\n');
-            sb.Append("ctx-size = ").Append(ctx).Append('\n');
-            if (spec.TryGetValue(id, out var specType))
-            {
-                sb.Append("spec-type = ").Append(specType).Append('\n');
-                spec.Remove(id);
-            }
-            sb.Append('\n');
-        }
-        // Models with only a spec type (no custom context length).
-        foreach (var (id, specType) in spec)
+        foreach (var id in contexts.Keys.Concat(spec.Keys).Concat(enrolled.Keys).Distinct(StringComparer.Ordinal))
         {
             if (!IsSafeSectionId(id)) continue;
             sb.Append('[').Append(id).Append(']').Append('\n');
-            sb.Append("spec-type = ").Append(specType).Append('\n').Append('\n');
+            if (contexts.TryGetValue(id, out var ctx))
+                sb.Append("ctx-size = ").Append(ctx).Append('\n');
+            if (spec.TryGetValue(id, out var specType))
+                sb.Append("spec-type = ").Append(specType).Append('\n');
+            if (enrolled.TryGetValue(id, out var model))
+            {
+                sb.Append("model = ").Append(model.ModelPath).Append('\n');
+                if (model.MmprojPath is not null)
+                    sb.Append("mmproj = ").Append(model.MmprojPath).Append('\n');
+                if (model.DraftPath is not null)
+                    sb.Append("spec-draft-model = ").Append(model.DraftPath).Append('\n');
+            }
+            sb.Append('\n');
         }
         return sb.ToString();
     }
@@ -1698,8 +1700,7 @@ public sealed class LlamaManager
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(ContextPresetPath)!);
                 File.WriteAllText(ContextPresetPath,
-                    RenderModelsPresetIni(contextItems, specItems) +
-                    EnrolledFolderScanner.RenderSections(enrolled));
+                    RenderModelsPresetIni(contextItems, specItems, enrolled));
                 return ContextPresetPath;
             }
             catch (Exception ex)
