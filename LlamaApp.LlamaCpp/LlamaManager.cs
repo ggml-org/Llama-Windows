@@ -1307,6 +1307,9 @@ public sealed class LlamaManager
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
+            // A tray app keeps its old environment after an installer updates PATH.
+            // Give the server and its decoder children the same search path as discovery.
+            psi.Environment["PATH"] = EffectivePath();
             // Per-model context lengths are merged into each model's child args
             // via --models-preset (see BuildServeArguments). Written fresh every
             // launch from the current preferences.
@@ -3586,6 +3589,27 @@ public sealed class LlamaManager
             Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User),
             Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine));
 
+    private static string EffectivePath() => EffectivePath(
+        Environment.GetEnvironmentVariable("PATH"),
+        Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User),
+        Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine));
+
+    internal static string EffectivePath(string? processPath, string? userPath, string? machinePath)
+    {
+        var directories = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pathEnv in new[] { processPath, userPath, machinePath })
+        {
+            if (string.IsNullOrEmpty(pathEnv)) continue;
+            foreach (var rawDir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var dir = rawDir.Trim().Trim('"');
+                if (dir.Length > 0 && !dir.Contains('\0') && seen.Add(dir)) directories.Add(dir);
+            }
+        }
+        return string.Join(Path.PathSeparator, directories);
+    }
+
     /// <summary>
     /// Pure core of <see cref="FindOnPath(string)"/>: searches the three PATH
     /// lists in order (process, user, machine), first hit wins, directories
@@ -3594,21 +3618,15 @@ public sealed class LlamaManager
     /// </summary>
     internal static string? FindOnPath(string exeName, string? processPath, string? userPath, string? machinePath)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var pathEnv in new[] { processPath, userPath, machinePath })
+        foreach (var dir in EffectivePath(processPath, userPath, machinePath).Split(
+                     Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
-            if (string.IsNullOrEmpty(pathEnv)) continue;
-            foreach (var rawDir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            try
             {
-                var dir = rawDir.Trim().Trim('"');
-                if (dir.Length == 0 || !seen.Add(dir)) continue;
-                try
-                {
-                    var candidate = Path.Combine(dir, exeName);
-                    if (File.Exists(candidate)) return candidate;
-                }
-                catch { /* Malformed PATH entry — skip. */ }
+                var candidate = Path.Combine(dir, exeName);
+                if (File.Exists(candidate)) return candidate;
             }
+            catch { /* Malformed PATH entry — skip. */ }
         }
         return null;
     }
