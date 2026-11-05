@@ -1179,20 +1179,45 @@
             <StackPanel x:Name="HubResultsPanel"
                         Visibility="Collapsed"
                         Spacing="4">
-                <StackPanel Orientation="Horizontal"
-                            HorizontalAlignment="Center"
-                            Spacing="6">
-                    <local:ModelProgressRing x:Name="HubStatusRing"
-                                             Width="14" Height="14"
-                                             IsIndeterminate="True"
-                                             Visibility="Collapsed"
-                                             VerticalAlignment="Center" />
-                    <TextBlock x:Name="HubStatusText"
-                               FontSize="11"
-                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               TextTrimming="CharacterEllipsis"
-                               VerticalAlignment="Center" />
-                </StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <!-- Symmetric outer columns keep the status centered
+                             while reserving a non-overlapping slot for ×. -->
+                        <ColumnDefinition Width="24" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="24" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="1"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Center"
+                                Spacing="6">
+                        <local:ModelProgressRing x:Name="HubStatusRing"
+                                                 Width="14" Height="14"
+                                                 IsIndeterminate="True"
+                                                 Visibility="Collapsed"
+                                                 VerticalAlignment="Center" />
+                        <TextBlock x:Name="HubStatusText"
+                                   FontSize="11"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <Button Grid.Column="2"
+                            Click="HubResultsClose_Click"
+                            Padding="4"
+                            MinWidth="0" MinHeight="0"
+                            Width="24" Height="24"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            AutomationProperties.Name="Hide search results"
+                            ToolTipService.ToolTip="Hide search results">
+                        <FontIcon Glyph="&#xE711;"
+                                  FontSize="10"
+                                  Opacity="0.6" />
+                    </Button>
+                </Grid>
                 <ListView x:Name="HubResultsList"
                           MaxHeight="190"
                           ItemsSource="{x:Bind HubResults}"
