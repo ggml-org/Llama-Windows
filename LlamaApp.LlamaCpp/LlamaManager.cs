@@ -1187,21 +1187,49 @@ public sealed class LlamaManager
     /// </summary>
     internal static string FormatStartFailureMessage(string? stderrTail)
     {
-        if (string.IsNullOrWhiteSpace(stderrTail))
-            return "The llama server failed to start.";
+        var chosen = SelectStartFailureLine(stderrTail);
+        return chosen is null
+            ? "The llama server failed to start."
+            : $"The llama server failed to start: {chosen}";
+    }
+
+    /// <summary>
+    /// Endpoint-aware failure formatting. A bind conflict gets an actionable
+    /// message even when llama.cpp stays alive after logging it; a readiness
+    /// timeout is explicit about the bounded health check rather than looking
+    /// like an indefinite launch. The original stderr line remains as detail.
+    /// </summary>
+    internal static string FormatStartFailureMessage(
+        string? stderrTail, int serverPort, string listenAddress, bool timedOut)
+    {
+        if (ServerLaunch.IsBindFailure(stderrTail))
+            return ServerLaunch.PortInUseMessage(listenAddress, serverPort);
+
+        if (timedOut)
+        {
+            var message = ServerLaunch.TimeoutMessage(
+                listenAddress, serverPort, TimeSpan.FromSeconds(15));
+            var detail = SelectStartFailureLine(stderrTail);
+            return detail is null ? message : $"{message} Last server output: {detail}";
+        }
+
+        return FormatStartFailureMessage(stderrTail);
+    }
+
+    private static string? SelectStartFailureLine(string? stderrTail)
+    {
+        if (string.IsNullOrWhiteSpace(stderrTail)) return null;
 
         var lines = stderrTail
             .Split('\n')
             .Select(line => line.Trim().TrimEnd('\r'))
             .Where(line => line.Length > 0)
             .ToArray();
-        if (lines.Length == 0)
-            return "The llama server failed to start.";
+        if (lines.Length == 0) return null;
 
         var errorLine = lines.LastOrDefault(line =>
             line.Contains("error", StringComparison.OrdinalIgnoreCase));
-        var chosen = errorLine ?? lines[^1];
-        return $"The llama server failed to start: {chosen}";
+        return errorLine ?? lines[^1];
     }
 
     /// <summary>
@@ -1284,6 +1312,21 @@ public sealed class LlamaManager
         {
             Log.Error($"custom serve arguments rejected: {reservedError}");
             FailureMessage = reservedError;
+            ServerStatus = ServerState.Failed;
+            return false;
+        }
+
+        // A healthy server was deliberately adopted above. If the endpoint is
+        // instead held by something that cannot answer a health check, fail
+        // before spawning a child that can only lose the bind. This snapshot
+        // is advisory (the child's bind remains authoritative) and never
+        // selects a different port: every app URL and health probe is bound to
+        // the configured endpoint, so silently changing it would split the
+        // client from the server.
+        if (ServerLaunch.IsPortOccupied(ListenAddress, ServerPort))
+        {
+            FailureMessage = ServerLaunch.PortInUseMessage(ListenAddress, ServerPort);
+            Log.Error(FailureMessage);
             ServerStatus = ServerState.Failed;
             return false;
         }
@@ -1407,7 +1450,7 @@ public sealed class LlamaManager
             // We pass `proc` so the wait fast-fails if the process exits before
             // becoming ready (e.g. it couldn't bind the port because a sibling
             // already did) instead of polling for the full 15s timeout.
-            if (await WaitForPortAsync(proc, TimeSpan.FromSeconds(15), cancel))
+            if (await WaitForPortAsync(proc, TimeSpan.FromSeconds(15), cancel, stderrTail))
             {
                 Log.Info("llama server is reachable");
                 FailureMessage = null;
@@ -1415,31 +1458,42 @@ public sealed class LlamaManager
                 return true;
             }
 
-            // Timed out (or the process exited early). DON'T leave the spawned
+            // Timed out, reported a bind failure, or exited early. DON'T leave the spawned
             // process running: a prior timeout-then-abandon left the server
             // alive, and a later app start (or this same retry) spawned a
             // second on the same port → two servers eating RAM. Kill ours so
             // the port is free for the next attempt. StopServer sets Stopped
             // before killing (deliberate intent — the supervisor never leaves
             // Stopped on its own), then we surface the failure.
-            Log.Error("llama server failed to become ready within 15s (port probe timed out)");
+            Log.Error("llama server launch did not pass its health check; collecting server output");
             // The pipes close when the process exits, so the drain tasks finish
             // almost immediately in the died-at-startup case; the timeout only
             // matters for a genuinely hung server, where we surface whatever
             // stderr arrived before giving up.
             try { await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromMilliseconds(500)); }
             catch { /* snapshot whatever arrived */ }
-            FailureMessage = FormatStartFailureMessage(stderrTail.Snapshot());
+            var timedOut = !proc.HasExited && !stderrTail.HasBindFailure;
+            FailureMessage = FormatStartFailureMessage(
+                stderrTail.Snapshot(), ServerPort, ListenAddress, timedOut);
+            Log.Error(FailureMessage);
             StopServer();
             ServerStatus = ServerState.Failed;
             return false;
         }
         catch (OperationCanceledException)
         {
+            // WaitForPortAsync observes caller cancellation. Cancellation is
+            // also a failed launch: never rethrow while leaving our child and
+            // its listening socket behind for the next attempt to collide with.
+            if (_serverProcess is not null) StopServer();
             throw;
         }
         catch (Exception ex)
         {
+            // The same ownership rule applies to drain/setup/probe failures
+            // after Process.Start: clean up only a process spawned by this
+            // attempt, never an unrelated process using the configured port.
+            if (_serverProcess is not null) StopServer();
             Log.Error(ex, "llama server start threw");
             FailureMessage = ex.Message;
             ServerStatus = ServerState.Failed;
@@ -1514,11 +1568,7 @@ public sealed class LlamaManager
             // THIS process — a racing instance may have rewritten it for a
             // newer server.
             if (ReadPidFile(PidFilePath) == proc.Id) DeletePidFile();
-            if (!proc.HasExited)
-            {
-                try { proc.Kill(entireProcessTree: true); }
-                catch (Exception ex) { Log.Warn(ex, "best-effort server kill failed"); }
-            }
+            ServerLaunch.TerminateProcessTree(proc, TimeSpan.FromSeconds(2));
             return;
         }
 
@@ -1530,7 +1580,8 @@ public sealed class LlamaManager
             try
             {
                 Log.Info($"killing managed llama server by PID file (pid {managedPid})");
-                Process.GetProcessById(managedPid).Kill(entireProcessTree: true);
+                using var adoptedProcess = Process.GetProcessById(managedPid);
+                ServerLaunch.TerminateProcessTree(adoptedProcess, TimeSpan.FromSeconds(2));
             }
             catch (Exception ex) { Log.Warn(ex, $"best-effort managed server kill failed (pid {managedPid})"); }
         }
@@ -1764,11 +1815,21 @@ public sealed class LlamaManager
         private const int Capacity = 20;
         private readonly object _gate = new();
         private readonly Queue<string> _lines = new();
+        private bool _hasBindFailure;
+
+        public bool HasBindFailure
+        {
+            get { lock (_gate) return _hasBindFailure; }
+        }
 
         public void Add(string line)
         {
             lock (_gate)
             {
+                // Some llama.cpp builds report EADDRINUSE but remain alive.
+                // Remember the diagnostic so startup can fail immediately
+                // instead of waiting for a health check that can never pass.
+                _hasBindFailure |= ServerLaunch.IsBindFailure(line);
                 _lines.Enqueue(line);
                 while (_lines.Count > Capacity)
                     _lines.Dequeue();
@@ -1889,14 +1950,22 @@ public sealed class LlamaManager
     /// died right after launch (e.g., it couldn't bind the port because a
     /// sibling already did) so we don't sit out the full timeout before tearing
     /// down — and we don't keep around a dead-but-tracked process reference.
+    /// A captured bind diagnostic also fast-fails llama.cpp builds that log the
+    /// conflict but remain alive without ever printing a listening line.
     /// </summary>
-    private async Task<bool> WaitForPortAsync(Process proc, TimeSpan timeout, CancellationToken cancel)
+    private async Task<bool> WaitForPortAsync(
+        Process proc, TimeSpan timeout, CancellationToken cancel, ServerOutputTail stderrTail)
     {
         var deadline = DateTime.UtcNow + timeout;
 
         while (DateTime.UtcNow < deadline)
         {
             cancel.ThrowIfCancellationRequested();
+            if (stderrTail.HasBindFailure)
+            {
+                Log.Warn($"llama server could not bind {ListenAddress}:{ServerPort}");
+                return false;
+            }
             if (proc.HasExited)
             {
                 Log.Warn($"llama server process exited before becoming ready (code={proc.ExitCode})");
