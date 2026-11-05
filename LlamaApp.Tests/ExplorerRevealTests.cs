@@ -4,10 +4,9 @@ using Xunit;
 namespace LlamaApp.Tests;
 
 /// <summary>
-/// Unit tests for <see cref="ExplorerReveal"/> — the "show model file in
-/// Explorer" launch decision and the explorer.exe argument building.
-/// Explorer's argument parsing is non-standard, and the path may come from a
-/// server report, so the quoting/refusal rules are pinned here.
+/// Unit tests for <see cref="ExplorerReveal"/> — the "show model folder in
+/// Explorer" launch decision. The path may come from a server report, so the
+/// folder-only launch and malformed-path refusal rules are pinned here.
 /// </summary>
 public class ExplorerRevealTests : IDisposable
 {
@@ -32,16 +31,19 @@ public class ExplorerRevealTests : IDisposable
     }
 
     [Fact]
-    public void An_Existing_File_Reveals_With_Select()
+    public void An_Existing_File_Opens_Its_Folder_Without_Selecting_The_Llm()
     {
         var file = Path.Combine(_root, "model.gguf");
         File.WriteAllText(file, "1");
+        File.WriteAllText(Path.Combine(_root, "mmproj.gguf"), "sidecar");
 
         var reveal = ExplorerReveal.BuildReveal(file);
 
         Assert.NotNull(reveal);
-        Assert.Equal("explorer.exe", reveal!.Value.FileName);
-        Assert.Equal("/select,\"" + file + "\"", reveal.Value.Arguments);
+        Assert.Equal(_root, reveal!.Value.FileName);
+        Assert.Equal("", reveal.Value.Arguments);
+        Assert.DoesNotContain("/select", reveal.Value.Arguments);
+        Assert.DoesNotContain("model.gguf", reveal.Value.FileName);
     }
 
     [Fact]
@@ -64,4 +66,11 @@ public class ExplorerRevealTests : IDisposable
     [Fact]
     public void A_Quote_In_The_Path_Is_Refused()
         => Assert.Null(ExplorerReveal.BuildReveal(_root + "we\\ird\"name.gguf"));
+
+    [Fact]
+    public void Malformed_Server_Paths_Fail_Closed_Without_Throwing()
+    {
+        Assert.Null(ExplorerReveal.BuildReveal("bad\0path.gguf"));
+        Assert.Null(ExplorerReveal.BuildReveal("relative-model.gguf"));
+    }
 }

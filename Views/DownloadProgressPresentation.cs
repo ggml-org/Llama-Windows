@@ -75,4 +75,43 @@ namespace LlamaApp.Views
                 ? instantaneousBytesPerSecond
                 : previousBytesPerSecond * 0.7 + instantaneousBytesPerSecond * 0.3;
     }
+
+    /// <summary>
+    /// Per-attempt byte-rate sampler. Duplicate aggregate byte counts are common
+    /// when an SSE event concerns a different file: advancing the timestamp for
+    /// those duplicates starves the next real sample of elapsed time and makes
+    /// the speed/ETA disappear. Regressive samples are ignored for the same
+    /// reason; a deliberate retry gets a fresh sampler and starts cleanly.
+    /// </summary>
+    internal sealed class DownloadSpeedEstimator
+    {
+        private long _lastBytes;
+        private long _lastSampleMs = -1;
+
+        /// <summary>The current EMA-smoothed rate; zero until two useful samples.</summary>
+        public double BytesPerSecond { get; private set; }
+
+        /// <summary>Observes an aggregate byte count at a TickCount64 timestamp.</summary>
+        public double Observe(long downloadedBytes, long nowMs)
+        {
+            if (downloadedBytes <= 0) return BytesPerSecond;
+
+            if (_lastSampleMs < 0)
+            {
+                _lastBytes = downloadedBytes;
+                _lastSampleMs = nowMs;
+                return BytesPerSecond;
+            }
+
+            if (downloadedBytes <= _lastBytes) return BytesPerSecond;
+
+            var instantaneous = (downloadedBytes - _lastBytes)
+                * 1000.0 / Math.Max(1, nowMs - _lastSampleMs);
+            BytesPerSecond = DownloadProgressPresentation.SmoothSpeed(
+                BytesPerSecond, instantaneous);
+            _lastBytes = downloadedBytes;
+            _lastSampleMs = nowMs;
+            return BytesPerSecond;
+        }
+    }
 }

@@ -473,12 +473,22 @@ public class ModelItemStateMachineTests
     // ----- Download progress captions --------------------------------------
 
     [Fact]
-    public void Download_Is_Indeterminate_Until_First_Bytes()
+    public void Deep_Link_Download_Is_Determinate_As_Soon_As_Total_Is_Known()
     {
-        var item = new ModelItem { IsDownloading = true };
+        // Deep-link rows are populated by the external SSE watcher. Its first
+        // useful report can be 0/total: that is determinate 0%, not a spinner.
+        var item = new ModelItem { Name = "a/b", IsDownloading = true };
 
         Assert.True(item.IsIndeterminateDownload);
         Assert.False(item.DownloadPercentTextVisible);
+
+        item.DownloadTotalBytes = 12_100_000_000;
+
+        Assert.True(item.HasDeterminateDownload);
+        Assert.False(item.IsIndeterminateDownload);
+        Assert.True(item.DownloadPercentTextVisible);
+        Assert.Equal("0%", item.DownloadProgressText);
+        Assert.Contains("downloading 0%", item.RowAccessibleName);
 
         item.DownloadFraction = 0.5;
 

@@ -142,6 +142,11 @@ namespace LlamaApp.Views
         // still waiting for the server, so we serialize population passes.
         private int _loadingLocalModels;
 
+        // Running is not proof that the initial GET /models populate finished.
+        // Keep the empty state in a loading presentation until it has, avoiding
+        // a false "No models installed yet" flash on every later launch.
+        private bool _initialModelLoadCompleted;
+
         // Index of Available rows by the server model id ("repo:quant"), so the
         // ModelsChanged poller can update each row's load state in place instead
         // of rebuilding the list every second (which would flicker and lose
@@ -480,6 +485,7 @@ namespace LlamaApp.Views
                 LocalModels.Add(m);
             }
 
+            _initialModelLoadCompleted = true;
             UpdateEmptyState();
         }
 
@@ -845,7 +851,10 @@ namespace LlamaApp.Views
                 // crash / failed install, say that instead of claiming the
                 // server is still starting forever.
                 NoLocalModelsText.Text = EmptyStatePresentation.Describe(
-                    LlamaManager.Shared.ServerStatus, LlamaManager.Shared.State);
+                    LlamaManager.Shared.ServerStatus,
+                    LlamaManager.Shared.State,
+                    LlamaManager.Shared.BinaryPath is not null,
+                    _initialModelLoadCompleted);
             }
         }
 
@@ -1064,6 +1073,9 @@ namespace LlamaApp.Views
             // Clear any stale failure (and its classified detail) from a
             // previous failed attempt — a new download starts clean.
             item.DownloadFailed = false;
+            // A retry/resume is a genuinely new attempt: clear the previous
+            // high-water fraction now rather than leaving it up until SSE data.
+            item.DownloadFraction = 0;
             item.DownloadedBytes = 0;
             item.DownloadTotalBytes = 0;
             item.DownloadBytesPerSecond = 0;
@@ -1077,8 +1089,7 @@ namespace LlamaApp.Views
             // The toast updates even less often: ~1/sec is plenty for a
             // progress bar, and every update is a notification-platform call.
             long lastToastUpdateMs = 0;
-            long lastSampleBytes = 0, lastSampleMs = 0;
-            double bytesPerSecond = 0;
+            var speed = new DownloadSpeedEstimator();
             string? serverMessage = null;
             int? serverHttpStatus = null;
             string? serverExceptionType = null;
@@ -1087,6 +1098,10 @@ namespace LlamaApp.Views
                 var now = Environment.TickCount64;
                 if (!p.Done && !p.Failed && now - lastProgressApplyMs < 100) return;
                 lastProgressApplyMs = now;
+
+                // EMA-smoothed between applied samples. Duplicate per-file
+                // events don't restart the sample clock (see the estimator).
+                var bytesPerSecond = speed.Observe(p.DownloadedBytes, now);
 
                 // Progress toast, on its own ~1/sec throttle (a toast update is
                 // a notification-platform call — far pricier than a UI-thread
@@ -1109,21 +1124,6 @@ namespace LlamaApp.Views
                         serverMessage = p.Message;
                     serverHttpStatus = p.HttpStatus;
                     serverExceptionType = p.ExceptionType;
-                }
-
-                // Speed estimate between applied samples (EMA-smoothed — the
-                // per-chunk instantaneous rate jitters too much to show raw).
-                if (p.DownloadedBytes > 0)
-                {
-                    if (lastSampleMs != 0 && p.DownloadedBytes > lastSampleBytes)
-                    {
-                        var instantaneous = (p.DownloadedBytes - lastSampleBytes)
-                            * 1000.0 / Math.Max(1, now - lastSampleMs);
-                        bytesPerSecond = DownloadProgressPresentation
-                            .SmoothSpeed(bytesPerSecond, instantaneous);
-                    }
-                    lastSampleBytes = p.DownloadedBytes;
-                    lastSampleMs = now;
                 }
 
                 void Apply()
@@ -1561,10 +1561,9 @@ namespace LlamaApp.Views
         /// means re-downloading GBs, so it never happens on a single misclick.
         /// </summary>
         /// <summary>
-        /// "Show model file in Explorer": opens the model's containing folder
-        /// with the .gguf selected (falls back to the folder alone when the
-        /// file is gone). The launch decision and explorer.exe arguments live
-        /// in <see cref="ExplorerReveal"/> (pure + tested).
+        /// "Show model folder in Explorer": opens the containing folder itself
+        /// so mmproj and drafter sidecars are visible alongside the LLM file.
+        /// The launch decision lives in <see cref="ExplorerReveal"/> (pure + tested).
         /// </summary>
         private void LocalModelRevealInExplorer_Click(object sender, RoutedEventArgs e)
         {
@@ -1580,7 +1579,7 @@ namespace LlamaApp.Views
                     UseShellExecute = true,
                 });
             }
-            catch (Exception ex) { Log.Warn(ex, "could not reveal the model file in Explorer"); }
+            catch (Exception ex) { Log.Warn(ex, "could not open the model folder in Explorer"); }
         }
 
         private void LocalModelDelete_Click(object sender, RoutedEventArgs e)
@@ -2302,7 +2301,8 @@ namespace LlamaApp.Views
         {
             var d = ServerStatusPresentation.Describe(
                 LlamaManager.Shared.ServerStatus, LlamaManager.Shared.State,
-                LlamaManager.Shared.FailureMessage);
+                LlamaManager.Shared.FailureMessage,
+                LlamaManager.Shared.BinaryPath is not null);
             ServerStatusDot.Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(d.Dot);
             Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(ServerStatusDot, d.ToolTip);
             ServerRestartButton.Visibility = d.CanRelaunch
@@ -2881,8 +2881,7 @@ namespace LlamaApp.Views
         private async Task WatchExternalDownloadAsync(ModelItem item, string serverId, CancellationTokenSource cts)
         {
             long lastApplyMs = 0;
-            long lastSampleBytes = 0, lastSampleMs = 0;
-            double bytesPerSecond = 0;
+            var speed = new DownloadSpeedEstimator();
             var progress = new Progress<ModelDownloadProgress>(p =>
             {
                 // Same throttle as DownloadAndLaunchAsync: ~10 UI updates/s, and
@@ -2893,18 +2892,7 @@ namespace LlamaApp.Views
 
                 // Same speed estimate as the app-driven path, so an external
                 // download's row shows the same detail line.
-                if (p.DownloadedBytes > 0)
-                {
-                    if (lastSampleMs != 0 && p.DownloadedBytes > lastSampleBytes)
-                    {
-                        var instantaneous = (p.DownloadedBytes - lastSampleBytes)
-                            * 1000.0 / Math.Max(1, now - lastSampleMs);
-                        bytesPerSecond = DownloadProgressPresentation
-                            .SmoothSpeed(bytesPerSecond, instantaneous);
-                    }
-                    lastSampleBytes = p.DownloadedBytes;
-                    lastSampleMs = now;
-                }
+                var bytesPerSecond = speed.Observe(p.DownloadedBytes, now);
 
                 if (p.TotalBytes > 0)
                 {
