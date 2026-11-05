@@ -434,9 +434,10 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Seconds of idleness after which the server unloads a model from memory,
-    /// passed as <c>--sleep-idle-seconds</c> at launch; -1 (the default)
-    /// disables it. An idled-out model reports <c>sleeping</c> — it stays the
-    /// active model and wakes transparently on the next request. Set by the
+    /// passed as <c>--sleep-idle-seconds</c> at launch; 300 (the default)
+    /// frees an unused model after five minutes, and -1 disables it. An
+    /// idled-out model reports <c>sleeping</c> — it stays the active model and
+    /// wakes transparently on the next request. Set by the
     /// caller (App.OnLaunched reads it from
     /// <c>Settings.Current.IdleUnloadSeconds</c>) — kept here rather than
     /// reading <c>Settings</c> directly to avoid a circular project
@@ -444,11 +445,12 @@ public sealed class LlamaManager
     /// already-running server keeps whatever arguments it was started with,
     /// and a changed value takes effect on the next server start.
     /// </summary>
-    public int IdleUnloadSeconds { get; set; } = -1;
+    public int IdleUnloadSeconds { get; set; } = 300;
 
     /// <summary>
     /// Maximum number of models loaded in parallel in router mode, passed as
-    /// <c>--models-max</c> at launch; 0 (the default) means unlimited. Set by
+    /// <c>--models-max</c> at launch; 1 (the default) avoids accumulating
+    /// models in limited GPU memory, while 0 means unlimited. Set by
     /// the caller (App.OnLaunched reads it from
     /// <c>Settings.Current.MaxLoadedModels</c>) — kept here rather than reading
     /// <c>Settings</c> directly to avoid a circular project dependency. Only
@@ -456,7 +458,7 @@ public sealed class LlamaManager
     /// keeps whatever arguments it was started with, and a changed value takes
     /// effect on the next server start.
     /// </summary>
-    public int MaxLoadedModels { get; set; } = 0;
+    public int MaxLoadedModels { get; set; } = 1;
 
     /// <summary>
     /// KV cache quantization type for the key tensor, passed as
@@ -2217,10 +2219,10 @@ public sealed class LlamaManager
         string? parameterCount, string? quant, ulong fileSizeBytes,
         CancellationToken cancel = default)
     {
-        var devices = await ListDevicesAsync(cancel);
+        var probe = await ProbeDevicesAsync(cancel);
         ulong? availableRam = SystemMemory.TryGet(out _, out var avail) ? avail : null;
         var estimate = ModelMemoryEstimator.Estimate(parameterCount, quant, fileSizeBytes);
-        var result = HardwareFitHeuristic.Classify(estimate, devices, availableRam);
+        var result = HardwareFitHeuristic.Classify(estimate, probe, availableRam);
         Log.Info($"hardware fit: params={parameterCount ?? "<none>"} quant={quant ?? "<none>"} " +
             $"file={fileSizeBytes}B → level={result.Level} " +
             $"(needs {result.RequiredBytes}B of {result.BudgetBytes}B: {result.Note})");
@@ -2654,6 +2656,7 @@ public sealed class LlamaManager
         // true and leaves the state to the poller.
         using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancel);
         watchCts.CancelAfter(LoadWatchTimeout);
+        var watchState = new LoadWatchState();
         try
         {
             await foreach (var (evt, evtModel, data) in ParseSseStreamAsync(reader, watchCts.Token))
@@ -2663,19 +2666,24 @@ public sealed class LlamaManager
                     continue; // another model's event
 
                 var (status, fraction) = ParseStatusChange(data);
-                switch (status)
+                switch (watchState.Observe(status))
                 {
-                    case "loading":
+                    case LoadWatchAction.Loading:
                         progress.Report(fraction);
                         break;
-                    case "loaded":
+                    case LoadWatchAction.Loaded:
                         progress.Report(1.0);
                         return true;
-                    case "unloaded":
-                        // Rolled back — the load failed server-side (e.g. the
-                        // child process died while mapping the weights).
+                    case LoadWatchAction.Failed:
+                        // A rollback AFTER this attempt reported loading means
+                        // the child died while mapping the weights. An unloaded
+                        // notification already queued when the pre-POST SSE
+                        // stream opened is not evidence about this attempt.
                         Log.Warn($"load of {modelId} rolled back to unloaded");
                         return false;
+                    case LoadWatchAction.Ignore when status == "unloaded":
+                        Log.Debug($"ignoring pre-load unloaded status for {modelId}");
+                        break;
                 }
             }
         }
@@ -2705,16 +2713,37 @@ public sealed class LlamaManager
     /// Returns <c>null</c> (and logs) when the stream can't be opened — the
     /// caller then degrades to poller-only state tracking.
     /// </summary>
-    private async Task<HttpResponseMessage?> TryOpenSseAsync(CancellationToken cancel)
+    private Task<HttpResponseMessage?> TryOpenSseAsync(CancellationToken cancel)
+        => OpenSseWithHeaderTimeoutAsync(_http, SseOpenHeaderTimeout, cancel);
+
+    // Only connection + response headers are bounded. Once headers arrive,
+    // ResponseHeadersRead hands back an SSE stream whose lifetime is controlled
+    // by the caller, not this timer (large model loads can legitimately run for
+    // minutes). A stalled header wait must not prevent the load POST from ever
+    // being sent: returning null selects the existing poller-only path.
+    private static readonly TimeSpan SseOpenHeaderTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Opens an SSE response with a deadline that ends at response headers.
+    /// Internal for deterministic transport-timeout regression tests.
+    /// </summary>
+    internal static async Task<HttpResponseMessage?> OpenSseWithHeaderTimeoutAsync(
+        HttpClient http, TimeSpan headerTimeout, CancellationToken cancel)
     {
+        using var budget = WithTimeout(headerTimeout, cancel);
         try
         {
-            var resp = await _http.GetAsync(
-                "/models/sse", HttpCompletionOption.ResponseHeadersRead, cancel);
+            var resp = await http.GetAsync(
+                "/models/sse", HttpCompletionOption.ResponseHeadersRead, budget.Token);
             if (resp.IsSuccessStatusCode) return resp;
-            
+
             Log.Warn($"SSE stream rejected ({(int)resp.StatusCode}); progress falls back to the poller");
             resp.Dispose();
+            return null;
+        }
+        catch (OperationCanceledException) when (!cancel.IsCancellationRequested)
+        {
+            Log.Warn("SSE stream headers timed out; progress falls back to the poller");
             return null;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -3425,6 +3454,41 @@ public sealed class LlamaManager
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>The action a load watcher takes for one server status.</summary>
+    internal enum LoadWatchAction
+    {
+        Ignore,
+        Loading,
+        Loaded,
+        Failed,
+    }
+
+    /// <summary>
+    /// Attempt-aware load status reducer. The SSE stream is opened before the
+    /// load POST, so an already queued unloaded notification can arrive first;
+    /// only an unloaded status after this attempt has reported loading proves
+    /// that its child failed. Kept separate from transport code so the event
+    /// sequences are unit-testable.
+    /// </summary>
+    internal sealed class LoadWatchState
+    {
+        private bool _sawLoading;
+
+        public LoadWatchAction Observe(string status) => status switch
+        {
+            "loading" => ObserveLoading(),
+            "loaded" => LoadWatchAction.Loaded,
+            "unloaded" => _sawLoading ? LoadWatchAction.Failed : LoadWatchAction.Ignore,
+            _ => LoadWatchAction.Ignore,
+        };
+
+        private LoadWatchAction ObserveLoading()
+        {
+            _sawLoading = true;
+            return LoadWatchAction.Loading;
         }
     }
 

@@ -4,31 +4,31 @@ using Xunit;
 namespace LlamaApp.Tests;
 
 /// <summary>
-/// Tests for the persisted <c>Settings.MaxLoadedModels</c> value: new fields
-/// must default to unlimited (<c>0</c>) and survive a JSON round-trip.
+/// Tests for the persisted <c>Settings.MaxLoadedModels</c> value: safe defaults
+/// cap residency at one model, while explicit legacy/opt-in values round-trip.
 /// </summary>
 public sealed class SettingsModelsMaxTests
 {
     [Fact]
-    public void MaxLoadedModels_DefaultsToUnlimited()
+    public void MaxLoadedModels_DefaultsToOne()
     {
         var settings = new Settings();
 
-        Assert.Equal(0, settings.MaxLoadedModels);
+        Assert.Equal(1, settings.MaxLoadedModels);
     }
 
     [Fact]
-    public void MaxLoadedModels_MissingFromSavedJson_DefaultsToUnlimited()
+    public void MaxLoadedModels_MissingFromSavedJson_DefaultsToOne()
     {
         // A settings.json written before this field shipped has no
-        // MaxLoadedModels property. Deserialization must leave it at 0, not
-        // require the field.
+        // MaxLoadedModels property. Deserialization must apply the safe
+        // default rather than requiring the field.
         const string json = """{"ServerPort":9931,"IdleUnloadSeconds":-1}""";
 
         var settings = JsonSerializer.Deserialize<Settings>(json);
 
         Assert.NotNull(settings);
-        Assert.Equal(0, settings.MaxLoadedModels);
+        Assert.Equal(1, settings.MaxLoadedModels);
     }
 
     [Theory]

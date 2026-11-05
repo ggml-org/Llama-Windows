@@ -59,6 +59,7 @@ public class HardwareFitHeuristicTests
 
         Assert.Equal(HardwareFitLevel.Fit, result.Level);
         Assert.Contains("GPU memory", result.Note);
+        Assert.DoesNotContain("slow", result.Note);
     }
 
     [Fact]
@@ -70,6 +71,7 @@ public class HardwareFitHeuristicTests
 
         Assert.Equal(HardwareFitLevel.Fit, result.Level);
         Assert.Contains("split", result.Note);
+        Assert.Contains("loading and responses may be slower", result.Note);
     }
 
     [Fact]
@@ -79,6 +81,35 @@ public class HardwareFitHeuristicTests
 
         Assert.Equal(HardwareFitLevel.Fit, result.Level);
         Assert.Contains("system memory", result.Note);
+        Assert.Contains("loading and responses may be slow", result.Note);
+    }
+
+    [Fact]
+    public void Failed_Device_Probe_Does_Not_Claim_A_Cpu_Only_First_Launch()
+    {
+        // Before llama.cpp is installed there is no binary to query. That is
+        // unknown acceleration, not evidence that this is a CPU-only PC.
+        var probe = new DeviceProbe(false, []);
+
+        var result = HardwareFitHeuristic.Classify(
+            Estimate(4_000_000_000UL), probe, 32UL << 30);
+
+        Assert.Equal(HardwareFitLevel.Might, result.Level);
+        Assert.Contains("couldn't be checked", result.Note);
+        Assert.DoesNotContain("runs in system memory", result.Note);
+        Assert.DoesNotContain("runs split", result.Note);
+    }
+
+    [Fact]
+    public void Successful_Empty_Device_Probe_Still_Means_Cpu_Only()
+    {
+        var probe = new DeviceProbe(true, []);
+
+        var result = HardwareFitHeuristic.Classify(
+            Estimate(4_000_000_000UL), probe, 32UL << 30);
+
+        Assert.Equal(HardwareFitLevel.Fit, result.Level);
+        Assert.Contains("runs in system memory", result.Note);
     }
 
     [Fact]
