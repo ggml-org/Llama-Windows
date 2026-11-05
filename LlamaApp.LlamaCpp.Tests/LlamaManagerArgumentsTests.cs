@@ -38,6 +38,23 @@ public sealed class LlamaManagerArgumentsTests
     }
 
     [Fact]
+    public void BuildServeArguments_SafeMemoryDefaults_AreEmitted()
+    {
+        // New/migrated Settings use 300 seconds and one resident model. Keep
+        // the launch mapping covered so those defaults cannot silently turn
+        // back into omitted (unlimited) server flags.
+        var args = LlamaManager.BuildServeArguments(
+            9931, "127.0.0.1", 300, 1, null, null, null, null);
+
+        var idleIndex = args.IndexOf("--sleep-idle-seconds");
+        Assert.True(idleIndex >= 0);
+        Assert.Equal("300", args[idleIndex + 1]);
+        var maxIndex = args.IndexOf("--models-max");
+        Assert.True(maxIndex >= 0);
+        Assert.Equal("1", args[maxIndex + 1]);
+    }
+
+    [Fact]
     public void BuildServeArguments_AddsModelsMax_WhenPositive()
     {
         var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 3, null, null, null, null);

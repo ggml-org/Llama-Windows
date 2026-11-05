@@ -132,6 +132,25 @@ public static class HardwareFitHeuristic
         MemoryEstimate estimate,
         IReadOnlyList<LlamaDevice> devices,
         ulong? availableSystemBytes)
+        => Classify(estimate, devices, availableSystemBytes, deviceProbeSucceeded: true);
+
+    /// <summary>
+    /// Probe-aware counterpart used by the app. A failed or unavailable device
+    /// query is not proof of a CPU-only machine (notably on first launch,
+    /// before llama.cpp has been installed), so it produces an unknown verdict
+    /// rather than claiming the model will run in system memory.
+    /// </summary>
+    public static HardwareFitVerdict Classify(
+        MemoryEstimate estimate,
+        DeviceProbe probe,
+        ulong? availableSystemBytes)
+        => Classify(estimate, probe.Devices, availableSystemBytes, probe.Succeeded);
+
+    private static HardwareFitVerdict Classify(
+        MemoryEstimate estimate,
+        IReadOnlyList<LlamaDevice> devices,
+        ulong? availableSystemBytes,
+        bool deviceProbeSucceeded)
     {
         var vram = MemoryFit.SumFreeVram(devices);
         var ramBudget = availableSystemBytes is { } ram
@@ -149,6 +168,19 @@ public static class HardwareFitHeuristic
                 BudgetBytes = budget,
                 Devices = devices,
                 Note = "Might fit: the catalog doesn't say how big this one is.",
+            };
+        }
+
+        if (!deviceProbeSucceeded)
+        {
+            return new HardwareFitVerdict
+            {
+                Level = HardwareFitLevel.Might,
+                RequiredBytes = estimate.TotalBytes,
+                BudgetBytes = budget,
+                Devices = devices,
+                Note = "Might fit: GPU availability couldn't be checked yet, " +
+                       "so memory use and performance are not yet known.",
             };
         }
 
@@ -173,8 +205,10 @@ public static class HardwareFitHeuristic
             var where = devices.Count > 0 && required <= vram
                 ? $"runs fully in {MemoryFit.FormatBytes(vram)} of GPU memory"
                 : devices.Count > 0
-                    ? "runs split across GPU memory and system RAM"
-                    : "runs in system memory";
+                    ? "runs split across GPU memory and system RAM; " +
+                      "loading and responses may be slower than with full GPU offload"
+                    : "runs in system memory; loading and responses may be slow " +
+                      "without GPU acceleration";
             return new HardwareFitVerdict
             {
                 Level = HardwareFitLevel.Fit,
@@ -188,18 +222,21 @@ public static class HardwareFitHeuristic
         if (level == HardwareFitLevel.Might)
         {
             var tight = required <= budget;
+            var performanceNote = required > vram
+                ? " If it runs using system memory, loading and responses may be slow."
+                : "";
             return new HardwareFitVerdict
             {
                 Level = HardwareFitLevel.Might,
                 RequiredBytes = required,
                 BudgetBytes = budget,
                 Devices = devices,
-                Note = tight
+                Note = (tight
                     ? $"Tight fit: needs about {MemoryFit.FormatBytes(required)}, " +
                       $"only {MemoryFit.FormatBytes(budget)} usable — little headroom for longer chats."
                     : $"Might fit: needs about {MemoryFit.FormatBytes(required)}, " +
                       $"only {MemoryFit.FormatBytes(budget)} usable — a smaller version or " +
-                      "closing other apps may make it fit.",
+                      "closing other apps may make it fit.") + performanceNote,
             };
         }
 

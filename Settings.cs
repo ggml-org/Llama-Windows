@@ -128,23 +128,26 @@ public sealed class Settings
 
     /// <summary>
     /// Seconds of idleness after which the llama server unloads the model from
-    /// memory: 300 (5 min), 900 (15 min), 3600 (1 hour), or -1 (never, the
-    /// default). Handed to the server as <c>--sleep-idle-seconds</c> at launch
+    /// memory: 300 (5 min, the default), 900 (15 min), 3600 (1 hour), or -1
+    /// (never). Five minutes is conservative by default so trying several
+    /// models does not leave their GPU memory reserved indefinitely. Handed to
+    /// the server as <c>--sleep-idle-seconds</c> at launch
     /// (see <see cref="Llama.LlamaManager.IdleUnloadSeconds"/>), so a changed
     /// value takes effect on the next server start. An idled-out model stays
     /// listed and wakes transparently on the next request.
     /// </summary>
-    public int IdleUnloadSeconds { get; set; } = -1;
+    public int IdleUnloadSeconds { get; set; } = 300;
 
     /// <summary>
     /// Maximum number of models the llama server loads simultaneously in
-    /// router mode: 0 (the default) means unlimited, any positive value caps
-    /// how many per-model child servers run at once. Handed to the server as
-    /// <c>--models-max</c> at launch (see
+    /// router mode: 1 (the default) keeps a single model resident, avoiding
+    /// cumulative VRAM/RAM exhaustion while trying several models; 0 means
+    /// unlimited, and any other positive value sets a higher cap. Handed to
+    /// the server as <c>--models-max</c> at launch (see
     /// <see cref="Llama.LlamaManager.MaxLoadedModels"/>), so a changed value
     /// takes effect on the next server start.
     /// </summary>
-    public int MaxLoadedModels { get; set; } = 0;
+    public int MaxLoadedModels { get; set; } = 1;
 
     /// <summary>
     /// KV cache quantization type for the key tensor, handed to the server as
