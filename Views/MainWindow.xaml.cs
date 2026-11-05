@@ -3173,6 +3173,23 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
+        /// Hides and clears the current results without clearing the query, so
+        /// Enter or the magnifier can run the same search again. Invalidate the
+        /// request generation as well as cancelling: a response that has already
+        /// completed must not repopulate the dismissed collection.
+        /// </summary>
+        private void HubResultsClose_Click(object sender, RoutedEventArgs e)
+        {
+            _hubSearchId = HubSearchDismissal.Invalidate(_hubSearchId, _hubSearchCts);
+            _hubPagedQuery = null;
+            HubResults.Clear();
+            HubResultsList.Visibility = Visibility.Collapsed;
+            HubStatusRing.Visibility = Visibility.Collapsed;
+            HubStatusText.Text = "";
+            HubResultsPanel.Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>
         /// Queries the Hugging Face Hub for GGUF models matching the search
         /// box's text and fills <see cref="HubResults"/>. The status line
         /// above the results mirrors the browse section's (ring while in
