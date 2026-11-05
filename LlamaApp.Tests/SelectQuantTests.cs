@@ -1,4 +1,5 @@
 using LlamaApp.HuggingFace;
+using LlamaApp.Llama;
 using Xunit;
 
 namespace LlamaApp.Tests;
@@ -6,12 +7,11 @@ namespace LlamaApp.Tests;
 /// <summary>
 /// Tests for the pure <c>llama://install</c> quant choice
 /// (<see cref="QuantSelection.SelectQuant"/>) and the build derivation it
-/// works on (<see cref="QuantSelection.BuildsFor"/>): the rule is
-/// "prefer the largest quant whose fit is Fit/Might for this machine's
-/// budget", refuse when nothing fits on a KNOWN budget, and fall back to a
-/// conservative known quant when the budget is unknown or the sizes can't be
-/// ranked — so the tests pin largest-fitting, refuse, and the conservative /
-/// deterministic fallbacks, plus the sidecar/shard handling that feeds it.
+/// works on (<see cref="QuantSelection.BuildsFor"/>): model-card links prefer
+/// a fitting Q4_K_M/Q4_0, then the largest fitting build, while explicit
+/// file-link quants bypass fit and are preserved all the way into repo:quant.
+/// Tests also pin refusal, conservative/deterministic fallbacks, exact HF
+/// labels, and the sidecar/shard handling that feeds selection.
 /// </summary>
 public sealed class SelectQuantTests
 {
@@ -31,31 +31,45 @@ public sealed class SelectQuantTests
         Vision = false,
     };
 
-    // ---- largest-fitting ----
+    // ---- model-card default / largest-fitting ----
 
     [Fact]
-    public void SelectQuant_PrefersTheLargestQuantWhoseFitIsFitOrMight()
+    public void SelectQuant_ModelCard_PrefersRecommendedQ4KM_OverLargerFitQuants()
     {
         var builds = new List<Repository>
         {
             Build("Q2_K", 2_000_000_000),   // Fit
-            Build("Q4_K_M", 5_000_000_000), // Fit
-            Build("Q8_0", 12_000_000_000),  // Might — still acceptable, and larger
-            Build("F16", 20_000_000_000),   // NoWay — never picked
+            Build("Q4_K_M", 5_000_000_000), // Fit — recommended default
+            Build("Q8_0", 8_000_000_000),   // Fit and larger, but not the default
+            Build("BF16", 9_000_000_000),   // Must not win merely by sorting first/largest
         };
 
         var pick = QuantSelection.SelectQuant(builds, Budget);
 
-        Assert.Equal("Q8_0", pick?.Quant);
+        Assert.Equal("Q4_K_M", pick?.Quant);
     }
 
     [Fact]
-    public void SelectQuant_PicksTheLargest_WhenAllFit()
+    public void SelectQuant_ModelCard_UsesQ4ZeroAsTheSecondRecommendedChoice()
     {
         var builds = new List<Repository>
         {
-            Build("Q4_0", 3_000_000_000), // Fit
-            Build("Q8_0", 8_000_000_000), // Fit, largest
+            Build("Q4_0", 3_000_000_000),
+            Build("Q8_0", 8_000_000_000),
+        };
+
+        Assert.Equal("Q4_0", QuantSelection.SelectQuant(builds, Budget)?.Quant);
+    }
+
+    [Fact]
+    public void SelectQuant_ModelCardWithoutRecommendedQuant_PicksTheLargestThatFits()
+    {
+        var builds = new List<Repository>
+        {
+            Build("Q2_K", 2_000_000_000),
+            Build("Q5_K_M", 5_000_000_000),
+            Build("Q8_0", 12_000_000_000),  // Might — acceptable, and largest
+            Build("F16", 20_000_000_000),   // NoWay — never picked
         };
 
         var pick = QuantSelection.SelectQuant(builds, Budget);
@@ -79,7 +93,7 @@ public sealed class SelectQuantTests
     {
         var builds = new List<Repository>
         {
-            Build("Q4_0", 4_000_000_000),
+            Build("Q5_0", 4_000_000_000),
             Build("Q3_K_M", 4_000_000_000),
         };
 
@@ -200,6 +214,108 @@ public sealed class SelectQuantTests
         Assert.Equal("Q4_K_M", QuantSelection.SelectQuant(builds, ulong.MaxValue)?.Quant);
     }
 
+    // ---- explicit GGUF file links ----
+
+    [Fact]
+    public void SelectQuant_ExplicitFileQuant_WinsOverDefaultAndFitHeuristics()
+    {
+        var builds = new List<Repository>
+        {
+            Build("Q4_K_M", 4_000_000_000),
+            Build("Q8_0", 8_000_000_000),
+            Build("BF16", 16_000_000_000),
+        };
+
+        // Even a tiny known budget cannot replace or reject the explicit pick.
+        var pick = QuantSelection.SelectQuant(builds, 1_000_000_000, "q8_0");
+
+        Assert.Equal("Q8_0", pick?.Quant);
+        Assert.Equal("org/repo:Q8_0", pick?.ServerModelId);
+    }
+
+    [Fact]
+    public void SelectQuant_ExplicitBF16_IsHonoredAndPassedToTheDownloadRequest()
+    {
+        var builds = new List<Repository>
+        {
+            Build("Q4_K_M", 4_000_000_000),
+            Build("BF16", 16_000_000_000),
+        };
+
+        var pick = QuantSelection.SelectQuant(builds, 1_000_000_000, "BF16");
+
+        Assert.Equal("BF16", pick?.Quant);
+        Assert.Equal("org/repo:BF16", pick?.ServerModelId);
+        // LlamaManager.DownloadModelAsync POSTs BuildModelRequestBody for
+        // model.ServerModelId. Pin that final handoff, not just the selector.
+        Assert.Equal("{\"model\":\"org/repo:BF16\"}",
+            LlamaManager.BuildModelRequestBody(pick!.ServerModelId));
+    }
+
+    [Theory]
+    [InlineData("Q2_K")]       // valid label, absent from this repo
+    [InlineData("NOT_A_QUANT")] // malformed label
+    [InlineData("Q4_K_M.gguf")] // not a standalone label
+    public void SelectQuant_MissingOrInvalidExplicitQuant_NeverFallsBack(string requested)
+    {
+        var builds = new List<Repository>
+        {
+            Build("Q4_K_M", 4_000_000_000),
+            Build("BF16", 16_000_000_000),
+        };
+
+        Assert.Null(QuantSelection.SelectQuant(builds, Budget, requested));
+    }
+
+    [Fact]
+    public void SelectQuant_ExactHfLabels_PreservePrefixAndSizeVariant()
+    {
+        var builds = new List<Repository>
+        {
+            Build("Q4_K_M", 4_000_000_000),
+            Build("UD-Q4_K_M", 5_000_000_000),
+            Build("Q4_K_M_XXL", 6_000_000_000),
+        };
+
+        Assert.Equal("Q4_K_M", QuantSelection.SelectQuant(builds, Budget, "Q4_K_M")?.Quant);
+        Assert.Equal("UD-Q4_K_M", QuantSelection.SelectQuant(builds, Budget, "ud-q4_k_m")?.Quant);
+        Assert.Equal("Q4_K_M_XXL", QuantSelection.SelectQuant(builds, Budget, "Q4_K_M_XXL")?.Quant);
+        // A missing prefixed request must not silently become the plain file.
+        Assert.Null(QuantSelection.SelectQuant(
+            new[] { Build("Q8_0", 8_000_000_000) }, Budget, "UD-Q8_0"));
+    }
+
+    [Fact]
+    public void SelectQuant_PlainExplicitTag_CanResolveAPrefixedFileOnlyWhenNoExactFileExists()
+    {
+        var pick = QuantSelection.SelectQuant(
+            new[] { Build("UD-Q4_K_M", 5_000_000_000) }, Budget, "Q4_K_M");
+
+        Assert.Equal("UD-Q4_K_M", pick?.Quant);
+        Assert.Equal("org/repo:UD-Q4_K_M", pick?.ServerModelId);
+    }
+
+    [Fact]
+    public void SelectQuant_ExplicitQuant_KeepsShardSizingAndSkipsSidecars()
+    {
+        var files = new List<HubClient.RepoFile>
+        {
+            new("model-Q4_K_M-00001-of-00002.gguf", 2_000_000_000),
+            new("model-Q4_K_M-00002-of-00002.gguf", 3_000_000_000),
+            new("model-BF16.gguf", 16_000_000_000),
+            new("mmproj-model-Q4_K_M.gguf", 1_000_000_000),
+            new("mtp-model-Q4_K_M.gguf", 500_000_000),
+            new("imatrix-Q4_K_M.gguf", 500_000_000),
+        };
+
+        var pick = QuantSelection.SelectQuant(
+            QuantSelection.BuildsFor("org/repo", files), 1_000_000_000, "Q4_K_M");
+
+        Assert.Equal("Q4_K_M", pick?.Quant);
+        Assert.Equal(5_000_000_000ul, pick?.SizeBytes); // main shards only
+        Assert.Equal("org/repo:Q4_K_M", pick?.ServerModelId);
+    }
+
     // ---- BuildsFor: files → builds ----
 
     [Fact]
@@ -248,11 +364,24 @@ public sealed class SelectQuantTests
     [InlineData("Qwen3-0.6B-Q4_K_M.gguf", "Q4_K_M")]       // a "Qwen3" token must not fool the parser
     [InlineData("gpt-oss-20b-F16.gguf", "F16")]
     [InlineData("model-mxfp4.gguf", "MXFP4")]              // canonical casing
-    [InlineData("model-Q4_K_M-XXL.gguf", "Q4_K_M")]        // size-variant suffixes
+    [InlineData("model-BF16.gguf", "BF16")]
+    [InlineData("model-UD-Q4_K_M.gguf", "Q4_K_M")]         // canonical tag drops only the UD- prefix
+    [InlineData("model-Q4_K_M_XXL.gguf", "Q4_K_M_XXL")]    // HF size variation is part of the label
+    [InlineData("model-Q4_K_M-XXL.gguf", "Q4_K_M")]        // dash suffix is not part of HF's label
     [InlineData("sub/dir/model-Q8_0.gguf", "Q8_0")]        // repo-relative path
     [InlineData("mystery-model.gguf", null)]
     public void ExtractQuantTag_ReadsTheCanonicalTag(string fileName, string? expected)
     {
         Assert.Equal(expected, QuantSelection.ExtractQuantTag(fileName));
+    }
+
+    [Theory]
+    [InlineData("model-UD-Q4_K_M.gguf", "UD-Q4_K_M")]
+    [InlineData("model-Q4_K_M_XXL.gguf", "Q4_K_M_XXL")]
+    [InlineData("sub/dir/model-bf16.gguf", "BF16")]
+    [InlineData("model-Q4_K_M-XXL.gguf", "Q4_K_M")]
+    public void ExtractQuantLabel_PreservesTheCompleteHfDeepLinkLabel(string fileName, string expected)
+    {
+        Assert.Equal(expected, QuantSelection.ExtractQuantLabel(fileName));
     }
 }

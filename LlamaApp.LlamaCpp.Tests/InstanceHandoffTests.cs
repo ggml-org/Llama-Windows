@@ -122,12 +122,25 @@ public sealed class InstanceHandoffTests : IDisposable
         var taken = InstanceHandoff.TryConsume(Pending);
         Assert.Equal(HandoffKind.Install, taken.Kind);
         Assert.Equal("unsloth/flint-GGUF", taken.Repo);
+        Assert.Null(taken.Quant); // repo-only/model-card handoff
         Assert.Null(taken.ModelPath);
         Assert.Null(taken.Text);
         Assert.Null(taken.ModelId);
 
         // Consumed exactly once.
         Assert.Equal(HandoffKind.None, InstanceHandoff.TryConsume(Pending).Kind);
+    }
+
+    [Fact]
+    public void WriteInstallThenConsume_PreservesAnExplicitFileQuant()
+    {
+        InstanceHandoff.WriteInstall("org/repo", Pending, quant: "UD-Q4_K_XL");
+
+        var taken = InstanceHandoff.TryConsume(Pending);
+
+        Assert.Equal(HandoffKind.Install, taken.Kind);
+        Assert.Equal("org/repo", taken.Repo);
+        Assert.Equal("UD-Q4_K_XL", taken.Quant);
     }
 
     [Fact]
@@ -139,6 +152,17 @@ public sealed class InstanceHandoffTests : IDisposable
 
         Assert.Equal(HandoffKind.Install, request.Kind);
         Assert.Equal("unsloth/flint-GGUF", request.Repo);
+        Assert.Null(request.Quant);
+    }
+
+    [Fact]
+    public void InstallMarker_ReadsExplicitQuant_WithCrlfTolerance()
+    {
+        var request = InstanceHandoff.Parse("install\r\norg/repo\r\nBF16\r\n");
+
+        Assert.Equal(HandoffKind.Install, request.Kind);
+        Assert.Equal("org/repo", request.Repo);
+        Assert.Equal("BF16", request.Quant);
     }
 
     [Theory]

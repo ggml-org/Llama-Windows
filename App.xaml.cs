@@ -112,7 +112,7 @@ namespace LlamaApp
                             Common.InstanceHandoff.WriteModelId(handoff.ModelId!);
                             break;
                         case Common.HandoffKind.Install:
-                            Common.InstanceHandoff.WriteInstall(handoff.Repo!);
+                            Common.InstanceHandoff.WriteInstall(handoff.Repo!, quant: handoff.Quant);
                             break;
                     }
                     Common.InstanceHandoff.Signal();
@@ -184,6 +184,7 @@ namespace LlamaApp
             var sharedPrompt = startupHandoff.Kind == Common.HandoffKind.Text ? startupHandoff.Text : null;
             var openModelId = startupHandoff.Kind == Common.HandoffKind.ModelId ? startupHandoff.ModelId : null;
             var installRepo = startupHandoff.Kind == Common.HandoffKind.Install ? startupHandoff.Repo : null;
+            var installQuant = startupHandoff.Kind == Common.HandoffKind.Install ? startupHandoff.Quant : null;
             openModelFile ??= FirstGgufOnCommandLine();
 
             // Create the llama-server manager singleton with the configured
@@ -328,7 +329,7 @@ namespace LlamaApp
                     : (openModelId is not null
                         ? Common.HandoffRequest.ForModelId(openModelId)
                         : (installRepo is not null
-                            ? Common.HandoffRequest.ForInstall(installRepo)
+                            ? Common.HandoffRequest.ForInstall(installRepo, installQuant)
                             : Common.InstanceHandoff.TryConsume())));
             DispatchHandoff(startupRequest);
 
@@ -472,7 +473,7 @@ namespace LlamaApp
                     _ = LoadModelByIdAsync(request.ModelId!);
                     break;
                 case Common.HandoffKind.Install:
-                    _ = InstallRepoByIdAsync(request.Repo!);
+                    _ = InstallRepoByIdAsync(request.Repo!, request.Quant);
                     break;
                 default:
                     _trayIcon?.ShowFlyout();
@@ -577,7 +578,7 @@ namespace LlamaApp
                         case Common.DeepLinkKind.LoadModel when link.ModelId is { } modelId:
                             return Common.HandoffRequest.ForModelId(modelId);
                         case Common.DeepLinkKind.Install when link.Repo is { } repo:
-                            return Common.HandoffRequest.ForInstall(repo);
+                            return Common.HandoffRequest.ForInstall(repo, link.Quant);
                         // llama://chat with no prompt behaves like a plain second launch.
                     }
                     return Common.HandoffRequest.None;
@@ -715,9 +716,9 @@ namespace LlamaApp
 
         /// <summary>
         /// A <c>llama://install?repo=&lt;id&gt;</c> deep link: install a
-        /// Hugging Face repo's model — resolve the repo's quants and their
-        /// sizes, pick one that fits this machine (see
-        /// <see cref="QuantSelection.SelectQuant"/>), and download
+        /// Hugging Face repo's model. A model-card link chooses a recommended/
+        /// fitting quant; a file-specific link's <c>quant</c> is preserved
+        /// exactly (see <see cref="QuantSelection.SelectQuant"/>). Download
         /// it through the llama server (which fetches shards, mmproj and draft
         /// sidecars itself) — mirroring the Mac app's <c>llama://install</c>
         /// flow.
@@ -731,7 +732,7 @@ namespace LlamaApp
         /// built here — and failures surface as a classified failure toast
         /// (see <see cref="DownloadFailurePresentation"/>).</para>
         /// </summary>
-        private async Task InstallRepoByIdAsync(string? repo)
+        private async Task InstallRepoByIdAsync(string? repo, string? quant = null)
         {
             // (a) Validate + normalize: trim, drop outer slashes, then the
             // same safe-segment rules the link parser applies (defense in
@@ -781,29 +782,40 @@ namespace LlamaApp
                     return;
                 }
 
-                // (c) Pick the quant: the largest one whose fit is Fit/Might
-                // against this machine's memory budget (free VRAM + the usable
-                // share of RAM), with the selector's conservative fallback
-                // when nothing fits or the sizes are unknown.
+                // (c) A specific GGUF file link carries quant=...: preserve
+                // that selection and bypass fit ranking entirely. Only a
+                // model-card link (no quant) probes memory and chooses the
+                // recommended/largest fitting build. An invalid or missing
+                // explicit quant is a hard failure, never a default fallback.
+                var hasExplicitQuant = !string.IsNullOrEmpty(quant);
                 ulong budget = 0;
-                try
+                if (!hasExplicitQuant)
                 {
-                    budget = await Llama.LlamaManager.Shared.ContextMemoryBudgetAsync();
+                    try
+                    {
+                        budget = await Llama.LlamaManager.Shared.ContextMemoryBudgetAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Common.Log.Warn(ex, "deep link install: memory budget probe failed; using conservative default");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    Common.Log.Warn(ex, "deep link install: memory budget probe failed; picking blind");
-                }
-                var pick = QuantSelection.SelectQuant(builds, budget);
+                var pick = QuantSelection.SelectQuant(builds, budget, quant);
                 if (pick is null)
                 {
-                    Common.Log.Warn($"deep link install: '{repo}' resolved {builds.Count} quant(s), none fit a {budget}-byte budget");
-                    Notifications.Show($"Couldn't install {repo}",
-                        "None of this repo's quants fit this machine's memory.");
+                    Common.Log.Warn(hasExplicitQuant
+                        ? $"deep link install: '{repo}' does not contain the requested quant label"
+                        : $"deep link install: '{repo}' resolved {builds.Count} quant(s), none fit a {budget}-byte budget");
+                    Notifications.Show($"Couldn't install {repo}", hasExplicitQuant
+                        ? "The requested GGUF quantization wasn't found in this repo."
+                        : "None of this repo's quants fit this machine's memory.");
                     return;
                 }
-                Common.Log.Info($"deep link install: '{repo}' resolved {builds.Count} quant(s); " +
-                    $"chosen {pick.Quant} against a {budget}-byte budget");
+                Common.Log.Info(hasExplicitQuant
+                    ? $"deep link install: '{repo}' resolved {builds.Count} quant(s); " +
+                      $"using explicit {pick.Quant} (fit heuristics bypassed)"
+                    : $"deep link install: '{repo}' resolved {builds.Count} quant(s); " +
+                      $"chosen {pick.Quant} against a {budget}-byte budget");
 
                 // Disk-space preflight: a deep link starts a multi-GB download
                 // with no row to block it, so refuse up front when the cache
