@@ -914,8 +914,8 @@ namespace LlamaApp
                 // Throttle toast updates to ~1/sec — each one is a
                 // notification-platform call — and EMA-smooth the speed
                 // between samples (same shape as DownloadAndLaunchAsync).
-                long lastToastMs = 0, lastSampleMs = 0, lastSampleBytes = 0;
-                double bytesPerSecond = 0;
+                long lastToastMs = 0;
+                var speed = new DownloadSpeedEstimator();
                 Common.ModelDownloadProgress? failureReport = null;
                 var progress = new Progress<Common.ModelDownloadProgress>(p =>
                 {
@@ -926,14 +926,7 @@ namespace LlamaApp
                     if (now - lastToastMs < 1000) return;
                     lastToastMs = now;
 
-                    if (lastSampleMs != 0 && p.DownloadedBytes > lastSampleBytes)
-                    {
-                        var instantaneous = (p.DownloadedBytes - lastSampleBytes)
-                            * 1000.0 / Math.Max(1, now - lastSampleMs);
-                        bytesPerSecond = DownloadProgressPresentation.SmoothSpeed(bytesPerSecond, instantaneous);
-                    }
-                    lastSampleBytes = p.DownloadedBytes;
-                    lastSampleMs = now;
+                    var bytesPerSecond = speed.Observe(p.DownloadedBytes, now);
 
                     toastShown = true;
                     Notifications.ShowProgress(toastTag,

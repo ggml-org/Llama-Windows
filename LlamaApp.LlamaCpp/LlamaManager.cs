@@ -2416,6 +2416,7 @@ public sealed class LlamaManager
         // block cancel + dispose the stream cleanly with no thrown exception.
         var success = false;
         var completed = false;
+        var aggregateProgress = new ModelDownloadProgressAccumulator();
         try
         {
             await foreach (var (evt, modelId, data) in ParseSseStreamAsync(reader, sseCts.Token))
@@ -2431,9 +2432,7 @@ public sealed class LlamaManager
                 switch (evt)
                 {
                     case "download_progress":
-                        var (downloaded, total) = SumProgress(data);
-                        progress?.Report(new ModelDownloadProgress(
-                            modelName, downloaded, total, Done: false, Failed: false));
+                        progress?.Report(aggregateProgress.Observe(modelName, data));
                         break;
 
                     case "download_finished":
@@ -2529,6 +2528,7 @@ public sealed class LlamaManager
                 return false;
 
             using var reader = new StreamReader(await sseResponse.Content.ReadAsStreamAsync(cancel));
+            var aggregateProgress = new ModelDownloadProgressAccumulator();
             await foreach (var (evt, modelId, data) in ParseSseStreamAsync(reader, cancel))
             {
                 // Match on the repo part: the SSE "model" field may or may not
@@ -2542,9 +2542,7 @@ public sealed class LlamaManager
                 switch (evt)
                 {
                     case "download_progress":
-                        var (downloaded, total) = SumProgress(data);
-                        progress?.Report(new ModelDownloadProgress(
-                            repoName, downloaded, total, Done: false, Failed: false));
+                        progress?.Report(aggregateProgress.Observe(repoName, data));
                         break;
 
                     case "download_finished":

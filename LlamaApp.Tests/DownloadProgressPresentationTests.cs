@@ -84,4 +84,46 @@ public class DownloadProgressPresentationTests
         // 0.7/0.3 blend: a spike to 1000 from a steady 100 lands at 370, not 1000.
         Assert.Equal(370.0, DownloadProgressPresentation.SmoothSpeed(100, 1000), precision: 6);
     }
+
+    [Fact]
+    public void Duplicate_Per_File_Bytes_Do_Not_Reset_The_Speed_Sample_Clock()
+    {
+        var speed = new DownloadSpeedEstimator();
+
+        Assert.Equal(0, speed.Observe(1_000, nowMs: 1_000));
+        Assert.Equal(0, speed.Observe(1_000, nowMs: 2_000)); // sidecar-only event
+
+        // Two seconds elapsed since the last REAL byte increase. If the
+        // duplicate advanced the clock this would incorrectly read 100 B/s.
+        Assert.Equal(50, speed.Observe(1_100, nowMs: 3_000), precision: 6);
+    }
+
+    [Fact]
+    public void Regressive_Aggregate_Does_Not_Reset_Speed_Or_Create_A_Spike()
+    {
+        var speed = new DownloadSpeedEstimator();
+        speed.Observe(1_000, nowMs: 1_000);
+        speed.Observe(2_000, nowMs: 2_000);
+        var before = speed.BytesPerSecond;
+
+        Assert.Equal(before, speed.Observe(0, nowMs: 2_100));
+        Assert.Equal(before, speed.Observe(100, nowMs: 2_200));
+
+        // The next increase is measured from the last accepted 2,000-byte
+        // sample, not from the regressive 100-byte event.
+        Assert.Equal(1_000, speed.Observe(3_000, nowMs: 3_000), precision: 6);
+    }
+
+    [Fact]
+    public void A_New_Attempt_Gets_A_Fresh_Speed_Estimate()
+    {
+        var firstAttempt = new DownloadSpeedEstimator();
+        firstAttempt.Observe(1_000, 1_000);
+        firstAttempt.Observe(2_000, 2_000);
+        Assert.True(firstAttempt.BytesPerSecond > 0);
+
+        var retry = new DownloadSpeedEstimator();
+        Assert.Equal(0, retry.Observe(0, 3_000));
+        Assert.Equal(0, retry.Observe(100, 4_000));
+    }
 }

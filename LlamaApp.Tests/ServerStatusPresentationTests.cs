@@ -77,6 +77,20 @@ public class ServerStatusPresentationTests
     }
 
     [Fact]
+    public void Stopped_While_Updating_Existing_Runtime_Does_Not_Say_Installing()
+    {
+        var d = ServerStatusPresentation.Describe(
+            LlamaManager.ServerState.Stopped, LlamaManager.InstallState.Installing,
+            failureMessage: null, runtimeAlreadyInstalled: true);
+
+        Assert.Equal(0xD2, d.Dot.R); // still a transient amber state
+        Assert.False(d.CanRelaunch);
+        Assert.Contains("updating", d.ToolTip);
+        Assert.DoesNotContain("installing", d.ToolTip);
+        Assert.DoesNotContain("first run", d.ToolTip);
+    }
+
+    [Fact]
     public void Stopped_After_Failed_Install_Shows_Relaunch()
     {
         // First-run install failure leaves the server Stopped (never

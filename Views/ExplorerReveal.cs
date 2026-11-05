@@ -3,10 +3,8 @@ using System.IO;
 namespace LlamaApp.Views;
 
 /// <summary>
-/// "Show model file in Explorer" support: the decision logic and the
-/// <c>explorer.exe</c> argument building are pure so they stay unit-testable —
-/// Explorer's argument parsing is quirky enough to deserve tests. The process
-/// launch itself stays in the click handler.
+/// "Show model folder in Explorer" support: the launch decision is pure so it
+/// stays unit-testable. The process launch itself stays in the click handler.
 /// </summary>
 public static class ExplorerReveal
 {
@@ -15,26 +13,27 @@ public static class ExplorerReveal
         => !string.IsNullOrWhiteSpace(filePath);
 
     /// <summary>
-    /// The launch target for revealing a model file: <c>explorer.exe</c> with
-    /// <c>/select,"path"</c> when the file still exists (Explorer opens its
-    /// folder with the file selected), else the containing folder alone when
-    /// that exists (the file may have been deleted outside the app), else
-    /// null (nothing on disk to show). A path containing a quote is refused:
-    /// Explorer takes the classic raw argument form (it is not
-    /// CommandLineToArgvW), and while Windows file names cannot carry quotes,
-    /// the input may come from a server report and must not be trusted into a
-    /// command line unchecked.
+    /// Opens the model's containing folder itself, rather than selecting only
+    /// the LLM file: mmproj and speculative-draft sidecars must be visible too.
+    /// The folder is used as the shell launch target with no arguments. Returns
+    /// null when the folder no longer exists. Quotes are refused and malformed
+    /// server-reported paths fail closed instead of escaping into a shell command.
     /// </summary>
     public static (string FileName, string Arguments)? BuildReveal(string? filePath)
     {
         if (!CanReveal(filePath) || filePath!.Contains('"')) return null;
 
-        if (File.Exists(filePath))
-            return ("explorer.exe", $"/select,\"{filePath}\"");
-
-        var directory = Path.GetDirectoryName(filePath);
-        return !string.IsNullOrEmpty(directory) && Directory.Exists(directory)
-            ? (directory, "")
-            : null;
+        try
+        {
+            var directory = Path.GetDirectoryName(filePath);
+            return !string.IsNullOrEmpty(directory) && Directory.Exists(directory)
+                ? (directory, "")
+                : null;
+        }
+        catch (Exception ex) when (ex is ArgumentException
+            or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
     }
 }

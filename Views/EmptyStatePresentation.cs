@@ -20,10 +20,15 @@ namespace LlamaApp.Views
         /// </summary>
         public static string Describe(
             LlamaManager.ServerState status,
-            LlamaManager.InstallState installState) => status switch
+            LlamaManager.InstallState installState,
+            bool runtimeAlreadyInstalled,
+            bool initialModelLoadCompleted) => status switch
         {
-            // Server up, list genuinely empty: point at the browse section
-            // below instead of a dead-end "No model yet".
+            // Running alone doesn't mean /models has answered yet. Keep a
+            // loading message until the first populate completes; only then is
+            // an empty list authoritative enough to say "No models installed".
+            LlamaManager.ServerState.Running when !initialModelLoadCompleted =>
+                "Loading installed models…",
             LlamaManager.ServerState.Running =>
                 "No models installed yet — choose a model below to get started",
             LlamaManager.ServerState.Starting =>
@@ -36,6 +41,8 @@ namespace LlamaApp.Views
             {
                 // First-run binary install can pull hundreds of MB with no
                 // other progress indication — say what's happening.
+                LlamaManager.InstallState.Installing when runtimeAlreadyInstalled =>
+                    "Updating the llama server…",
                 LlamaManager.InstallState.Installing =>
                     "Installing the llama server — the first run can take a few minutes…",
                 LlamaManager.InstallState.Failed =>

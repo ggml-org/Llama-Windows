@@ -49,7 +49,8 @@ namespace LlamaApp.Views
         public static Description Describe(
             LlamaManager.ServerState status,
             LlamaManager.InstallState installState,
-            string? failureMessage = null)
+            string? failureMessage = null,
+            bool runtimeAlreadyInstalled = false)
         {
             var detail = Sanitize(failureMessage);
             return status switch
@@ -69,6 +70,8 @@ namespace LlamaApp.Views
                     // First-run binary install: amber, and say what's happening —
                     // the download can be hundreds of MB and otherwise has no
                     // progress indication anywhere in the app.
+                    LlamaManager.InstallState.Installing when runtimeAlreadyInstalled =>
+                        new(Amber, "llama server: updating llama.cpp…", false),
                     LlamaManager.InstallState.Installing =>
                         new(Amber, "llama server: installing llama.cpp — the first run can take a few minutes…", false),
                     LlamaManager.InstallState.Failed =>

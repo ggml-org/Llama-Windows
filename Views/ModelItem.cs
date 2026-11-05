@@ -383,6 +383,12 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
             OnPropertyChanged();
             OnPropertyChanged(nameof(DownloadDetailText));
             OnPropertyChanged(nameof(SubtitleText));
+            // A known total, not a non-zero byte count, makes the download
+            // determinate. This also covers the first 0/total SSE event.
+            OnPropertyChanged(nameof(HasDeterminateDownload));
+            OnPropertyChanged(nameof(IsIndeterminateDownload));
+            OnPropertyChanged(nameof(DownloadPercentTextVisible));
+            NotifyAccessibleNameChanged();
         }
     }
 
@@ -621,8 +627,11 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>True when the OpenInNewWindow glyph should be visible (loaded).</summary>
     public bool OpenGlyphVisible => IsLoaded && !IsDownloading && !IsLoading;
 
-    /// <summary>True when the ring should spin indeterminately (no bytes yet).</summary>
-    public bool IsIndeterminateDownload => IsDownloading && DownloadFraction <= 0;
+    /// <summary>True once the server has supplied a total size, including at 0 bytes.</summary>
+    public bool HasDeterminateDownload => DownloadTotalBytes > 0;
+
+    /// <summary>True only while the server hasn't supplied a total size.</summary>
+    public bool IsIndeterminateDownload => IsDownloading && !HasDeterminateDownload;
 
     /// <summary>Download completion as a percentage (0..100) for ProgressRing.Value.</summary>
     public double DownloadProgressPercent => DownloadFraction * 100;
@@ -634,7 +643,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// True when the percent caption should be visible — while downloading with
     /// a known byte count (an indeterminate ring shows no caption).
     /// </summary>
-    public bool DownloadPercentTextVisible => IsDownloading && DownloadFraction > 0;
+    public bool DownloadPercentTextVisible => IsDownloading && HasDeterminateDownload;
 
     /// <summary>
     /// True when the frozen percent caption should show under the paused
@@ -707,7 +716,7 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public string RowAccessibleName => $"{RowDisplayName}, {AccessibleStatusText}";
 
     private string AccessibleStatusText =>
-        IsDownloading ? (DownloadFraction > 0 ? $"downloading {DownloadProgressPercent:0}%" : "downloading")
+        IsDownloading ? (HasDeterminateDownload ? $"downloading {DownloadProgressPercent:0}%" : "downloading")
         : DownloadPaused ? "download paused"
         : DownloadFailed || LoadFailed ? "error"
         : IsLoaded ? "running"

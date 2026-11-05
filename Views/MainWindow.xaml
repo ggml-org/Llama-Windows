@@ -296,10 +296,9 @@
                                       Opacity="0.5" />
                         </Button>
 
-                        <!-- Reveal in Explorer: open the folder that holds
-                             the model's .gguf with the file selected (falls
-                             back to the folder when the file is gone). Sits
-                             left of the delete button; shown whenever the row
+                        <!-- Reveal in Explorer: open the model's containing
+                             folder so mmproj/drafter sidecars are visible too.
+                             Sits left of the delete button; shown whenever the row
                              knows its file on disk (enrolled folders, imports,
                              cache) — constant per row, so the action cell
                              never shifts as the row flips load states. -->
@@ -310,8 +309,8 @@
                                 MinWidth="0" MinHeight="0"
                                 Background="Transparent"
                                 BorderThickness="0"
-                                AutomationProperties.Name="Show model file in Explorer"
-                                ToolTipService.ToolTip="Show model file in Explorer">
+                                AutomationProperties.Name="Show model folder in Explorer"
+                                ToolTipService.ToolTip="Open the model's containing folder in Explorer (including sidecar files)">
                             <FontIcon Glyph="&#xE8B7;"
                                       FontSize="16"
                                       Opacity="0.5" />
