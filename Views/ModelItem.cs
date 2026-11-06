@@ -309,8 +309,8 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// <summary>
     /// True when the user paused the download by clicking the progress ring.
     /// The server-side download is already aborted (pause reuses the cancel
-    /// path — the server drops the partial bytes on abort, so resuming
-    /// re-downloads from scratch), so the row swaps the ring for a resume
+    /// path — current servers retain the partial bytes for resume), so the
+    /// row swaps the ring for a resume
     /// glyph in the same slot; clicking it restarts the download. Set by the
     /// row's pause button before the cancellation unwinds; cleared by the
     /// download driver on (re)start, completion, or failure.
