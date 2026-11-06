@@ -1,4 +1,5 @@
 using LlamaApp.Common;
+using LlamaApp.Llama;
 using LlamaApp.Views;
 using Xunit;
 
@@ -175,6 +176,43 @@ public class ModelItemStateMachineTests
         Assert.False(item.ProgressRingVisible);
         Assert.False(item.PlayGlyphVisible);
         Assert.True(item.CancelDownloadVisible); // abandon affordance stays
+    }
+
+    [Fact]
+    public void Restarted_Incomplete_Download_Shows_Resume_Not_Run()
+    {
+        var item = new ModelItem();
+        var serverModel = new LlamaManager.ServerModel
+        {
+            Id = "org/repo:Q4_K_M",
+            Status = "incomplete",
+        };
+
+        MainWindow.SeedServerState(item, serverModel);
+
+        Assert.True(item.PendingFirstDownload);
+        Assert.True(item.DownloadPaused);
+        Assert.True(item.ResumeDownloadVisible);
+        Assert.True(item.CancelDownloadVisible); // abandoning deletes the partial
+        Assert.False(item.PlayGlyphVisible);     // a partial GGUF cannot be loaded
+        Assert.False(item.IsDownloading);
+        Assert.False(item.IsLoaded);
+    }
+
+    [Fact]
+    public void Restarted_Complete_Model_Remains_Runnable()
+    {
+        var item = new ModelItem();
+        MainWindow.SeedServerState(item, new LlamaManager.ServerModel
+        {
+            Id = "org/repo:Q4_K_M",
+            Status = "unloaded",
+        });
+
+        Assert.False(item.PendingFirstDownload);
+        Assert.False(item.DownloadPaused);
+        Assert.True(item.PlayGlyphVisible);
+        Assert.False(item.ResumeDownloadVisible);
     }
 
     [Fact]

@@ -518,7 +518,7 @@ namespace LlamaApp.Views
             // repo outside the catalog. Unknown names fall to the author
             // avatar / the generic icon — a row's tile is never empty.
             var brand = matched?.Brand ?? ModelItem.LocalBrandFromName(repo);
-            return new ModelItem
+            var item = new ModelItem
             {
                 Name = DeriveDisplayName(repo, quant, byRepo),
                 RepoName = repo,
@@ -531,12 +531,26 @@ namespace LlamaApp.Views
                 Downloadable = false,
                 Brand = brand,
                 Logo = ModelItem.ResolveLogoOrGeneric(brand),
-                IsLoaded = sm.IsLoaded,
-                IsDownloading = sm.IsDownloading,
                 // The server's path is not reliably populated — resolve
                 // locally when it isn't (enrolled scan map / cache layouts).
                 FilePath = sm.Path ?? LlamaManager.Shared.FindModelFilePath(sm.Id),
             };
+            SeedServerState(item, sm);
+            return item;
+        }
+
+        /// <summary>
+        /// Seeds a newly listed row from server truth. In particular, an
+        /// <c>incomplete</c> entry is a retained partial download after a
+        /// restart, not a runnable model: it starts paused with Resume and
+        /// Abandon available, and without a load/play glyph.
+        /// </summary>
+        internal static void SeedServerState(ModelItem item, LlamaManager.ServerModel sm)
+        {
+            item.IsLoaded = sm.IsLoaded;
+            item.IsDownloading = sm.IsDownloading;
+            item.DownloadPaused = sm.IsIncomplete;
+            item.PendingFirstDownload = sm.IsIncomplete;
         }
 
         /// <summary>
@@ -1211,8 +1225,8 @@ namespace LlamaApp.Views
                 // whose load can only fail); a pause (DownloadPaused set by
                 // the click) lands the row on the resume glyph instead, and a
                 // canceled re-download of an installed model keeps its row.
-                // Either way the server drops the partial bytes on abort —
-                // the next attempt starts the download over.
+                // Pausing retains the partial bytes on current servers, so
+                // Resume can continue the same download after this unwind.
                 void Abort()
                 {
                     if (toastShown) { toastShown = false; Notifications.Close(toastTag); }
@@ -1342,10 +1356,9 @@ namespace LlamaApp.Views
         /// Fired when the cancel glyph next to the download ring is tapped:
         /// cancels the in-flight download. The server is asked to abort too
         /// (see <see cref="LlamaManager.DownloadModelAsync"/>); the row returns
-        /// to the play glyph. The server drops the partial bytes when a
-        /// download is aborted, so the next attempt re-downloads from scratch.
-        /// While paused the button abandons the partial instead — the server
-        /// side is already stopped, so there's nothing to cancel.
+        /// to the play glyph. While paused the button abandons the retained
+        /// partial instead. A restored first download must be deleted on the
+        /// server, not just removed locally, or the next poll lists it again.
         /// </summary>
         private void LocalModelCancelDownload_Click(object sender, RoutedEventArgs e)
         {
@@ -1357,15 +1370,14 @@ namespace LlamaApp.Views
 
             if (item.DownloadPaused)
             {
-                // Paused: the server-side download already stopped when the
-                // pause was requested — just abandon the partial. A first-
-                // time download's row disappears from the installed list
-                // (nothing on disk to play); an installed model's
-                // re-download returns the row to the play glyph.
+                // A restored first download has a server-side unfinished record
+                // and partial files. DELETE removes both; DeleteModelFromServerAsync
+                // also handles older servers where the interrupted entry is gone.
+                // An installed model's re-download keeps the complete model row.
                 Log.Info("cancel clicked: abandoning paused download of " + ((IModel)item).ServerModelId);
                 if (item.PendingFirstDownload)
                 {
-                    RemovePendingDownloadRow(item);
+                    _ = DeleteModelFromServerAsync(item);
                     return;
                 }
                 item.DownloadPaused = false;
@@ -1444,9 +1456,9 @@ namespace LlamaApp.Views
         /// download. Pause reuses the cancel path — the cancellation unwinds
         /// <see cref="DownloadAndLaunchAsync"/> and asks the server to abort —
         /// but with <see cref="ModelItem.DownloadPaused"/> set first, so the
-        /// row lands on the resume glyph instead of the play glyph. The
-        /// server drops the partial bytes when the download is aborted, so
-        /// resuming re-downloads from scratch. No-op for externally-triggered
+        /// row lands on the resume glyph instead of the play glyph. Current
+        /// servers retain the partial bytes, so resuming continues from them.
+        /// No-op for externally-triggered
         /// downloads (the ring's button is
         /// disabled then — see <see cref="ModelItem.CanPauseDownload"/>).
         /// </summary>
@@ -1468,8 +1480,8 @@ namespace LlamaApp.Views
 
         /// <summary>
         /// Fired when the resume glyph on a paused row is tapped: restarts the
-        /// download → load lifecycle. The pause's abort dropped the partial
-        /// bytes server-side, so this starts the download over.
+        /// download → load lifecycle. Posting the same model id resumes any
+        /// partial files retained on the server, including after an app restart.
         /// </summary>
         private void LocalModelResumeDownload_Click(object sender, RoutedEventArgs e)
         {
@@ -2620,9 +2632,9 @@ namespace LlamaApp.Views
                     if (item.FilePath is null)
                         item.FilePath = sm.Path ?? LlamaManager.Shared.FindModelFilePath(sm.Id);
 
-                    // Server truth: any state but "downloading" means the model
-                    // exists in the cache — no longer a pending first download.
-                    if (!sm.IsDownloading)
+                    // Only a complete cached model is no longer a pending first
+                    // download. An interrupted one remains pending and resumable.
+                    if (!sm.IsDownloading && !sm.IsIncomplete)
                         item.PendingFirstDownload = false;
 
                     // Map the server's model states onto the row:
@@ -2634,6 +2646,7 @@ namespace LlamaApp.Views
                     //   downloading-> download ring (server-truth download; stays
                     //                 indeterminate for externally-triggered
                     //                 downloads — no byte progress is tracked)
+                    //   incomplete -> resume glyph (retained partial, not runnable)
                     //   unloaded   -> play glyph (but don't clobber an optimistic
                     //                 IsLoading set by a just-fired play click that
                     //                 the server hasn't acknowledged yet)
@@ -2646,7 +2659,7 @@ namespace LlamaApp.Views
                     // a request the server never picked up. Surface it as a
                     // failure instead of spinning forever.
                     if (item.IsLoading &&
-                        !sm.IsLoading && !sm.IsLoaded && !sm.IsDownloading &&
+                        !sm.IsLoading && !sm.IsLoaded && !sm.IsDownloading && !sm.IsIncomplete &&
                         DateTime.UtcNow - item.LoadingSinceUtc > OptimisticLoadGrace)
                     {
                         Log.Warn("load did not materialize: " + sm.Id +
@@ -2671,6 +2684,7 @@ namespace LlamaApp.Views
                         item.IsLoaded = true;
                         item.IsLoading = false;
                         item.IsDownloading = false;
+                        item.DownloadPaused = false;
                         item.LoadFailed = false; // server-truth loaded clears any stale failure
                         StopExternalDownloadWatch(item);
                     }
@@ -2693,6 +2707,17 @@ namespace LlamaApp.Views
                         item.IsLoaded = false;
                         item.IsLoading = true;
                         item.IsDownloading = false;
+                        item.DownloadPaused = false;
+                        StopExternalDownloadWatch(item);
+                    }
+                    else if (sm.IsIncomplete)
+                    {
+                        item.IsLoaded = false;
+                        item.IsLoading = false;
+                        item.IsDownloading = false;
+                        item.DownloadFailed = false;
+                        item.LoadFailed = false;
+                        item.DownloadPaused = true;
                         StopExternalDownloadWatch(item);
                     }
                     else // "unloaded" (or unknown)
@@ -2795,13 +2820,13 @@ namespace LlamaApp.Views
             // owns the poller's).
             if (serverIds.Count > 0)
             {
-                // A row's model counts as present only when it is busy
-                // (downloading / loading / loaded — see ModelPresence for why
-                // each must stay) or its file is findable on disk. The
+                // A row's model counts as present only when it is busy or
+                // resumable (downloading / incomplete / loading / loaded — see
+                // ModelPresence for why each must stay) or its file is findable on disk. The
                 // server-reported path wins when given; local resolution
                 // (enrolled scan map / cache layouts) is the fallback.
                 bool IsBusy(string id) => serverModels.Any(m =>
-                    m.Id == id && (m.IsDownloading || m.IsLoading || m.IsLoaded));
+                    m.Id == id && (m.IsDownloading || m.IsIncomplete || m.IsLoading || m.IsLoaded));
                 bool FileOnDisk(string id)
                 {
                     var sm = serverModels.FirstOrDefault(m => m.Id == id);

@@ -2910,7 +2910,7 @@ public sealed class LlamaManager
         public string Id { get; init; } = "";
         /// <summary>Absolute path to the GGUF on disk, when known.</summary>
         public string? Path { get; init; }
-        /// <summary>Load state reported by the server: <c>unloaded</c>, <c>downloading</c>, <c>loading</c>, <c>loaded</c>, or <c>sleeping</c>.</summary>
+        /// <summary>Load state reported by the server: <c>unloaded</c>, <c>downloading</c>, <c>incomplete</c>, <c>loading</c>, <c>loaded</c>, or <c>sleeping</c>.</summary>
         public string Status { get; init; } = "";
         /// <summary>True when <see cref="Status"/> is <c>loaded</c> (model resident in a child process)
         /// or <c>sleeping</c> (freed after the idle timeout but still the active model — it wakes
@@ -2927,6 +2927,10 @@ public sealed class LlamaManager
         /// model's files; the model is id'd by its bare repo until the download completes and the
         /// quant is resolved).</summary>
         public bool IsDownloading => string.Equals(Status, "downloading", StringComparison.OrdinalIgnoreCase);
+        /// <summary>True when an interrupted download has partial files but no
+        /// runnable model. Posting the same id to <c>/models</c> resumes it;
+        /// <c>POST /models/load</c> must not be offered for this state.</summary>
+        public bool IsIncomplete => string.Equals(Status, "incomplete", StringComparison.OrdinalIgnoreCase);
         /// <summary>True when the server reports the last load attempt as failed —
         /// the model process crashed or refused the model. Distinct from
         /// <see cref="Status"/> (which is <c>unloaded</c> again): without this a
@@ -3647,9 +3651,9 @@ public sealed class LlamaManager
     /// builds that wait can wedge the whole router (all <c>/models</c>
     /// requests stall). <c>/models/unload</c> aborts the download promptly
     /// without the remove-from-cache step, and answers as soon as the state
-    /// flips — the transient entry then disappears from <c>/models</c> on the
-    /// server's next reload sweep. Note the server drops the partial bytes on
-    /// abort, so the next attempt re-downloads from scratch.</para>
+    /// flips. Current servers retain the partial bytes and list the interrupted
+    /// download as <c>incomplete</c>, so posting the model again resumes it;
+    /// <c>DELETE /models</c> is the operation that abandons those files.</para>
     /// </summary>
     public async Task CancelServerDownloadAsync(string modelName)
     {

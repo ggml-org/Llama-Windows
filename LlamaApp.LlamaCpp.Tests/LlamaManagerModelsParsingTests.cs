@@ -73,6 +73,22 @@ public class LlamaManagerModelsParsingTests
     }
 
     [Fact]
+    public async Task An_Interrupted_Download_Is_Incomplete_Not_Runnable()
+    {
+        // After a router/app restart llama.cpp reconstructs this entry from
+        // unfinished-downloads.json. It has no model instance or complete file.
+        var parsed = await Parse(
+            """{"data":[{"id":"org/repo:Q4_K_M","status":{"value":"incomplete"},"source":"cache","can_remove":true}]}""");
+
+        var model = Assert.Single(parsed!);
+        Assert.True(model.IsIncomplete);
+        Assert.False(model.IsDownloading);
+        Assert.False(model.IsLoading);
+        Assert.False(model.IsLoaded);
+        Assert.True(model.CanRemove);
+    }
+
+    [Fact]
     public async Task A_Healthy_Status_Is_Not_Failed()
     {
         var parsed = await Parse(
