@@ -17,8 +17,8 @@ public enum HandoffKind
     /// to load and chat with.</summary>
     ModelId,
 
-    /// <summary>A Hugging Face repo id (from a <c>llama://install?repo=</c>
-    /// deep link) to install — download a fittable quant.</summary>
+    /// <summary>A Hugging Face repo id and optional explicit quant (from a
+    /// <c>llama://install?repo=</c> deep link) to install.</summary>
     Install,
 
     /// <summary>No payload — a plain second launch, which re-opens the flyout.</summary>
@@ -27,10 +27,12 @@ public enum HandoffKind
 
 /// <summary>
 /// A request consumed by the running instance: a model file path, a
-/// server-known model id, a repo id to install, or shared text (exactly one
-/// non-null field, per <see cref="HandoffKind"/>).
+/// server-known model id, a repo id (plus optional explicit quant) to install,
+/// or shared text.
 /// </summary>
-public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string? Text, string? ModelId, string? Repo = null)
+public sealed record HandoffRequest(
+    HandoffKind Kind, string? ModelPath, string? Text, string? ModelId,
+    string? Repo = null, string? Quant = null)
 {
     public static readonly HandoffRequest None = new(HandoffKind.None, null, null, null);
 
@@ -42,7 +44,8 @@ public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string?
 
     public static HandoffRequest ForModelId(string modelId) => new(HandoffKind.ModelId, null, null, modelId);
 
-    public static HandoffRequest ForInstall(string repo) => new(HandoffKind.Install, null, null, null, repo);
+    public static HandoffRequest ForInstall(string repo, string? quant = null) =>
+        new(HandoffKind.Install, null, null, null, repo, quant);
 }
 
 /// <summary>
@@ -64,8 +67,8 @@ public sealed record HandoffRequest(HandoffKind Kind, string? ModelPath, string?
 ///
 /// <para><b>File format:</b> a kind marker line (<c>model</c> / <c>text</c> /
 /// <c>image</c> / <c>modelid</c> / <c>install</c>)
-/// followed by the payload — a single path, id, or repo line for models and
-/// installs, the remainder of
+/// followed by the payload — a single path or id line for models, a repo line
+/// plus an optional explicit-quant line for installs, and the remainder of
 /// the file for (multi-line) text. A file with no recognized marker is a bare
 /// model path — the pre-share format — so an in-flight handoff from an older
 /// build still reads correctly. An <c>install</c> handoff from a NEW build read
@@ -102,8 +105,8 @@ public static class InstanceHandoff
 
     /// <summary>Records a pending install request (a <c>llama://install/</c> deep
     /// link), replacing any previous.</summary>
-    public static void WriteInstall(string repo, string? pendingPath = null) =>
-        Write(HandoffRequest.ForInstall(repo), pendingPath ?? PendingPath);
+    public static void WriteInstall(string repo, string? pendingPath = null, string? quant = null) =>
+        Write(HandoffRequest.ForInstall(repo, quant), pendingPath ?? PendingPath);
 
     /// <summary>Testable core of the Write* methods with an explicit request path.</summary>
     public static void Write(HandoffRequest request, string pendingPath)
@@ -117,7 +120,8 @@ public static class InstanceHandoff
                 HandoffKind.Text => "text\n" + request.Text,
                 HandoffKind.Image => "image\n" + request.ModelPath,
                 HandoffKind.ModelId => "modelid\n" + request.ModelId,
-                HandoffKind.Install => "install\n" + request.Repo,
+                HandoffKind.Install => "install\n" + request.Repo +
+                    (string.IsNullOrEmpty(request.Quant) ? "" : "\n" + request.Quant),
                 _ => null,
             };
             if (payload is null) return;
@@ -155,8 +159,8 @@ public static class InstanceHandoff
     /// <summary>
     /// Parses the handoff payload: <c>model\n&lt;path&gt;</c>,
     /// <c>text\n&lt;multi-line text&gt;</c>, <c>image\n&lt;path&gt;</c>,
-    /// <c>modelid\n&lt;id&gt;</c>, <c>install\n&lt;repo&gt;</c>, or a bare model
-    /// path (the pre-share format).
+    /// <c>modelid\n&lt;id&gt;</c>, <c>install\n&lt;repo&gt;[\n&lt;quant&gt;]</c>,
+    /// or a bare model path (the pre-share format).
     /// Unrecognized content yields <see cref="HandoffRequest.None"/>.
     /// CRLF line endings are tolerated (the app writes bare LF, but a
     /// hand-edited or externally-written request may carry CR). Pure.
@@ -191,9 +195,17 @@ public static class InstanceHandoff
                 : HandoffRequest.None;
 
         if (string.Equals(marker, "install", StringComparison.Ordinal))
-            return payload.Trim().Length > 0
-                ? HandoffRequest.ForInstall(payload.Trim())
-                : HandoffRequest.None;
+        {
+            // Newer builds append an optional second line for a file-specific
+            // link's quant. A repo-only handoff remains fully compatible.
+            var lines = payload.Trim().Split('\n');
+            var repo = lines[0].Trim();
+            if (repo.Length == 0 || lines.Length > 2) return HandoffRequest.None;
+            var quant = lines.Length == 2 && lines[1].Trim().Length > 0
+                ? lines[1].Trim()
+                : null;
+            return HandoffRequest.ForInstall(repo, quant);
+        }
 
         // No marker: the original Open With format — a bare model path.
         return GgufFile.IsGguf(content)

@@ -14,7 +14,8 @@ public enum DeepLinkKind
     LoadModel,
 
     /// <summary>Download a Hugging Face repo's model (a <c>llama://install/</c>
-    /// deep link) — the quant is chosen to fit this machine.</summary>
+    /// deep link). A file-specific link preserves its quant; a model-card link
+    /// chooses a default/fitting quant.</summary>
     Install,
 }
 
@@ -23,7 +24,8 @@ public enum DeepLinkKind
 /// <see cref="ModelId"/> / <see cref="Repo"/> is set, per
 /// <see cref="DeepLinkKind"/>.
 /// </summary>
-public sealed record DeepLinkRequest(DeepLinkKind Kind, string? Prompt, string? ModelId, string? Repo = null)
+public sealed record DeepLinkRequest(
+    DeepLinkKind Kind, string? Prompt, string? ModelId, string? Repo = null, string? Quant = null)
 {
     public static readonly DeepLinkRequest None = new(DeepLinkKind.None, null, null);
 
@@ -31,7 +33,8 @@ public sealed record DeepLinkRequest(DeepLinkKind Kind, string? Prompt, string? 
 
     public static DeepLinkRequest ForModel(string modelId) => new(DeepLinkKind.LoadModel, null, modelId);
 
-    public static DeepLinkRequest ForInstall(string repo) => new(DeepLinkKind.Install, null, null, repo);
+    public static DeepLinkRequest ForInstall(string repo, string? quant = null) =>
+        new(DeepLinkKind.Install, null, null, repo, quant);
 }
 
 /// <summary>
@@ -46,10 +49,12 @@ public sealed record DeepLinkRequest(DeepLinkKind Kind, string? Prompt, string? 
 /// The id may also appear unencoded — the whole remainder of the path is the
 /// id, so slashes and colons survive.</item>
 /// <item><c>llama://install?repo=&lt;urlencoded&gt;</c> — install a Hugging Face
-/// repo's model (e.g. <c>unsloth/flint-GGUF</c>): the repo's quants are
-/// resolved and one that fits this machine is downloaded. The repo must be a
-/// safe repo id (see <see cref="IsSafeRepo"/>); a missing or malformed repo
-/// yields no request.</item>
+/// repo's model (e.g. <c>unsloth/flint-GGUF</c>). A model-card link has no
+/// <c>quant</c> and uses the default/fitting selection heuristic. A link from
+/// a specific GGUF file also carries <c>&amp;quant=&lt;urlencoded&gt;</c>; that
+/// explicit selection is preserved and never replaced by the heuristic. The
+/// repo must be a safe repo id (see <see cref="IsSafeRepo"/>); a missing or
+/// malformed repo yields no request.</item>
 /// </list>
 ///
 /// <para>Deep-link payloads are remote-controlled data — any app or website
@@ -85,6 +90,9 @@ public static class DeepLink
     /// <summary>Maximum accepted repo-id length for install links (Hub ids are far shorter).</summary>
     public const int MaxRepoChars = 200;
 
+    /// <summary>Maximum accepted explicit quant-label length.</summary>
+    public const int MaxQuantChars = 64;
+
     /// <summary>Parses a protocol-activation URI. Never throws.</summary>
     public static DeepLinkRequest Parse(string? uri)
     {
@@ -108,8 +116,8 @@ public static class DeepLink
 
         if (string.Equals(host, InstallHost, StringComparison.Ordinal))
         {
-            var repo = RepoFromQuery(parsed.Query);
-            return repo is null ? DeepLinkRequest.None : DeepLinkRequest.ForInstall(repo);
+            try { return InstallFromQuery(parsed.Query); }
+            catch (UriFormatException) { return DeepLinkRequest.None; }
         }
 
         return DeepLinkRequest.None;
@@ -145,28 +153,52 @@ public static class DeepLink
     }
 
     /// <summary>
-    /// The first <c>repo</c> query parameter, percent-decoded and validated
-    /// with <see cref="IsSafeRepo"/>, or null when absent, empty, oversized,
-    /// or malformed (the link is then treated as not-a-request — the parser
-    /// never guesses at a repo). Pure.
+    /// Parses the first <c>repo</c> and <c>quant</c> query parameters. An
+    /// absent or empty quant denotes a model-card link. A present quant is
+    /// syntactically bounded here and semantically matched against Hub file
+    /// metadata later; it is NEVER discarded in favor of default selection.
     /// </summary>
-    private static string? RepoFromQuery(string? query)
+    private static DeepLinkRequest InstallFromQuery(string? query)
     {
-        if (string.IsNullOrEmpty(query) || query.Length <= 1) return null;
+        if (string.IsNullOrEmpty(query) || query.Length <= 1) return DeepLinkRequest.None;
+
+        string? repo = null;
+        string? quant = null;
+        var quantSeen = false;
         foreach (var pair in query[1..].Split('&'))
         {
             var eq = pair.IndexOf('=');
             if (eq < 0) continue;
-            var key = pair[..eq];
-            if (!string.Equals(Uri.UnescapeDataString(key), "repo", StringComparison.OrdinalIgnoreCase))
-                continue;
+            var key = Uri.UnescapeDataString(pair[..eq]);
             var raw = pair[(eq + 1)..];
-            if (raw.Length > MaxRepoChars) return null; // bound before decoding
-            var value = Uri.UnescapeDataString(raw);
-            return IsSafeRepo(value) ? value : null;
+
+            if (string.Equals(key, "repo", StringComparison.OrdinalIgnoreCase))
+            {
+                if (repo is not null) continue; // first repo parameter wins
+                if (raw.Length > MaxRepoChars) return DeepLinkRequest.None; // bound before decoding
+                var value = Uri.UnescapeDataString(raw);
+                if (!IsSafeRepo(value)) return DeepLinkRequest.None;
+                repo = value;
+            }
+            else if (string.Equals(key, "quant", StringComparison.OrdinalIgnoreCase) && !quantSeen)
+            {
+                quantSeen = true;
+                if (raw.Length > MaxQuantChars) return DeepLinkRequest.None;
+                var value = Uri.UnescapeDataString(raw);
+                if (value.Length == 0) continue; // empty means model-card/default selection
+                if (value.Length > MaxQuantChars || !IsSafeQuant(value)) return DeepLinkRequest.None;
+                quant = value;
+            }
         }
-        return null;
+
+        return repo is null ? DeepLinkRequest.None : DeepLinkRequest.ForInstall(repo, quant);
     }
+
+    // Quant labels are remote-controlled too. Keep them to the HF grammar's
+    // character set; whether the label actually exists is checked against the
+    // repo's siblings by QuantSelection, never by falling back to a default.
+    private static bool IsSafeQuant(string quant) =>
+        quant.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
 
     /// <summary>
     /// The first <c>prompt</c> query parameter, percent-decoded, or null when

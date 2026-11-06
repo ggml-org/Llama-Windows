@@ -103,15 +103,50 @@ public sealed class DeepLinkTests
     [InlineData("llama://INSTALL?repo=Mixed-Case_Repo.1/x", "Mixed-Case_Repo.1/x")]     // host case-insensitive
     [InlineData("LLAMA://install?repo=org/name", "org/name")]                           // scheme case-insensitive
     [InlineData("llama://install?repo=first/one&repo=second/two", "first/one")]         // first repo param wins
-    [InlineData("llama://install?repo=org/name&quant=Q4_K_M", "org/name")]              // extra params are forgiven
+    [InlineData("llama://install?repo=org/name&other=ignored", "org/name")]             // unknown params are forgiven
+    [InlineData("llama://install?repo=org/name&quant=", "org/name")]                    // empty quant = model card
     public void InstallLinks_ProduceInstallRequests(string uri, string expectedRepo)
     {
         var link = DeepLink.Parse(uri);
 
         Assert.Equal(DeepLinkKind.Install, link.Kind);
         Assert.Equal(expectedRepo, link.Repo);
+        Assert.Null(link.Quant); // model-card links leave selection to QuantSelection
         Assert.Null(link.Prompt);
         Assert.Null(link.ModelId);
+    }
+
+    [Theory]
+    [InlineData("llama://install?repo=org/name&quant=Q4_K_M", "Q4_K_M")]
+    [InlineData("llama://install?repo=org%2Fname&quant=Q4%5FK%5FM", "Q4_K_M")] // encoded repo slash + quant underscores
+    [InlineData("llama://install?quant=UD-Q4_K_XL&repo=org/name", "UD-Q4_K_XL")]
+    [InlineData("llama://install?repo=org/name&quant=bf16", "bf16")] // explicit BF16 must survive too
+    [InlineData("llama://install?repo=org/name&quant=Q8_0&quant=Q4_K_M", "Q8_0")] // first quant wins
+    public void ExplicitGgufFileLinks_PreserveTheirQuant(string uri, string expectedQuant)
+    {
+        var link = DeepLink.Parse(uri);
+
+        Assert.Equal(DeepLinkKind.Install, link.Kind);
+        Assert.Equal("org/name", link.Repo);
+        Assert.Equal(expectedQuant, link.Quant);
+    }
+
+    [Theory]
+    [InlineData("llama://install?repo=org/name&quant=Q4%20K%20M")] // whitespace
+    [InlineData("llama://install?repo=org/name&quant=Q4_K_M.gguf")] // a filename, not a quant label
+    [InlineData("llama://install?repo=org/name&quant=Q4_K_M%26repo=other/repo")] // decoded query delimiter
+    [InlineData("llama://install?repo=org/name&quant=Q4_K_M%0AInjected")] // control character
+    public void UnsafeExplicitQuant_IsRejected_NotReplacedByADefault(string uri)
+    {
+        Assert.Equal(DeepLinkRequest.None, DeepLink.Parse(uri));
+    }
+
+    [Fact]
+    public void OversizedExplicitQuant_IsRejected()
+    {
+        var quant = new string('Q', DeepLink.MaxQuantChars + 1);
+        Assert.Equal(DeepLinkRequest.None,
+            DeepLink.Parse($"llama://install?repo=org/name&quant={quant}"));
     }
 
     [Theory]
