@@ -1,4 +1,3 @@
-using System.Text;
 using LlamaApp.Common;
 
 namespace LlamaApp.Llama;
@@ -167,20 +166,7 @@ public static class EnrolledFolderScanner
     /// <c>[</c>/<c>]</c> in <see cref="NameAndOrder"/>). Empty for no models.
     /// </summary>
     public static string RenderSections(IEnumerable<EnrolledFolderModel> models)
-    {
-        var sb = new StringBuilder();
-        foreach (var model in models)
-        {
-            sb.Append('[').Append(model.Name).Append(']').Append('\n');
-            sb.Append("model = ").Append(model.ModelPath).Append('\n');
-            if (model.MmprojPath is not null)
-                sb.Append("mmproj = ").Append(model.MmprojPath).Append('\n');
-            if (model.DraftPath is not null)
-                sb.Append("spec-draft-model = ").Append(model.DraftPath).Append('\n');
-            sb.Append('\n');
-        }
-        return sb.ToString();
-    }
+        => LlamaManager.RenderModelsPresetIni([], enrolledModels: models);
 
     /// <summary>
     /// A <c>.gguf</c> that names a model rather than a sidecar: not an mmproj,
