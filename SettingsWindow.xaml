@@ -214,14 +214,20 @@
                                                     FontSize="12"
                                                     Opacity="0.6"
                                                     TextWrapping="WrapWholeWords" />
-                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,8" Spacing="6">
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,4" Spacing="6">
                                             <Button x:Name="HotkeyButton"
+                                                    ToolTipService.ToolTip="Click to record a new shortcut"
                                                     Click="HotkeyButton_Click"
                                                     PreviewKeyDown="HotkeyButton_PreviewKeyDown"
                                                     LostFocus="HotkeyButton_LostFocus" />
                                             <Button Content="Restore"
                                                     Click="RestoreHotkeyDefault_Click" />
                                         </StackPanel>
+                                        <TextBlock x:Name="HotkeyPendingText"
+                                                   Text="Save to apply"
+                                                   FontSize="12"
+                                                   Opacity="0.6"
+                                                   Visibility="Collapsed" />
                                         <TextBlock x:Name="HotkeyErrorText"
                                                    Foreground="Red"
                                                    FontSize="12"

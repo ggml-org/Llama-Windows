@@ -158,6 +158,7 @@ namespace LlamaApp
             _hotkeyMods = s.OverlayHotkeyModifiers;
             _hotkeyVKey = s.OverlayHotkeyVirtualKey;
             HotkeyButton.Content = Hotkey.Format(_hotkeyMods, _hotkeyVKey);
+            UpdateHotkeyPendingHint();
 
             LoadInstallInfo();
         }
@@ -570,6 +571,7 @@ namespace LlamaApp
         {
             _capturingHotkey = false;
             HotkeyButton.Content = Hotkey.Format(_hotkeyMods, _hotkeyVKey);
+            UpdateHotkeyPendingHint();
         }
 
         private void RestoreHotkeyDefault_Click(object s, RoutedEventArgs e)
@@ -577,10 +579,19 @@ namespace LlamaApp
             _capturingHotkey = false;
             _hotkeyMods = Hotkey.DefaultModifiers;
             _hotkeyVKey = Hotkey.DefaultVKey;
-
+            UpdateHotkeyPendingHint();
             HotkeyButton.Content = Hotkey.Format(_hotkeyMods, _hotkeyVKey);
             HotkeyErrorText.Text = "";
             HotkeyErrorText.Visibility = Visibility.Collapsed;
+        }
+
+        private void UpdateHotkeyPendingHint()
+        {
+            var s = Settings.Current;
+            bool hasPendingHotkey = _hotkeyMods != s.OverlayHotkeyModifiers || _hotkeyVKey != s.OverlayHotkeyVirtualKey;
+            HotkeyPendingText.Visibility = hasPendingHotkey
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
 
         private async void Save_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
