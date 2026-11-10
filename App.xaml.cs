@@ -298,8 +298,8 @@ namespace LlamaApp
             _ = _runtimeUpdates.StartAsync(
                 () => Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync());
 
-            // Spotlight-style prompt overlay, summoned by a global Alt+Space
-            // hotkey. Created lazily on first press and reused thereafter; the
+            // Spotlight-style prompt overlay, summoned by the configured global hotkey.
+            // Created lazily on first press and reused thereafter; the
             // hotkey is registered for the app's lifetime only, so it stops
             // working the moment Llama exits.
             _overlay = new OverlayWindow();
@@ -325,7 +325,7 @@ namespace LlamaApp
                 Settings.Current.TrayHintShown = true;
                 Settings.Current.Save();
                 Notifications.Show("Llama is running",
-                    "Find it in the system tray — and press Alt+Space anytime to chat with a loaded model.");
+                    "Find it in the system tray — and press Alt+Space (the default shortcut) anytime to chat with a loaded model.");
             }
 
             Common.Log.Info("startup complete");
@@ -1285,7 +1285,7 @@ namespace LlamaApp
         }
 
         /// <summary>
-        /// Opens the chat overlay — the Alt+Space panel — from surfaces that
+        /// Opens the chat overlay from surfaces that
         /// don't own the hotkey (toast Chat button, tray context menu).
         /// </summary>
         internal void SummonChatOverlay() => _overlay?.Summon(ShareSummonGraceMs);

@@ -189,7 +189,7 @@ public sealed class Settings
 
     /// <summary>
     /// Whether the one-time first-run hint ("Llama lives in the system
-    /// tray; Alt+Space opens the chat overlay") has been shown. Persisted so
+    /// tray; Alt+Space (default hotkey) opens the chat overlay") has been shown. Persisted so
     /// the toast fires exactly once, on the first launch.
     /// </summary>
     public bool TrayHintShown { get; set; } = false;

@@ -13,9 +13,8 @@ namespace LlamaApp.Views;
 /// <summary>
 /// A spotlight-style prompt overlay: a centered, borderless Mica window that
 /// hosts the running llama server's WebUI for the currently loaded model inside
-/// a <see cref="Microsoft.UI.Xaml.Controls.WebView2"/>. Summoned by the global
-/// <c>Alt+Space</c> hotkey (see <see cref="GlobalHotkey"/>) while Llama is
-/// running.
+/// a <see cref="Microsoft.UI.Xaml.Controls.WebView2"/>. Summoned by the configured global
+/// hotkey (see <see cref="GlobalHotkey"/>) while Llama is running.
 ///
 /// <para>The overlay is created lazily on first summon and reused thereafter:
 /// it hides rather than closes, mirroring the tray flyout's lifecycle, so
