@@ -67,6 +67,21 @@ namespace LlamaApp
 
         private Microsoft.UI.Dispatching.DispatcherQueue _dispatcher = null!;
 
+        internal void ApplyHotkey()
+        {
+            var s = Settings.Current;
+            Action onPressed = () => _dispatcher.TryEnqueue(() => _overlay?.Summon());
+            _hotkey!.Unregister();
+            _hotkey.Register(s.OverlayHotkeyModifiers, s.OverlayHotkeyVirtualKey, onPressed);
+            if (!_hotkey.IsRegistered)
+            {
+                Notifications.Show(
+                    $"{Hotkey.Format(s.OverlayHotkeyModifiers, s.OverlayHotkeyVirtualKey)} unavailable",
+                    "Failed to register the shortcut, so the chat overlay hotkey is disabled."
+                );
+            }
+        }
+
         /// <summary>
         /// Invoked when the end user launches the application normally.  Other entry points
         /// will be used, such as when the application is launched to open a specific file.
@@ -293,16 +308,8 @@ namespace LlamaApp
             // nothing). Prewarmed, the first summon just navigates — and is
             // instant, too.
             _overlay.PrewarmWebView();
-            _hotkey.Register(() => _dispatcher.TryEnqueue(() => _overlay.Summon()));
 
-            // The hotkey is hard-coded and otherwise undiscoverable — say so
-            // when it can't work instead of the shortcut silently doing
-            // nothing (RegisterHotKey fails when another app owns Alt+Space).
-            if (!_hotkey.IsRegistered)
-            {
-                Notifications.Show("Alt+Space unavailable",
-                    "Another app is using the Alt+Space shortcut, so the chat overlay hotkey is off.");
-            }
+            if (!_hotkey.IsRegistered) ApplyHotkey();
 
             // One-time first-run hint: the app is tray-only (no window appears
             // on launch) and the overlay hotkey is undiscoverable — tell the
