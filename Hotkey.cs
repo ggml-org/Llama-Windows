@@ -16,6 +16,9 @@ internal enum HotkeyModifiers : uint
 
 internal static class Hotkey
 {
+    internal const uint DefaultModifiers = (uint)HotkeyModifiers.Alt;
+    internal const uint DefaultVKey = (uint)VirtualKey.Space;
+
     /// <summary>
     /// Format the <paramref name="modifiers"/> and <paramref name="vKey"/> 
     /// combination into a readable friendly display string.

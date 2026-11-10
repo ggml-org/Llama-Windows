@@ -219,6 +219,8 @@
                                                 Click="HotkeyButton_Click"
                                                 PreviewKeyDown="HotkeyButton_PreviewKeyDown"
                                                 LostFocus="HotkeyButton_LostFocus" />
+                                        <Button Content="Restore"
+                                                Click="RestoreHotkeyDefault_Click" />
                                         <TextBlock x:Name="HotkeyErrorText"
                                                    Foreground="Red"
                                                    FontSize="12"

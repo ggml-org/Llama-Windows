@@ -241,7 +241,7 @@ public sealed class Settings
     /// <see cref="OverlayHotkeyVirtualKey">virtual key</see> that
     /// opens the chat overlay when pressed together.
     /// </summary>
-    public uint OverlayHotkeyModifiers { get; set; } = (uint)HotkeyModifiers.Alt;
+    public uint OverlayHotkeyModifiers { get; set; } = Hotkey.DefaultModifiers;
 
     /// <summary>
     /// Win32 virtual key code for the overlay hotkey (<c>Space</c> by default).
@@ -249,7 +249,7 @@ public sealed class Settings
     /// <see cref="OverlayHotkeyModifiers">modifier</see> that opens
     /// the chat overlay when pressed together.
     /// </summary>
-    public uint OverlayHotkeyVirtualKey { get; set; } = 0x20; // VK_SPACE
+    public uint OverlayHotkeyVirtualKey { get; set; } = Hotkey.DefaultVKey;
 
 
     private static Settings Load()

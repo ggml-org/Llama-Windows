@@ -572,6 +572,17 @@ namespace LlamaApp
             HotkeyButton.Content = Hotkey.Format(_hotkeyMods, _hotkeyVKey);
         }
 
+        private void RestoreHotkeyDefault_Click(object s, RoutedEventArgs e)
+        {
+            _capturingHotkey = false;
+            _hotkeyMods = Hotkey.DefaultModifiers;
+            _hotkeyVKey = Hotkey.DefaultVKey;
+
+            HotkeyButton.Content = Hotkey.Format(_hotkeyMods, _hotkeyVKey);
+            HotkeyErrorText.Text = "";
+            HotkeyErrorText.Visibility = Visibility.Collapsed;
+        }
+
         private async void Save_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             var s = Settings.Current;
