@@ -70,10 +70,11 @@ namespace LlamaApp
         internal bool ApplyHotkey(bool notifyOnFailure = true)
         {
             var s = Settings.Current;
+            _hotkey!.Unregister();
+
+            if (!s.OverlayHotkeyEnabled) return true; // Skip if overlay hotkey is disabled altogether
 
             Action onPressed = () => _dispatcher.TryEnqueue(() => _overlay?.Summon());
-
-            _hotkey!.Unregister();
             _hotkey.Register(s.OverlayHotkeyModifiers, s.OverlayHotkeyVirtualKey, onPressed);
 
             if (!_hotkey.IsRegistered && notifyOnFailure)

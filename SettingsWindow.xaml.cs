@@ -153,9 +153,12 @@ namespace LlamaApp
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
             LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
+
+            OverlayHotkeyEnabledToggle.IsOn = s.OverlayHotkeyEnabled;
             _hotkeyMods = s.OverlayHotkeyModifiers;
             _hotkeyVKey = s.OverlayHotkeyVirtualKey;
             HotkeyButton.Content = Hotkey.Format(_hotkeyMods, _hotkeyVKey);
+
             LoadInstallInfo();
         }
 
@@ -711,33 +714,47 @@ namespace LlamaApp
             try { _ = Llama.LlamaManager.Shared.ReloadModelPresetsAsync(); }
             catch (Exception ex) { Common.Log.Warn(ex, "model-folder preset reload failed"); }
 
-            bool hotkeyChanged = s.OverlayHotkeyModifiers != _hotkeyMods || s.OverlayHotkeyVirtualKey != _hotkeyVKey;
+            bool hasHotkeyToggleChanged = OverlayHotkeyEnabledToggle.IsOn != s.OverlayHotkeyEnabled;
+            bool hasHotkeyChanged = s.OverlayHotkeyModifiers != _hotkeyMods || s.OverlayHotkeyVirtualKey != _hotkeyVKey;
 
             // If hotkey changed, re-register to apply immediately
-            if (hotkeyChanged && App.Current is App app)
+            if ((hasHotkeyToggleChanged || hasHotkeyChanged) && App.Current is App app)
             {
+                var previousEnabled = s.OverlayHotkeyEnabled;
                 var previousModifiers = s.OverlayHotkeyModifiers;
                 var previousVKey = s.OverlayHotkeyVirtualKey;
+
+                s.OverlayHotkeyEnabled = OverlayHotkeyEnabledToggle.IsOn;
                 s.OverlayHotkeyModifiers = _hotkeyMods;
                 s.OverlayHotkeyVirtualKey = _hotkeyVKey;
 
                 // Try to apply the new hotkey immediately
                 if (app.ApplyHotkey(notifyOnFailure: false))
                 {
-                    Notifications.Show("Hotkey applied", $"The new hotkey {Hotkey.Format(_hotkeyMods, _hotkeyVKey)} is active.");
+                    Notifications.Show(
+                        s.OverlayHotkeyEnabled ? "Hotkey applied" : "Hotkey disabled",
+                        s.OverlayHotkeyEnabled
+                        ? $"The new hotkey {Hotkey.Format(_hotkeyMods, _hotkeyVKey)} is active."
+                        : "The overlay shortcut is disabled"
+                    );
                 }
                 // If registration fails, restore the previous hotkey
                 else
                 {
+                    s.OverlayHotkeyEnabled = previousEnabled;
                     s.OverlayHotkeyModifiers = previousModifiers;
                     s.OverlayHotkeyVirtualKey = previousVKey;
+
                     bool previousRestored = app.ApplyHotkey(notifyOnFailure: false);
                     var previousShortcut = Hotkey.Format(previousModifiers, previousVKey);
+
                     Notifications.Show(
                         $"{Hotkey.Format(_hotkeyMods, _hotkeyVKey)} unavailable",
-                        previousRestored
-                            ? $"The previous shortcut ({previousShortcut}) remains active."
-                            : "The previous shortcut could not be restored; the overlay hotkey is disabled"
+                        !previousEnabled
+                            ? "The previous setting, with the hotkey disabled, was restored."
+                            : previousRestored
+                                ? $"The previous shortcut ({previousShortcut}) remains active."
+                                : "The previous shortcut could not be restored; the overlay hotkey is disabled."
                     );
                 }
             }

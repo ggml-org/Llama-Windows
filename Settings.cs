@@ -232,6 +232,9 @@ public sealed class Settings
     /// </summary>
     public List<string> ModelFolders { get; set; } = [];
 
+/// <summary>Whether the global overlay hotkey is enabled</summary>
+    public bool OverlayHotkeyEnabled { get; set; } = true;
+
     /// <summary>
     /// Win32 MOD_* bitmask for the overlay hotkey modifier (<c>Alt</c> by default). 
     /// The overlay hotkey is the combination of this modifier and the 

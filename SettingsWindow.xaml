@@ -213,6 +213,8 @@
                                                    FontSize="12"
                                                    Opacity="0.6"
                                                    TextWrapping="WrapWholeWords" />
+                                        <ToggleSwitch x:Name="OverlayHotkeyEnabledToggle"
+                                                      Header="Enable overlay shortcut" />
                                         <Button x:Name="HotkeyButton"
                                                 Click="HotkeyButton_Click"
                                                 PreviewKeyDown="HotkeyButton_PreviewKeyDown"
