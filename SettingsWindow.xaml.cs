@@ -712,13 +712,37 @@ namespace LlamaApp
             catch (Exception ex) { Common.Log.Warn(ex, "model-folder preset reload failed"); }
 
             bool hotkeyChanged = s.OverlayHotkeyModifiers != _hotkeyMods || s.OverlayHotkeyVirtualKey != _hotkeyVKey;
-            s.OverlayHotkeyModifiers = _hotkeyMods;
-            s.OverlayHotkeyVirtualKey = _hotkeyVKey;
+
+            // If hotkey changed, re-register to apply immediately
+            if (hotkeyChanged && App.Current is App app)
+            {
+                var previousModifiers = s.OverlayHotkeyModifiers;
+                var previousVKey = s.OverlayHotkeyVirtualKey;
+                s.OverlayHotkeyModifiers = _hotkeyMods;
+                s.OverlayHotkeyVirtualKey = _hotkeyVKey;
+
+                // Try to apply the new hotkey immediately
+                if (app.ApplyHotkey(notifyOnFailure: false))
+                {
+                    Notifications.Show("Hotkey applied", $"The new hotkey {Hotkey.Format(_hotkeyMods, _hotkeyVKey)} is active.");
+                }
+                // If registration fails, restore the previous hotkey
+                else
+                {
+                    s.OverlayHotkeyModifiers = previousModifiers;
+                    s.OverlayHotkeyVirtualKey = previousVKey;
+                    bool previousRestored = app.ApplyHotkey(notifyOnFailure: false);
+                    var previousShortcut = Hotkey.Format(previousModifiers, previousVKey);
+                    Notifications.Show(
+                        $"{Hotkey.Format(_hotkeyMods, _hotkeyVKey)} unavailable",
+                        previousRestored
+                            ? $"The previous shortcut ({previousShortcut}) remains active."
+                            : "The previous shortcut could not be restored; the overlay hotkey is disabled"
+                    );
+                }
+            }
 
             s.Save();
-
-            // If the hotkey changed, re-register to apply immediately
-            if (hotkeyChanged) (App.Current as App)?.ApplyHotkey();
 
             // Push the launch-affecting settings (endpoint, launch flags,
             // launch env) into the manager; a running app-managed server

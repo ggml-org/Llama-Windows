@@ -67,19 +67,24 @@ namespace LlamaApp
 
         private Microsoft.UI.Dispatching.DispatcherQueue _dispatcher = null!;
 
-        internal void ApplyHotkey()
+        internal bool ApplyHotkey(bool notifyOnFailure = true)
         {
             var s = Settings.Current;
+
             Action onPressed = () => _dispatcher.TryEnqueue(() => _overlay?.Summon());
+
             _hotkey!.Unregister();
             _hotkey.Register(s.OverlayHotkeyModifiers, s.OverlayHotkeyVirtualKey, onPressed);
-            if (!_hotkey.IsRegistered)
+
+            if (!_hotkey.IsRegistered && notifyOnFailure)
             {
                 Notifications.Show(
                     $"{Hotkey.Format(s.OverlayHotkeyModifiers, s.OverlayHotkeyVirtualKey)} unavailable",
                     "Failed to register the shortcut, so the chat overlay hotkey is disabled."
                 );
             }
+
+            return _hotkey.IsRegistered;
         }
 
         /// <summary>
