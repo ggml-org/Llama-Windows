@@ -232,6 +232,24 @@ public sealed class Settings
     /// </summary>
     public List<string> ModelFolders { get; set; } = [];
 
+    /// <summary>
+    /// Win32 MOD_* bitmask for the overlay hotkey modifier (<c>Alt</c> by default). 
+    /// The overlay hotkey is the combination of this modifier and the 
+    /// <see cref="OverlayHotkeyVirtualKey">virtual key</see> that
+    /// opens the chat overlay when pressed together.
+    /// (<c>Alt = 0x0001</c>, <c>Ctrl = 0x0002</c>, <c>Shift = 0x0004</c>, <c>Win = 0x0008</c>)
+    /// </summary>
+    public uint OverlayHotkeyModifiers { get; set; } = 0x0001; // MOD_ALT
+
+    /// <summary>
+    /// Win32 virtual key code for the overlay hotkey (<c>Space</c> by default).
+    /// The overlay hotkey is the combination of this virtual key and the
+    /// <see cref="OverlayHotkeyModifiers">modifier</see> that opens
+    /// the chat overlay when pressed together.
+    /// </summary>
+    public uint OverlayHotkeyVirtualKey { get; set; } = 0x20; // VK_SPACE
+
+
     private static Settings Load()
     {
         try
