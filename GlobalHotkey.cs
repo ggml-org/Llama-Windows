@@ -182,4 +182,19 @@ internal static class Hotkey
         return string.Join("+", parts);
     }
 
+    /// <summary>Ensures that the given hotkey is a valid combination</summary>
+    public static bool IsValid(uint modifiers, uint vKey)
+    {
+        // At least one modifier key is pressed
+        if ((modifiers & 0x000F) == 0) return false;
+        // The virtual key must be a valid key (e.g. not a modifier)
+        if (vKey == (uint)VirtualKey.Control 
+            || vKey == (uint)VirtualKey.Shift 
+            || vKey == (uint)VirtualKey.Menu 
+            || vKey == (uint)VirtualKey.LeftWindows 
+            || vKey == (uint)VirtualKey.RightWindows
+        ) return false;
+        // All good
+        return true;
+    }
 }
