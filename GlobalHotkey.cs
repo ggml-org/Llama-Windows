@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using LlamaApp.Common;
+using Windows.System;
 
 namespace LlamaApp;
 
@@ -61,9 +62,9 @@ internal sealed class GlobalHotkey : IDisposable
         _registered = RegisterHotKey(_hwnd, HotkeyId, modifiers | 0x4000 /* MOD_NOREPEAT */, vKey);
 
         if (!_registered)
-            Log.Warn("global hotkey registration failed");
+            Log.Warn($"global hotkey registration failed: {Hotkey.Format(modifiers, vKey)}");
         else
-            Log.Info("global hotkey registered");
+            Log.Info($"global hotkey registered: {Hotkey.Format(modifiers, vKey)}");
     }
 
     /// <summary>
@@ -155,4 +156,30 @@ internal sealed class GlobalHotkey : IDisposable
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+}
+
+internal static class Hotkey
+{
+    /// <summary>
+    /// Format the <paramref name="modifiers"/> and <paramref name="vKey"/> 
+    /// combination into a readable friendly display string.
+    /// </summary>
+    public static string Format(uint modifiers, uint vKey)
+    {
+        var parts = new List<string>();
+        if ((modifiers & 0x0008) != 0) parts.Add("Win");
+        if ((modifiers & 0x0002) != 0) parts.Add("Ctrl");
+        if ((modifiers & 0x0004) != 0) parts.Add("Shift");
+        if ((modifiers & 0x0001) != 0) parts.Add("Alt");
+
+        string keyName = vKey switch
+        {
+            0x20 => "Space",
+            _ => ((Windows.System.VirtualKey)vKey).ToString()
+        };
+        parts.Add(keyName);
+
+        return string.Join("+", parts);
+    }
+
 }
