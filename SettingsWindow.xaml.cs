@@ -528,11 +528,11 @@ namespace LlamaApp
             var key = e.Key;
 
             if (key == VirtualKey.Escape) { EndCapture(); return; }
-            
+
             if (key is VirtualKey.Control
-                or VirtualKey.Menu 
-                or VirtualKey.Shift 
-                or VirtualKey.LeftWindows 
+                or VirtualKey.Menu
+                or VirtualKey.Shift
+                or VirtualKey.LeftWindows
                 or VirtualKey.RightWindows
             ) return;
 
@@ -540,21 +540,21 @@ namespace LlamaApp
                     .GetKeyStateForCurrentThread(k)
                     .HasFlag(CoreVirtualKeyStates.Down);
 
-            uint mods = (
-                IsKeyDown(VirtualKey.Menu) ? 0x0001u : 0)
-                | (IsKeyDown(VirtualKey.Control) ? 0x0002u : 0)
-                | (IsKeyDown(VirtualKey.Shift) ? 0x0004u : 0)
-                | ((IsKeyDown(VirtualKey.LeftWindows) || IsKeyDown(VirtualKey.RightWindows)) ? 0x0008u : 0
-            );
+            var mods = HotkeyModifiers.None;
+            if (IsKeyDown(VirtualKey.Control)) mods |= HotkeyModifiers.Control;
+            if (IsKeyDown(VirtualKey.Menu)) mods |= HotkeyModifiers.Alt;
+            if (IsKeyDown(VirtualKey.Shift)) mods |= HotkeyModifiers.Shift;
+            if (IsKeyDown(VirtualKey.LeftWindows) || IsKeyDown(VirtualKey.RightWindows)) mods |= HotkeyModifiers.Win;
+            uint modifiers = (uint)mods;
 
-            if (!Hotkey.IsValid(mods, (uint)key))
+            if (!Hotkey.IsValid(modifiers, (uint)key))
             {
                 HotkeyErrorText.Text = "Include Ctrl, Alt, Shift or Win Modifiers";
                 HotkeyErrorText.Visibility = Visibility.Visible;
                 return;
             }
 
-            _hotkeyMods = mods;
+            _hotkeyMods = modifiers;
             _hotkeyVKey = (uint)key;
             HotkeyErrorText.Text = "";
             HotkeyErrorText.Visibility = Visibility.Collapsed;

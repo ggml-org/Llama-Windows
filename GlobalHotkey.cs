@@ -59,7 +59,7 @@ internal sealed class GlobalHotkey : IDisposable
             _hwnd = CreateMessageOnlyWindow();
         }
 
-        _registered = RegisterHotKey(_hwnd, HotkeyId, modifiers | 0x4000 /* MOD_NOREPEAT */, vKey);
+        _registered = RegisterHotKey(_hwnd, HotkeyId, modifiers | (uint)HotkeyModifiers.NoRepeat, vKey);
 
         if (!_registered)
             Log.Warn($"global hotkey registration failed: {Hotkey.Format(modifiers, vKey)}");

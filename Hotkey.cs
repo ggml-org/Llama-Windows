@@ -2,6 +2,18 @@ using Windows.System;
 
 namespace LlamaApp;
 
+[Flags]
+internal enum HotkeyModifiers : uint
+{
+    None = 0,
+    Alt = 0x0001,
+    Control = 0x0002,
+    Shift = 0x0004,
+    Win = 0x0008,
+    NoRepeat = 0x4000, // RegisterHotKey flag, not a physical key
+    All = Alt | Control | Shift | Win, // all modifiers
+}
+
 internal static class Hotkey
 {
     /// <summary>
@@ -11,10 +23,10 @@ internal static class Hotkey
     public static string Format(uint modifiers, uint vKey)
     {
         var parts = new List<string>();
-        if ((modifiers & 0x0008) != 0) parts.Add("Win");
-        if ((modifiers & 0x0002) != 0) parts.Add("Ctrl");
-        if ((modifiers & 0x0004) != 0) parts.Add("Shift");
-        if ((modifiers & 0x0001) != 0) parts.Add("Alt");
+        if ((modifiers & (uint)HotkeyModifiers.Win) != 0) parts.Add("Win");
+        if ((modifiers & (uint)HotkeyModifiers.Control) != 0) parts.Add("Ctrl");
+        if ((modifiers & (uint)HotkeyModifiers.Shift) != 0) parts.Add("Shift");
+        if ((modifiers & (uint)HotkeyModifiers.Alt) != 0) parts.Add("Alt");
 
         string keyName = vKey switch
         {
@@ -33,7 +45,7 @@ internal static class Hotkey
         if (vKey == 0) return false;
 
         // At least one modifier key is pressed
-        if ((modifiers & 0x000F) == 0) return false;
+        if ((modifiers & (uint)HotkeyModifiers.All) == 0) return false;
 
         // The virtual key must be a valid key (e.g. not a modifier)
         if (IsModifierKey(vKey)) return false;

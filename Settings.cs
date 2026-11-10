@@ -237,9 +237,8 @@ public sealed class Settings
     /// The overlay hotkey is the combination of this modifier and the 
     /// <see cref="OverlayHotkeyVirtualKey">virtual key</see> that
     /// opens the chat overlay when pressed together.
-    /// (<c>Alt = 0x0001</c>, <c>Ctrl = 0x0002</c>, <c>Shift = 0x0004</c>, <c>Win = 0x0008</c>)
     /// </summary>
-    public uint OverlayHotkeyModifiers { get; set; } = 0x0001; // MOD_ALT
+    public uint OverlayHotkeyModifiers { get; set; } = (uint)HotkeyModifiers.Alt;
 
     /// <summary>
     /// Win32 virtual key code for the overlay hotkey (<c>Space</c> by default).
