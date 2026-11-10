@@ -193,6 +193,7 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <Border Grid.Column="0"
                                             Width="36" Height="36"
@@ -205,27 +206,34 @@
                                                   HorizontalAlignment="Center"
                                                   VerticalAlignment="Center" />
                                     </Border>
-                                    <StackPanel Grid.Column="1" Spacing="2">
+                                    <StackPanel Grid.Column="1" Spacing="4">
                                         <TextBlock Text="Chat overlay"
                                                    FontSize="14"
                                                    FontWeight="SemiBold" />
                                         <TextBlock Text="Global shortcut to open the chat overlay."
-                                                   FontSize="12"
-                                                   Opacity="0.6"
-                                                   TextWrapping="WrapWholeWords" />
-                                        <ToggleSwitch x:Name="OverlayHotkeyEnabledToggle"
-                                                      Header="Enable overlay shortcut" />
-                                        <Button x:Name="HotkeyButton"
-                                                Click="HotkeyButton_Click"
-                                                PreviewKeyDown="HotkeyButton_PreviewKeyDown"
-                                                LostFocus="HotkeyButton_LostFocus" />
-                                        <Button Content="Restore"
-                                                Click="RestoreHotkeyDefault_Click" />
+                                                    FontSize="12"
+                                                    Opacity="0.6"
+                                                    TextWrapping="WrapWholeWords" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,8" Spacing="6">
+                                            <Button x:Name="HotkeyButton"
+                                                    Click="HotkeyButton_Click"
+                                                    PreviewKeyDown="HotkeyButton_PreviewKeyDown"
+                                                    LostFocus="HotkeyButton_LostFocus" />
+                                            <Button Content="Restore"
+                                                    Click="RestoreHotkeyDefault_Click" />
+                                        </StackPanel>
                                         <TextBlock x:Name="HotkeyErrorText"
                                                    Foreground="Red"
                                                    FontSize="12"
                                                    Visibility="Collapsed" />
                                     </StackPanel>
+                                    <ToggleSwitch x:Name="OverlayHotkeyEnabledToggle"
+                                                  Grid.Column="2"
+                                                  MinWidth="0"
+                                                  VerticalAlignment="Top"
+                                                  HorizontalAlignment="Right"
+                                                  OnContent=""
+                                                  OffContent="" />
                                 </Grid>
                             </Border>
 
