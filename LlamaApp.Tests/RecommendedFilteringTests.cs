@@ -19,7 +19,6 @@ public class RecommendedFilteringTests
         License = "",
         Parameters = "",
         Size = "",
-        Vision = false,
         Featured = featured,
     };
 
