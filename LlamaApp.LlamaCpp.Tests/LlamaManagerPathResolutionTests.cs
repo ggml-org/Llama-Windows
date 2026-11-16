@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using LlamaApp.Llama;
 using Xunit;
 
@@ -29,6 +30,62 @@ public sealed class LlamaManagerPathResolutionTests : IDisposable
         Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, "llama.exe"), "fake");
         return dir;
+    }
+
+    [Fact]
+    public void EffectivePath_NormalizesAndDeduplicatesInDiscoveryOrder()
+    {
+        var process = MakeInstallDir("process");
+        var user = MakeInstallDir("user");
+        var machine = MakeInstallDir("machine");
+        var actual = LlamaManager.EffectivePath(
+            $"  \"{process}\"  ;{process.ToUpperInvariant()}",
+            $";{process};{user};bad\0entry", $"{user};{machine}");
+        Assert.Equal(string.Join(Path.PathSeparator, process, user, machine), actual);
+        Assert.Equal("", LlamaManager.EffectivePath(null, "", "  "));
+    }
+
+    [Theory]
+    [InlineData("ffmpeg.exe")]
+    [InlineData("ffprobe.exe")]
+    public async Task EffectivePath_MakesNewDecodersVisibleToChildProcesses(string executable)
+    {
+        var oldPath = MakeInstallDir("old-path");
+        var installed = MakeInstallDir("new-decoder");
+        var interpreter = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        // A real executable with deterministic output, isolated from installed decoders.
+        File.Copy(interpreter, Path.Combine(installed, executable));
+        Assert.Null(LlamaManager.FindOnPath(executable, oldPath, null, null));
+        Assert.Equal(Path.Combine(installed, executable),
+            LlamaManager.FindOnPath(executable, oldPath, installed, null));
+        var start = new ProcessStartInfo(interpreter)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.Environment["PATH"] = LlamaManager.EffectivePath(oldPath, installed, null);
+        start.ArgumentList.Add("/d");
+        start.ArgumentList.Add("/c");
+        start.ArgumentList.Add($"{executable} /d /c echo decoder-found");
+        using var child = Process.Start(start)!;
+        var output = child.StandardOutput.ReadToEndAsync();
+        var error = child.StandardError.ReadToEndAsync();
+        try
+        {
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(child.ExitCode == 0, await error);
+            Assert.Equal("decoder-found", (await output).Trim());
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync();
+            }
+        }
     }
 
     [Fact]
