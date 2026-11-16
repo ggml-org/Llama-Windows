@@ -165,7 +165,38 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     /// </summary>
     public ulong SizeBytes { get; set; }
     public string License { get; set; } = "";
-    public bool Vision { get; set; }
+    private bool _vision;
+    public bool Vision
+    {
+        get => _vision;
+        set
+        {
+            if (_vision == value) return;
+            _vision = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public bool Audio { get; private set; }
+    public bool Video { get; private set; }
+
+    /// <summary>Refreshes the same row from the server's declared inputs, including removals.</summary>
+    public void ApplyInputModalities(IReadOnlyList<string> modalities)
+    {
+        Vision = modalities.Contains("image", StringComparer.OrdinalIgnoreCase);
+        var audio = modalities.Contains("audio", StringComparer.OrdinalIgnoreCase);
+        var video = modalities.Contains("video", StringComparer.OrdinalIgnoreCase);
+        if (Audio != audio)
+        {
+            Audio = audio;
+            OnPropertyChanged(nameof(Audio));
+        }
+        if (Video != video)
+        {
+            Video = video;
+            OnPropertyChanged(nameof(Video));
+        }
+    }
 
     /// <summary>Quantization label, e.g. "Q4_0", "mxfp4" (used for ServerModelId).</summary>
     public string? Quant { get; set; } = null;

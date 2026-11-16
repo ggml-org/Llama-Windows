@@ -458,6 +458,7 @@ namespace LlamaApp.Views
                 if (existing is not null)
                 {
                     reused.Add(existing);
+                    existing.ApplyInputModalities(sm.InputModalities);
                     existing.IsLoaded = sm.IsLoaded;
                     existing.IsDownloading = sm.IsDownloading;
                     item = existing;
@@ -527,7 +528,6 @@ namespace LlamaApp.Views
                 Parameters = matched?.Parameters ?? "",
                 Size = matched?.Size ?? "",
                 License = matched?.License ?? "",
-                Vision = sm.SupportsImage, // authoritative — from the server
                 Downloadable = false,
                 Brand = brand,
                 Logo = ModelItem.ResolveLogoOrGeneric(brand),
@@ -535,6 +535,7 @@ namespace LlamaApp.Views
                 // locally when it isn't (enrolled scan map / cache layouts).
                 FilePath = sm.Path ?? LlamaManager.Shared.FindModelFilePath(sm.Id),
             };
+            item.ApplyInputModalities(sm.InputModalities);
             SeedServerState(item, sm);
             return item;
         }
@@ -2624,6 +2625,7 @@ namespace LlamaApp.Views
 
                 if (item is not null)
                 {
+                    item.ApplyInputModalities(sm.InputModalities);
                     // Rows built before the file existed (an app-driven
                     // download) learn their on-disk path here — it drives the
                     // row's "reveal in Explorer" button. Resolution retries on
