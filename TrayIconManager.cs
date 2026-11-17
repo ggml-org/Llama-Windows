@@ -20,7 +20,7 @@ namespace LlamaApp;
 ///
 /// <para><b>Right-click</b> shows a native Win32 context menu with the
 /// standard Windows tray affordances: <c>Open</c> (the flyout), <c>Chat</c>
-/// (the overlay — otherwise reachable only via the Alt+Space hotkey),
+/// (the overlay — otherwise reachable only via the configured global hotkey),
 /// <c>Settings</c>, a live <c>Stop/Start server</c> toggle (rebuilt on each
 /// right-click so the label matches the server's current state), and
 /// <c>Exit</c>.</para>

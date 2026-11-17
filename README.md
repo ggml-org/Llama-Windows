@@ -17,11 +17,11 @@ Grab the latest `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.c
 - **One-click models** — browse and download recommended models from the Hugging Face Hub
 - **Model details** — click any model for a context-length picker with per-option memory estimates (read from the GGUF header), remembered per model, plus chat, copy-model-ID, curl-request, and Hugging Face actions
 - **Standard storage** — models live in the Hugging Face cache, shared with `llama.cpp` and other tools
-- **Spotlight-like overlay** — press `Alt+Space` from any app to chat with your loaded model
+- **Spotlight-like overlay** — press a configurable hotkey (default: `Alt+Space`) from any app to chat with your loaded model
 
 ## The overlay
 
-`Alt+Space` from any app opens a borderless window with the WebUI for whichever model is loaded. It hides instead of closing, so re-summoning is instant and your conversation is still there.
+By default, `Alt+Space` (configurable) from any app opens a borderless window with the WebUI for whichever model is loaded. It hides instead of closing, so re-summoning is instant and your conversation is still there. You can change or disable the shortcut in **Settings** -> **General**.
 
 <p align="center">
   <img src=".images/overlay_streaming.gif" alt="Streaming a response in the overlay" width="640">

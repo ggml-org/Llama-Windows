@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using LlamaApp.Common;
+using Windows.System;
 
 namespace LlamaApp;
 
@@ -18,13 +19,6 @@ internal sealed class GlobalHotkey : IDisposable
     private const uint WM_HOTKEY = 0x0312;
     private const int HotkeyId = 0x0001;
 
-    // MOD_ALT + MOD_NOREPEAT, VK_SPACE → Alt+Space (the spotlight convention,
-    // matching PowerToys Run's default). The global registration intercepts it
-    // system-wide, so the Win11 system-menu shortcut is shadowed only while
-    // the app is running.
-    private const uint Modifier = 0x0001 /*MOD_ALT*/ | 0x4000 /*MOD_NOREPEAT*/;
-    private const uint Vk = 0x20; // VK_SPACE
-
     private static readonly IntPtr HWND_MESSAGE = new(-3);
 
     // Single-slot pinning (one hotkey window per app). A GC handle keeps the
@@ -37,46 +31,57 @@ internal sealed class GlobalHotkey : IDisposable
     private bool _disposed;
 
     /// <summary>
-    /// True when the hotkey is live. False after a failed
-    /// <see cref="Register"/> (another app already owns Alt+Space) — the
-    /// caller surfaces that instead of the shortcut silently doing nothing.
+    /// True when the hotkey is live. False if <see cref="Register"/> fails 
+    /// (for example, because another app already owns the hotkey combination)
+    /// the caller surfaces that instead of the shortcut silently doing nothing.
     /// </summary>
     public bool IsRegistered => _registered;
 
     /// <summary>Registers the hotkey and delivers presses to <paramref name="onPressed"/>.</summary>
-    public void Register(Action onPressed)
+    public void Register(uint modifiers, uint vKey, Action onPressed)
     {
         if (_registered) return;
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        _current = (hwnd, msg, wParam, lParam) =>
+        if (_hwnd == IntPtr.Zero)
         {
-            if (msg == WM_HOTKEY)
+            _current = (hwnd, msg, wParam, lParam) =>
             {
-                onPressed();
-                return IntPtr.Zero;
-            }
-            return DefWindowProcW(hwnd, msg, wParam, lParam);
-        };
-        _currentHandle = GCHandle.Alloc(_current);
+                if (msg == WM_HOTKEY)
+                {
+                    onPressed();
+                    return IntPtr.Zero;
+                }
+                return DefWindowProcW(hwnd, msg, wParam, lParam);
+            };
+            _currentHandle = GCHandle.Alloc(_current);
+            _hwnd = CreateMessageOnlyWindow();
+        }
 
-        _hwnd = CreateMessageOnlyWindow();
-        _registered = RegisterHotKey(_hwnd, HotkeyId, Modifier, Vk);
+        _registered = RegisterHotKey(_hwnd, HotkeyId, modifiers | (uint)HotkeyModifiers.NoRepeat, vKey);
+
         if (!_registered)
-            Log.Warn("global hotkey registration failed (Alt+Space may already be taken by another app).");
+            Log.Warn($"global hotkey registration failed: {Hotkey.Format(modifiers, vKey)}");
         else
-            Log.Info("global hotkey registered: Alt+Space");
+            Log.Info($"global hotkey registered: {Hotkey.Format(modifiers, vKey)}");
+    }
+
+    /// <summary>
+    /// Unregister the hotkey.
+    /// Safe to call multiple times, if the hotkey is already unregistered, it will do nothing.
+    /// </summary>
+    public void Unregister()
+    {
+        if (!_registered) return;
+        UnregisterHotKey(_hwnd, HotkeyId);
+        _registered = false;
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        if (_registered)
-        {
-            UnregisterHotKey(_hwnd, HotkeyId);
-            _registered = false;
-        }
+        Unregister();
         if (_hwnd != IntPtr.Zero)
         {
             DestroyWindow(_hwnd);

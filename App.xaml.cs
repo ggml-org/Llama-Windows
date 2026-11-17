@@ -67,6 +67,27 @@ namespace LlamaApp
 
         private Microsoft.UI.Dispatching.DispatcherQueue _dispatcher = null!;
 
+        internal bool ApplyHotkey(bool notifyOnFailure = true)
+        {
+            var s = Settings.Current;
+            _hotkey!.Unregister();  // Unregister any previous hotkeys (useful if re-registering)
+
+            if (!s.OverlayHotkeyEnabled) return true; // Skip if overlay hotkey is disabled altogether
+
+            Action onPressed = () => _dispatcher.TryEnqueue(() => _overlay?.Summon());
+            _hotkey.Register(s.OverlayHotkeyModifiers, s.OverlayHotkeyVirtualKey, onPressed);
+
+            if (!_hotkey.IsRegistered && notifyOnFailure)
+            {
+                Notifications.Show(
+                    $"{Hotkey.Format(s.OverlayHotkeyModifiers, s.OverlayHotkeyVirtualKey)} unavailable",
+                    "Failed to register the shortcut, so the chat overlay hotkey is disabled."
+                );
+            }
+
+            return _hotkey.IsRegistered;
+        }
+
         /// <summary>
         /// Invoked when the end user launches the application normally.  Other entry points
         /// will be used, such as when the application is launched to open a specific file.
@@ -277,8 +298,8 @@ namespace LlamaApp
             _ = _runtimeUpdates.StartAsync(
                 () => Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync());
 
-            // Spotlight-style prompt overlay, summoned by a global Alt+Space
-            // hotkey. Created lazily on first press and reused thereafter; the
+            // Spotlight-style prompt overlay, summoned by the configured global hotkey.
+            // Created lazily on first press and reused thereafter; the
             // hotkey is registered for the app's lifetime only, so it stops
             // working the moment Llama exits.
             _overlay = new OverlayWindow();
@@ -293,16 +314,8 @@ namespace LlamaApp
             // nothing). Prewarmed, the first summon just navigates — and is
             // instant, too.
             _overlay.PrewarmWebView();
-            _hotkey.Register(() => _dispatcher.TryEnqueue(() => _overlay.Summon()));
 
-            // The hotkey is hard-coded and otherwise undiscoverable — say so
-            // when it can't work instead of the shortcut silently doing
-            // nothing (RegisterHotKey fails when another app owns Alt+Space).
-            if (!_hotkey.IsRegistered)
-            {
-                Notifications.Show("Alt+Space unavailable",
-                    "Another app is using the Alt+Space shortcut, so the chat overlay hotkey is off.");
-            }
+            if (!_hotkey.IsRegistered) ApplyHotkey();
 
             // One-time first-run hint: the app is tray-only (no window appears
             // on launch) and the overlay hotkey is undiscoverable — tell the
@@ -311,8 +324,11 @@ namespace LlamaApp
             {
                 Settings.Current.TrayHintShown = true;
                 Settings.Current.Save();
-                Notifications.Show("Llama is running",
-                    "Find it in the system tray — and press Alt+Space anytime to chat with a loaded model.");
+                var hotkey = Hotkey.Format(Settings.Current.OverlayHotkeyModifiers, Settings.Current.OverlayHotkeyVirtualKey);
+                var hint = _hotkey.IsRegistered
+                    ? $"Find Llama in the system tray — press {hotkey} to open the chat overlay."
+                    : "Find Llama in the system tray. Configure the chat overlay shortcut in Settings / General.";
+                Notifications.Show("Llama is running", hint);
             }
 
             Common.Log.Info("startup complete");
@@ -579,7 +595,7 @@ namespace LlamaApp
                             return Common.HandoffRequest.ForModelId(modelId);
                         case Common.DeepLinkKind.Install when link.Repo is { } repo:
                             return Common.HandoffRequest.ForInstall(repo, link.Quant);
-                        // llama://chat with no prompt behaves like a plain second launch.
+                            // llama://chat with no prompt behaves like a plain second launch.
                     }
                     return Common.HandoffRequest.None;
                 }
@@ -1272,7 +1288,7 @@ namespace LlamaApp
         }
 
         /// <summary>
-        /// Opens the chat overlay — the Alt+Space panel — from surfaces that
+        /// Opens the chat overlay from surfaces that
         /// don't own the hotkey (toast Chat button, tray context menu).
         /// </summary>
         internal void SummonChatOverlay() => _overlay?.Summon(ShareSummonGraceMs);

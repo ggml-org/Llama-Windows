@@ -183,9 +183,7 @@
                                 </Grid>
                             </Border>
 
-                            <!-- Chat overlay shortcut (informational — the
-                                 hotkey is hard-coded Alt+Space; this card is
-                                 how a user discovers it exists). -->
+                            <!-- Chat overlay shortcut -->
                             <Border CornerRadius="8"
                                     Padding="16,14"
                                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
@@ -195,6 +193,7 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <Border Grid.Column="0"
                                             Width="36" Height="36"
@@ -207,18 +206,40 @@
                                                   HorizontalAlignment="Center"
                                                   VerticalAlignment="Center" />
                                     </Border>
-                                    <StackPanel Grid.Column="1" Spacing="2">
+                                    <StackPanel Grid.Column="1" Spacing="4">
                                         <TextBlock Text="Chat overlay"
                                                    FontSize="14"
                                                    FontWeight="SemiBold" />
-                                        <TextBlock FontSize="12"
+                                        <TextBlock Text="Global shortcut to open the chat overlay."
+                                                    FontSize="12"
+                                                    Opacity="0.6"
+                                                    TextWrapping="WrapWholeWords" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,4" Spacing="6">
+                                            <Button x:Name="HotkeyButton"
+                                                    ToolTipService.ToolTip="Click to record a new shortcut"
+                                                    Click="HotkeyButton_Click"
+                                                    PreviewKeyDown="HotkeyButton_PreviewKeyDown"
+                                                    LostFocus="HotkeyButton_LostFocus" />
+                                            <Button Content="Restore"
+                                                    Click="RestoreHotkeyDefault_Click" />
+                                        </StackPanel>
+                                        <TextBlock x:Name="HotkeyPendingText"
+                                                   Text="Save to apply"
+                                                   FontSize="12"
                                                    Opacity="0.6"
-                                                   TextWrapping="WrapWholeWords">
-                                            <Run Text="Press" />
-                                            <Run Text="Alt+Space" FontWeight="SemiBold" />
-                                            <Run Text="anywhere to open the chat overlay for the loaded model. Press Esc to dismiss it." />
-                                        </TextBlock>
+                                                   Visibility="Collapsed" />
+                                        <TextBlock x:Name="HotkeyErrorText"
+                                                   Foreground="Red"
+                                                   FontSize="12"
+                                                   Visibility="Collapsed" />
                                     </StackPanel>
+                                    <ToggleSwitch x:Name="OverlayHotkeyEnabledToggle"
+                                                  Grid.Column="2"
+                                                  MinWidth="0"
+                                                  VerticalAlignment="Top"
+                                                  HorizontalAlignment="Right"
+                                                  OnContent=""
+                                                  OffContent="" />
                                 </Grid>
                             </Border>
 

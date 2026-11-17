@@ -189,7 +189,7 @@ public sealed class Settings
 
     /// <summary>
     /// Whether the one-time first-run hint ("Llama lives in the system
-    /// tray; Alt+Space opens the chat overlay") has been shown. Persisted so
+    /// tray; Alt+Space (default hotkey) opens the chat overlay") has been shown. Persisted so
     /// the toast fires exactly once, on the first launch.
     /// </summary>
     public bool TrayHintShown { get; set; } = false;
@@ -231,6 +231,26 @@ public sealed class Settings
     /// immediately (preset reload) when changed while the server runs.
     /// </summary>
     public List<string> ModelFolders { get; set; } = [];
+
+/// <summary>Whether the global overlay hotkey is enabled</summary>
+    public bool OverlayHotkeyEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Win32 MOD_* bitmask for the overlay hotkey modifier (<c>Alt</c> by default). 
+    /// The overlay hotkey is the combination of this modifier and the 
+    /// <see cref="OverlayHotkeyVirtualKey">virtual key</see> that
+    /// opens the chat overlay when pressed together.
+    /// </summary>
+    public uint OverlayHotkeyModifiers { get; set; } = Hotkey.DefaultModifiers;
+
+    /// <summary>
+    /// Win32 virtual key code for the overlay hotkey (<c>Space</c> by default).
+    /// The overlay hotkey is the combination of this virtual key and the
+    /// <see cref="OverlayHotkeyModifiers">modifier</see> that opens
+    /// the chat overlay when pressed together.
+    /// </summary>
+    public uint OverlayHotkeyVirtualKey { get; set; } = Hotkey.DefaultVKey;
+
 
     private static Settings Load()
     {

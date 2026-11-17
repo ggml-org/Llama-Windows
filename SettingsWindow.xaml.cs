@@ -1,6 +1,10 @@
 ﻿using System.Runtime.InteropServices;
+using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
+using Microsoft.UI.Xaml.Input;
 using Windows.Graphics;
+using Windows.System;
+using Windows.UI.Core;
 using WinRT.Interop;
 
 namespace LlamaApp
@@ -32,6 +36,14 @@ namespace LlamaApp
         // into Settings on Save, discarded otherwise. An observable collection
         // so add/remove updates the card's list live.
         private readonly System.Collections.ObjectModel.ObservableCollection<string> _modelFolders = [];
+
+        /// <summary>Overlay hotkey modifiers</summary>
+        private uint _hotkeyMods;
+        /// <summary>Overlay hotkey virtual-key</summary>
+        private uint _hotkeyVKey;
+
+        /// <summary>Whether the window is currently capturing a hotkey</summary>
+        private bool _capturingHotkey;
 
         public SettingsWindow()
         {
@@ -141,6 +153,13 @@ namespace LlamaApp
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
             LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
+
+            OverlayHotkeyEnabledToggle.IsOn = s.OverlayHotkeyEnabled;
+            _hotkeyMods = s.OverlayHotkeyModifiers;
+            _hotkeyVKey = s.OverlayHotkeyVirtualKey;
+            HotkeyButton.Content = Hotkey.Format(_hotkeyMods, _hotkeyVKey);
+            UpdateHotkeyPendingHint();
+
             LoadInstallInfo();
         }
 
@@ -498,6 +517,83 @@ namespace LlamaApp
                 _modelFolders.Remove(folder);
         }
 
+        private void HotkeyButton_Click(object s, RoutedEventArgs e)
+        {
+            _capturingHotkey = true;
+            HotkeyButton.Content = "Press a shortcut... (Esc to cancel)";
+        }
+
+        private void HotkeyButton_PreviewKeyDown(object s, KeyRoutedEventArgs e)
+        {
+            if (!_capturingHotkey) return;
+
+            e.Handled = true; // Swallow Alt+Space system menu etc.
+
+            var key = e.Key;
+
+            if (key == VirtualKey.Escape) { EndCapture(); return; }
+
+            if (key is VirtualKey.Control
+                or VirtualKey.Menu
+                or VirtualKey.Shift
+                or VirtualKey.LeftWindows
+                or VirtualKey.RightWindows
+            ) return;
+
+            static bool IsKeyDown(VirtualKey k) => InputKeyboardSource
+                    .GetKeyStateForCurrentThread(k)
+                    .HasFlag(CoreVirtualKeyStates.Down);
+
+            var mods = HotkeyModifiers.None;
+            if (IsKeyDown(VirtualKey.Control)) mods |= HotkeyModifiers.Control;
+            if (IsKeyDown(VirtualKey.Menu)) mods |= HotkeyModifiers.Alt;
+            if (IsKeyDown(VirtualKey.Shift)) mods |= HotkeyModifiers.Shift;
+            if (IsKeyDown(VirtualKey.LeftWindows) || IsKeyDown(VirtualKey.RightWindows)) mods |= HotkeyModifiers.Win;
+            uint modifiers = (uint)mods;
+
+            if (!Hotkey.IsValid(modifiers, (uint)key))
+            {
+                HotkeyErrorText.Text = "Choose a (Ctrl|Alt|Shift|Win) Modifier + Key combination";
+                HotkeyErrorText.Visibility = Visibility.Visible;
+                return;
+            }
+
+            _hotkeyMods = modifiers;
+            _hotkeyVKey = (uint)key;
+            HotkeyErrorText.Text = "";
+            HotkeyErrorText.Visibility = Visibility.Collapsed;
+            EndCapture();
+        }
+
+        private void HotkeyButton_LostFocus(object s, RoutedEventArgs e) => EndCapture();
+
+        private void EndCapture()
+        {
+            _capturingHotkey = false;
+            HotkeyButton.Content = Hotkey.Format(_hotkeyMods, _hotkeyVKey);
+            UpdateHotkeyPendingHint();
+        }
+
+        private void RestoreHotkeyDefault_Click(object s, RoutedEventArgs e)
+        {
+            _capturingHotkey = false;
+            _hotkeyMods = Hotkey.DefaultModifiers;
+            _hotkeyVKey = Hotkey.DefaultVKey;
+            UpdateHotkeyPendingHint();
+            HotkeyButton.Content = Hotkey.Format(_hotkeyMods, _hotkeyVKey);
+            HotkeyErrorText.Text = "";
+            HotkeyErrorText.Visibility = Visibility.Collapsed;
+        }
+
+        private void UpdateHotkeyPendingHint()
+        {
+            var s = Settings.Current;
+            bool hasPendingHotkey = _hotkeyMods != s.OverlayHotkeyModifiers || _hotkeyVKey != s.OverlayHotkeyVirtualKey;
+            HotkeyPendingText.Visibility = hasPendingHotkey
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
         private async void Save_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
             var s = Settings.Current;
@@ -639,6 +735,51 @@ namespace LlamaApp
             EnrolledFolderWatch.SyncFolders();
             try { _ = Llama.LlamaManager.Shared.ReloadModelPresetsAsync(); }
             catch (Exception ex) { Common.Log.Warn(ex, "model-folder preset reload failed"); }
+
+            bool hasHotkeyToggleChanged = OverlayHotkeyEnabledToggle.IsOn != s.OverlayHotkeyEnabled;
+            bool hasHotkeyChanged = s.OverlayHotkeyModifiers != _hotkeyMods || s.OverlayHotkeyVirtualKey != _hotkeyVKey;
+
+            // If hotkey changed, re-register to apply immediately
+            if ((hasHotkeyToggleChanged || hasHotkeyChanged) && App.Current is App app)
+            {
+                var previousEnabled = s.OverlayHotkeyEnabled;
+                var previousModifiers = s.OverlayHotkeyModifiers;
+                var previousVKey = s.OverlayHotkeyVirtualKey;
+
+                s.OverlayHotkeyEnabled = OverlayHotkeyEnabledToggle.IsOn;
+                s.OverlayHotkeyModifiers = _hotkeyMods;
+                s.OverlayHotkeyVirtualKey = _hotkeyVKey;
+
+                // Try to apply the new hotkey immediately
+                if (app.ApplyHotkey(notifyOnFailure: false))
+                {
+                    Notifications.Show(
+                        s.OverlayHotkeyEnabled ? "Chat Overlay Shortcut: Enabled" : "Chat Overlay Shortcut: Disabled",
+                        s.OverlayHotkeyEnabled
+                        ? $"The chat overlay shortcut ({Hotkey.Format(_hotkeyMods, _hotkeyVKey)}) is active"
+                        : "The chat overlay shortcut is disabled"
+                    );
+                }
+                // If registration fails, restore the previous hotkey
+                else
+                {
+                    s.OverlayHotkeyEnabled = previousEnabled;
+                    s.OverlayHotkeyModifiers = previousModifiers;
+                    s.OverlayHotkeyVirtualKey = previousVKey;
+
+                    bool previousRestored = app.ApplyHotkey(notifyOnFailure: false);
+                    var previousShortcut = Hotkey.Format(previousModifiers, previousVKey);
+
+                    Notifications.Show(
+                        $"{Hotkey.Format(_hotkeyMods, _hotkeyVKey)} unavailable",
+                        !previousEnabled
+                            ? "The previous setting, with the hotkey disabled, was restored."
+                            : previousRestored
+                                ? $"The previous shortcut ({previousShortcut}) remains active."
+                                : "The previous shortcut could not be restored; the overlay hotkey is disabled."
+                    );
+                }
+            }
 
             s.Save();
 
