@@ -42,7 +42,6 @@ internal sealed class GlobalHotkey : IDisposable
     {
         if (_registered) return;
         ObjectDisposedException.ThrowIf(_disposed, this);
-        Unregister(); // unregister any previous hotkey (if the app is re-registering)
 
         if (_hwnd == IntPtr.Zero)
         {

@@ -70,7 +70,7 @@ namespace LlamaApp
         internal bool ApplyHotkey(bool notifyOnFailure = true)
         {
             var s = Settings.Current;
-            _hotkey!.Unregister();
+            _hotkey!.Unregister();  // Unregister any previous hotkeys (useful if re-registering)
 
             if (!s.OverlayHotkeyEnabled) return true; // Skip if overlay hotkey is disabled altogether
 
