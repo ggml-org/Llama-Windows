@@ -324,8 +324,11 @@ namespace LlamaApp
             {
                 Settings.Current.TrayHintShown = true;
                 Settings.Current.Save();
-                Notifications.Show("Llama is running",
-                    "Find it in the system tray — and press Alt+Space (the default shortcut) anytime to chat with a loaded model.");
+                var hotkey = Hotkey.Format(Settings.Current.OverlayHotkeyModifiers, Settings.Current.OverlayHotkeyVirtualKey);
+                var hint = _hotkey.IsRegistered
+                    ? $"Find Llama in the system tray — press {hotkey} to open the chat overlay."
+                    : "Find Llama in the system tray. Configure the chat overlay shortcut in Settings / General.";
+                Notifications.Show("Llama is running", hint);
             }
 
             Common.Log.Info("startup complete");
@@ -592,7 +595,7 @@ namespace LlamaApp
                             return Common.HandoffRequest.ForModelId(modelId);
                         case Common.DeepLinkKind.Install when link.Repo is { } repo:
                             return Common.HandoffRequest.ForInstall(repo, link.Quant);
-                        // llama://chat with no prompt behaves like a plain second launch.
+                            // llama://chat with no prompt behaves like a plain second launch.
                     }
                     return Common.HandoffRequest.None;
                 }

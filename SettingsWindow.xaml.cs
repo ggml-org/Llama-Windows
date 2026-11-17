@@ -520,7 +520,7 @@ namespace LlamaApp
         private void HotkeyButton_Click(object s, RoutedEventArgs e)
         {
             _capturingHotkey = true;
-            HotkeyButton.Content = "Press a shortcut...";
+            HotkeyButton.Content = "Press a shortcut... (Esc to cancel)";
         }
 
         private void HotkeyButton_PreviewKeyDown(object s, KeyRoutedEventArgs e)
@@ -553,7 +553,7 @@ namespace LlamaApp
 
             if (!Hotkey.IsValid(modifiers, (uint)key))
             {
-                HotkeyErrorText.Text = "Include Ctrl, Alt, Shift or Win Modifiers";
+                HotkeyErrorText.Text = "Choose a (Ctrl|Alt|Shift|Win) Modifier + Key combination";
                 HotkeyErrorText.Visibility = Visibility.Visible;
                 return;
             }
@@ -754,10 +754,10 @@ namespace LlamaApp
                 if (app.ApplyHotkey(notifyOnFailure: false))
                 {
                     Notifications.Show(
-                        s.OverlayHotkeyEnabled ? "Hotkey applied" : "Hotkey disabled",
+                        s.OverlayHotkeyEnabled ? "Chat Overlay Shortcut: Enabled" : "Chat Overlay Shortcut: Disabled",
                         s.OverlayHotkeyEnabled
-                        ? $"The new hotkey {Hotkey.Format(_hotkeyMods, _hotkeyVKey)} is active."
-                        : "The overlay shortcut is disabled"
+                        ? $"The chat overlay shortcut ({Hotkey.Format(_hotkeyMods, _hotkeyVKey)}) is active"
+                        : "The chat overlay shortcut is disabled"
                     );
                 }
                 // If registration fails, restore the previous hotkey
