@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using LlamaApp.Common;
 
 namespace LlamaApp.Llama;
@@ -12,7 +14,7 @@ namespace LlamaApp.Llama;
 /// so port-conflict classification and process teardown can be tested without
 /// the manager singleton or a real llama installation.
 /// </summary>
-internal static class ServerLaunch
+internal static partial class ServerLaunch
 {
     /// <summary>
     /// Recognizes llama.cpp's bind diagnostics as well as the underlying
@@ -32,6 +34,110 @@ internal static class ServerLaunch
             || output.Contains("wsaeaddrinuse", StringComparison.OrdinalIgnoreCase)
             || output.Contains("only one usage of each socket address", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// The option name from llama.cpp's preset-rejection diagnostic,
+    /// <c>option 'name' not recognized in preset '...'</c>, which
+    /// <c>llama serve</c> emits when the preset INI carries a key it does not
+    /// know. Pure over whatever output tail the caller has collected.
+    /// </summary>
+    /// <remarks>
+    /// Unrelated log lines around the diagnostic — and text after it on the
+    /// same line — are fine, but the wording and both quoted segments must be
+    /// exact, non-empty, and closed on one line: malformed quoting, bind
+    /// errors, and generic unknown-flag failures that lack the
+    /// <c>in preset '...'</c> tail do not match. Returns the topmost
+    /// rejection and the name verbatim.
+    /// </remarks>
+    internal static bool TryGetPresetRejection(string? output, [NotNullWhen(true)] out string? option)
+    {
+        option = null;
+        if (string.IsNullOrEmpty(output)) return false;
+
+        var match = PresetRejectionRegex().Match(output);
+        if (!match.Success) return false;
+
+        option = match.Groups["option"].Value;
+        return true;
+    }
+
+    /// <summary>
+    /// The diagnostic's line shape. Matched against the whole output rather
+    /// than per line: the quoted segments exclude CR and LF, so a rejection
+    /// can never be assembled across two log lines and CRLF needs no
+    /// splitting. The wording is matched exactly as llama.cpp prints it; the
+    /// captured name is verbatim.
+    /// </summary>
+    [GeneratedRegex(
+        @"option '(?<option>[^'\r\n]+)' not recognized in preset '[^'\r\n]+'",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex PresetRejectionRegex();
+
+    /// <summary>
+    /// Whether a failed managed-server launch or preset reload earns the
+    /// one-shot retry with the user's <c>models.user.ini</c> overrides
+    /// suspended. Pure policy — the recovery mechanics (suspend, kill/reap,
+    /// restart) live in <see cref="LlamaManager"/>.
+    /// </summary>
+    /// <param name="retryAllowed">False inside the retry itself (and on paths
+    /// that must never recover, e.g. caller cancellation): recovery is owned
+    /// by the ordinary launch/reload attempt, never by its own retry.</param>
+    /// <param name="hasActiveOverrides">Only an active user override can carry
+    /// an unknown preset key — the app's own keys are always known-good, so
+    /// with no active overrides there is nothing worth suspending and the
+    /// failure stays an ordinary one.</param>
+    /// <param name="rejectedOption">The exact option name from the server's
+    /// preset-rejection diagnostic (see <see cref="TryGetPresetRejection"/>).
+    /// Generic custom-CLI errors (unknown flag/argument without the
+    /// <c>in preset '...'</c> tail) never match and never recover.</param>
+    /// <param name="retryAlreadyUsed">The retry is one-shot per fresh start:
+    /// a failure the recovery itself produces must not cascade.</param>
+    internal static bool ShouldRetryWithDefaults(
+        bool retryAllowed, bool hasActiveOverrides, string? rejectedOption, bool retryAlreadyUsed)
+        => retryAllowed && hasActiveOverrides && rejectedOption is not null && !retryAlreadyUsed;
+
+    /// <summary>
+    /// Whether a failed launch's preset rejection earns the one-shot
+    /// suspend-and-retry — the launch path's guard BEFORE any recovery side
+    /// effect (suspension, teardown, retry spawn). Cancellation outranks
+    /// everything: a cancelled attempt must never mutate the user's override
+    /// state or spawn its retry. Pure so the guard, and the cancellation rule
+    /// in particular, is testable without a process.
+    /// </summary>
+    internal static bool ShouldRecoverFromLaunchRejection(
+        bool retryAllowed, bool hasActiveOverrides, string? rejectedOption, bool cancellationRequested)
+        => !cancellationRequested
+           && ShouldRetryWithDefaults(retryAllowed, hasActiveOverrides, rejectedOption, retryAlreadyUsed: false);
+
+    /// <summary>
+    /// Whether the staged user-override state may be published as accepted
+    /// (the <c>LlamaManager.PublishOverrides</c> step): the regeneration must
+    /// have landed on disk (a failed write leaves the server on stale bytes —
+    /// nothing newer may be claimed), the configuration must have been
+    /// accepted, AND the server must actually read the app's
+    /// <c>--models-preset</c> file. An adopted external server runs no preset
+    /// of ours — its reload is a plain rescan that applies none of the
+    /// overrides, so success there must never publish or claim override
+    /// application. Pure so the adopted-server outcome is testable without a
+    /// server.
+    /// </summary>
+    internal static bool ShouldPublishOverrides(
+        bool writeSucceeded, bool reloadAccepted, bool serverUsesModelPresets)
+        => writeSucceeded && reloadAccepted && serverUsesModelPresets;
+
+    /// <summary>
+    /// Whether a completed preset regeneration counts as a successful
+    /// <c>ReloadModelPresetsAsync</c> (its <c>bool</c> contract with the
+    /// Settings UI): the write must have landed — a failed write leaves the
+    /// server on stale bytes — and a running server must have accepted the
+    /// reload OR had its rejection recovered (the overrides were suspended and
+    /// the server restarted, which is the recovery succeeding). A stopped
+    /// server is deferred, not failed: the bytes are in place and take effect
+    /// on the next start. Pure so the semantics are testable without a server.
+    /// </summary>
+    internal static bool ReloadSucceeded(
+        bool writeSucceeded, bool serverRunning, bool reloadAccepted, bool recovered = false)
+        => writeSucceeded && (!serverRunning || reloadAccepted || recovered);
 
     /// <summary>A user-actionable conflict message for both the app and a manual CLI launch.</summary>
     internal static string PortInUseMessage(string listenAddress, int port) =>

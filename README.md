@@ -31,6 +31,19 @@ Grab the latest `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.c
 
 Llama manages a `llama serve` process and talks to it over its REST API. Your models stay in the standard Hugging Face cache (`%USERPROFILE%\.cache\huggingface\hub`), shared with `llama.cpp` and HF tooling. Settings and logs live under `%LOCALAPPDATA%\Llama`.
 
+## Per-model overrides
+
+Advanced llama.cpp options can be set per model in `%USERPROFILE%\.llama\models.user.ini`. Open an installed model's details and choose **Edit** beside Context length to add its section automatically, or open the file from **Settings → Llama → Model Overrides**. Only the keys you set are needed; Llama keeps its generated model paths and other defaults. Choose **Apply overrides** after editing; changes take effect the next time each model loads.
+
+```ini
+[ggml-org/gemma-4-E4B-it-GGUF:Q8_0]
+ctx-size = 32768
+temp = 0.7
+top-p = 0.8
+```
+
+The generated `model-context-presets.ini` is rewritten by Llama, so keep custom changes in `models.user.ini`. If llama.cpp rejects an unknown option, Llama retries without the overrides and shows a warning until the file changes.
+
 ## Privacy
 
 Llama sends no telemetry — no events, no analytics, no install id. The only thing outbound HTTP requests (model downloads, release-update checks, and calls to the local llama-server) carry is the standard User-Agent header:

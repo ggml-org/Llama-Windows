@@ -194,6 +194,10 @@ namespace LlamaApp
             var serverConfig = ResolveServerConfiguration();
             Common.Log.Info(
                 $"listen address: {serverConfig.Listen.Address}{(serverConfig.ApiKey is null ? "" : " (API key required)")}");
+            // Seed the user-owned models-preset override file (models.user.ini)
+            // before the manager's first preset write can run: a commented
+            // template sitting where users look is how the feature gets found.
+            Llama.UserModelOverrides.Shared.SeedTemplateIfNeeded();
             Llama.LlamaManager.Initialize(serverConfig.Port, serverConfig.Listen.Address, serverConfig.ApiKey);
 
             // The app is tray-only: the main window is created but never shown

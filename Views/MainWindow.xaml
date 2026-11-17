@@ -1032,6 +1032,7 @@
                 <Grid x:Name="ModelsPanel">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" /> <!-- heading -->
+                        <RowDefinition Height="Auto" /> <!-- preset override warning -->
                         <RowDefinition Height="Auto" /> <!-- empty state -->
                         <RowDefinition Height="*" />    <!-- the list -->
                         <RowDefinition Height="Auto" /> <!-- browse status -->
@@ -1061,6 +1062,50 @@
                         </Button>
                     </StackPanel>
 
+                    <!-- Persistent preset-override warning, shown while the
+                         per-model models.user.ini overrides are suspended
+                         (the server refused an unknown option — see
+                         UpdatePresetWarningRow). Names the option and the
+                         file; the button deep-links to the Settings → Llama
+                         page. No dismiss button: it is a fact about the
+                         current state, not a notification. -->
+                    <Border x:Name="PresetWarningRow"
+                            Grid.Row="1"
+                            Margin="0,2,0,6"
+                            Padding="10,6"
+                            CornerRadius="6"
+                            Visibility="Collapsed"
+                            Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+                            AutomationProperties.Name="Model overrides ignored">
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <FontIcon Grid.Column="0"
+                                      Glyph="&#xE7BA;"
+                                      FontSize="14"
+                                      VerticalAlignment="Top"
+                                      Foreground="{ThemeResource SystemFillColorCautionBrush}" />
+                            <TextBlock x:Name="PresetWarningText"
+                                       Grid.Column="1"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       VerticalAlignment="Center"
+                                       Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                            <Button x:Name="PresetWarningSettingsButton"
+                                    Grid.Column="2"
+                                    Click="PresetWarningSettings_Click"
+                                    Content="Open settings"
+                                    FontSize="12"
+                                    Padding="10,3"
+                                    MinHeight="0"
+                                    VerticalAlignment="Center"
+                                    ToolTipService.ToolTip="Open the Settings → Llama page" />
+                        </Grid>
+                    </Border>
+
                     <!-- Empty state — shown when there are no installed
                          models. The text is set from code
                          (EmptyStatePresentation) and follows the server
@@ -1068,7 +1113,7 @@
                          hint once running, an honest failure note when the
                          server is down. -->
                     <TextBlock x:Name="NoLocalModelsText"
-                               Grid.Row="1"
+                               Grid.Row="2"
                                Text="Starting the llama server…"
                                FontSize="13"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
@@ -1084,7 +1129,7 @@
                          background brushes keep the ListView from painting
                          its own hover/selection over the rows'. -->
                     <ListView x:Name="ModelsList"
-                              Grid.Row="2"
+                              Grid.Row="3"
                               ItemsSource="{x:Bind Items}"
                               ItemTemplateSelector="{StaticResource ModelListTemplateSelector}"
                               ItemContainerStyle="{StaticResource ChromelessListViewItemStyle}"
@@ -1106,7 +1151,7 @@
                          again" when it fails. Installed models stay usable
                          either way. -->
                     <StackPanel x:Name="BrowseStatusPanel"
-                                Grid.Row="3"
+                                Grid.Row="4"
                                 Spacing="8"
                                 Margin="0,8,0,0"
                                 VerticalAlignment="Center">

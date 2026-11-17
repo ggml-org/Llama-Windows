@@ -284,4 +284,39 @@ public sealed class LlamaManagerArgumentsTests
             "The llama server failed to start: something else went wrong",
             LlamaManager.FormatStartFailureMessage(tail));
     }
+
+    [Fact]
+    public void FormatStartFailureMessage_WhenPresetRecoveryIsDeclined_IsTheOrdinaryFailure()
+    {
+        // A preset rejection whose one-shot recovery is declined (no active
+        // user overrides, or the retry is already spent) degrades to an
+        // ORDINARY launch failure: the standard phrasing with the server's
+        // diagnostic as detail — no special "rejected" story, and nothing
+        // swallowed.
+        const string tail =
+            "0.02.238.560 E srv start: option 'temperture' not recognized in preset 'model-context-presets.ini'";
+
+        Assert.Equal(
+            $"The llama server failed to start: {tail}",
+            LlamaManager.FormatStartFailureMessage(tail));
+    }
+
+    [Fact]
+    public void FormatStartFailureMessage_UsesTheBoundedSnapshot_NotTheRejectionLatch()
+    {
+        // The recovery DECISION reads the tail's revisioned latch; the failure
+        // PHRASING is built from the bounded 20-line snapshot. When the
+        // rejection line has been evicted, the message carries only what the
+        // snapshot still holds — it never resurrects a latched diagnostic the
+        // user can no longer see in the captured output.
+        var tail = new LlamaManager.ServerOutputTail();
+        tail.Add("0.02.238.560 E srv start: option 'temperture' not recognized in preset 'model-context-presets.ini'");
+        for (var i = 0; i < 25; i++) tail.Add($"chatter line {i}");
+
+        var message = LlamaManager.FormatStartFailureMessage(
+            tail.Snapshot(), 9931, LlamaApp.Common.ListenAddresses.Localhost, timedOut: true);
+
+        Assert.DoesNotContain("temperture", message);
+        Assert.Contains("chatter line 24", message);
+    }
 }

@@ -56,6 +56,24 @@ public interface IModelItemDetailsHost
     /// </summary>
     Task<bool> DeleteAsync(ModelItem model);
 
+    /// <summary>
+    /// Opens the shell's <c>models.user.ini</c> editing flow for the model:
+    /// prepares the model's section (creating the file from the template
+    /// when missing), then opens the file in the user's editor. Throws when
+    /// the file can't be prepared — the details view surfaces the failure in
+    /// its error line.
+    /// </summary>
+    Task EditModelPresetAsync(string serverModelId);
+
+    /// <summary>
+    /// The raw <c>ctx-size</c> value the user pinned for
+    /// <paramref name="serverModelId"/> in <c>models.user.ini</c> — verbatim,
+    /// whatever was typed, ladder value or not — or <c>null</c> when there is
+    /// none or the overrides are currently suspended. The details view shows
+    /// it in place of the context ladder.
+    /// </summary>
+    string? GetContextSizeOverride(string serverModelId);
+
     /// <summary>Copies text to the clipboard.</summary>
     void CopyText(string text);
 
@@ -98,6 +116,8 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
 
     private CancellationTokenSource? _loadCts;
     private ContextLengthOption? _selectedContextLength;
+    private string? _ctxOverride;
+    private bool _isEditPresetInFlight;
     private bool _isLoadingDetails;
     private string? _errorMessage;
     private bool _isBusy;
@@ -214,6 +234,130 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
     /// </summary>
     public bool ContextSectionVisible => IsInstalled || Model.SizeBytes > 0;
 
+    // ---- models.user.ini override presentation + editing ----
+
+    /// <summary>
+    /// The raw <c>ctx-size</c> value pinned for this model in
+    /// <c>models.user.ini</c> (via the host lookup — the ViewModel never
+    /// touches the file itself), or <c>null</c> when there is none. Cached at
+    /// <see cref="InitializeAsync"/> time and refreshed by
+    /// <see cref="RefreshOverridesAsync"/>; while set, the context ladder is
+    /// replaced by the verbatim value — whatever was typed, ladder value or
+    /// not — and the picker stops applying.
+    /// </summary>
+    public string? ContextSizeOverride
+    {
+        get => _ctxOverride;
+        private set
+        {
+            if (_ctxOverride == value) return;
+            _ctxOverride = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasContextSizeOverride));
+            // The pinned line's TextBlock binds ContextSizeOverrideDisplay
+            // (OneWay x:Bind): without a raise for it the text stays blank
+            // (first population) or stale (every later change).
+            OnPropertyChanged(nameof(ContextSizeOverrideDisplay));
+            OnPropertyChanged(nameof(ContextPickerVisible));
+            OnPropertyChanged(nameof(EstimatedMemoryDisplay));
+        }
+    }
+
+    /// <summary>True while a user override replaces the context ladder.</summary>
+    public bool HasContextSizeOverride => ContextSizeOverride is not null;
+
+    /// <summary>The ladder shows only when no override replaces it.</summary>
+    public bool ContextPickerVisible => !HasContextSizeOverride;
+
+    /// <summary>
+    /// The override line: the verbatim pinned value with where it comes from.
+    /// Empty when there is no override (the line hides).
+    /// </summary>
+    public string ContextSizeOverrideDisplay => ContextSizeOverride is { } value
+        ? $"ctx-size = {value} — set in models.user.ini"
+        : "";
+
+    /// <summary>
+    /// The Edit button in the context-section header: offered for installed
+    /// models only (a Hub row has nothing on disk to configure yet).
+    /// </summary>
+    public bool EditPresetVisible => IsInstalled;
+
+    /// <summary>False while an edit request is in flight (single-flight guard).</summary>
+    public bool EditPresetEnabled => EditPresetVisible && !IsEditPresetInFlight;
+
+    /// <summary>True while the shell is opening the model's override file.</summary>
+    public bool IsEditPresetInFlight
+    {
+        get => _isEditPresetInFlight;
+        private set
+        {
+            if (_isEditPresetInFlight == value) return;
+            _isEditPresetInFlight = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(EditPresetEnabled));
+        }
+    }
+
+    /// <summary>
+    /// Asks the shell to open <c>models.user.ini</c> for editing at this
+    /// model's section. Single-flight: a request already in flight is
+    /// ignored. Expected failures land in the shared <see cref="ErrorMessage"/>
+    /// line and always restore availability.
+    /// </summary>
+    public async Task EditModelPresetAsync()
+    {
+        if (!EditPresetEnabled) return;
+        IsEditPresetInFlight = true;
+        try
+        {
+            await _host.EditModelPresetAsync(ServerModelId);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "edit models.user.ini failed: " + ServerModelId);
+            ErrorMessage = "Couldn't open models.user.ini for editing.";
+        }
+        finally
+        {
+            IsEditPresetInFlight = false;
+        }
+    }
+
+    /// <summary>
+    /// Re-reads the cached ctx-size override from the host in both
+    /// directions: an override that appeared since the last check replaces
+    /// the picker; one that was removed brings the picker (and the persisted
+    /// selection) back. MainWindow calls this on manager state changes; the
+    /// host serves the manager's PUBLISHED override cache, which moves only
+    /// with a configuration the server accepted (an app-managed startup or an
+    /// accepted reload) or a suspension — never with an unconfirmed write or a
+    /// failed reload — so the presentation can't claim a configuration the
+    /// server never took. The lookup is synchronous (a cached read on the host
+    /// side), so the whole refresh lands on the caller's thread.
+    /// </summary>
+    public Task RefreshOverridesAsync()
+    {
+        var value = _host.GetContextSizeOverride(ServerModelId);
+        if (value != ContextSizeOverride)
+        {
+            ContextSizeOverride = value;
+            if (value is null)
+            {
+                // Override removed — the ladder is back; restore the persisted
+                // selection (nothing was saved while the override was showing).
+                RestoreSelection();
+            }
+            else
+            {
+                // Override added — drop any restored selection: the picker is
+                // hidden and must not read as an applied context.
+                SelectedContextLength = null;
+            }
+        }
+        return Task.CompletedTask;
+    }
+
     // ---- Context length selection ----
 
     /// <summary>The candidate context lengths with per-option memory estimates.</summary>
@@ -234,16 +378,21 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
         }
     }
 
-    /// <summary>Estimated memory at the selected context length ("" until known).</summary>
-    public string EstimatedMemoryDisplay => SelectedContextLength?.EstimatedMemoryDisplay ?? "";
+    /// <summary>Estimated memory at the selected context length ("" until known). Suppressed while a user override replaces the picker — the estimate describes the ladder, not the pinned value.</summary>
+    public string EstimatedMemoryDisplay => HasContextSizeOverride
+        ? ""
+        : SelectedContextLength?.EstimatedMemoryDisplay ?? "";
 
     /// <summary>
     /// Selects a context length and persists it per model (applied as
     /// <c>ctx_size</c> on the next load). Unselectable options (above the
-    /// model's max context, or beyond available memory) can't be selected.
+    /// model's max context, or beyond available memory) can't be selected,
+    /// and a pinned <c>ctx-size</c> override wins outright: the picker can't
+    /// save anything while <c>models.user.ini</c> is in charge.
     /// </summary>
     public void SelectContextLength(ContextLengthOption option)
     {
+        if (HasContextSizeOverride) return;
         if (!option.IsSelectable || !ContextLengths.Contains(option)) return;
         SelectedContextLength = option;
         _saveContextPreference(ServerModelId, option.Tokens);
@@ -337,7 +486,10 @@ public sealed class ModelItemDetailsViewModel : INotifyPropertyChanged, IDisposa
 
             _modelSizeBytes = details?.ModelSizeBytes ?? (long)Model.SizeBytes;
             RebuildContextOptions(details, await ProbeMemoryBudgetAsync(token));
-            RestoreSelection();
+            // Cache the user's ctx-size override first: while it's active the
+            // picker is replaced and the persisted selection must not restore.
+            ContextSizeOverride = _host.GetContextSizeOverride(ServerModelId);
+            if (ContextSizeOverride is null) RestoreSelection();
             OnPropertyChanged(nameof(SizeDisplay));
         }
         catch (OperationCanceledException)

@@ -10,7 +10,8 @@ namespace LlamaApp
     /// after the Windows 11 Settings app: a left NavigationView with three
     /// pages — General (launch at startup, local models cache), Identity
     /// (Hugging Face token) and Llama (server port, listen address, idle model
-    /// unload, KV cache quantization, custom serve arguments). Saves
+    /// unload, KV cache quantization, custom serve arguments, per-model
+    /// overrides). Saves
     /// to <see cref="Settings"/> on Save; discards on Cancel.
     /// </summary>
     public sealed partial class SettingsWindow : Window
@@ -28,6 +29,18 @@ namespace LlamaApp
         // install).
         private bool _runtimeCheckInFlight;
 
+        // Re-entrancy guard shared by the Model Overrides card's two actions
+        // (Open Override File / Apply Overrides) — one operation at a time,
+        // so the buttons can't overlap a reload with a launch.
+        private bool _overrideActionInFlight;
+
+        // The status line's normal (inherited) text brush, captured at init so
+        // the error color can be swapped in and back out again.
+        private Microsoft.UI.Xaml.Media.Brush? _overrideStatusNormalBrush;
+        private static readonly Microsoft.UI.Xaml.Media.Brush OverrideStatusErrorBrush =
+            new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                Microsoft.UI.ColorHelper.FromArgb(0xFF, 0xF8, 0x51, 0x49));
+
         // The enrolled model folders as edited in this window — committed
         // into Settings on Save, discarded otherwise. An observable collection
         // so add/remove updates the card's list live.
@@ -41,6 +54,7 @@ namespace LlamaApp
             SizeAndCenterOnScreen();
             LoadCurrent();
             UpdateRuntimeUpdateCard();
+            _overrideStatusNormalBrush = OverrideStatusText.Foreground;
 
             // Extend Mica/content into the titlebar area and register our
             // AppTitleBar element as the drag region. The system caption
@@ -142,6 +156,7 @@ namespace LlamaApp
             // state rather than the persisted preference.
             LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
             LoadInstallInfo();
+            LoadOverrideCard();
         }
 
         /// <summary>
@@ -291,6 +306,139 @@ namespace LlamaApp
             {
                 Common.Log.Warn(ex, "open log folder failed");
             }
+        }
+
+        // ---- per-model overrides card ----
+
+        /// <summary>
+        /// Fills the Model Overrides card: the readable location of the
+        /// user-owned override file and the live status line — whether the
+        /// file's overrides are currently suspended (and which option the
+        /// server refused), or where the file lives. Nothing here is a
+        /// setting: the two buttons act immediately and never touch
+        /// settings.json.
+        /// </summary>
+        private void LoadOverrideCard()
+        {
+            var overrides = Llama.UserModelOverrides.Shared;
+            // Readable form of %USERPROFILE%\.llama\models.user.ini — the
+            // literal prefix is what people recognise; the tooltip carries
+            // the full path.
+            var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            OverridePathBox.Text = profile.Length > 0 && overrides.FilePath.StartsWith(profile, StringComparison.OrdinalIgnoreCase)
+                ? $"%USERPROFILE%{overrides.FilePath[profile.Length..]}"
+                : overrides.FilePath;
+            Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(OverridePathBox, overrides.FilePath);
+
+            if (overrides.SuspendedOption is { } badOption)
+                SetOverrideStatus(
+                    $"Overrides are suspended: the server rejected the option \"{badOption}\". " +
+                    "Fix or remove it in the file — overrides are retried as soon as the file changes.",
+                    error: true);
+            else
+                SetOverrideStatus("Applies the next time the model list is refreshed — or press Apply Overrides to push it now.");
+        }
+
+        /// <summary>
+        /// Opens the user-owned override file in the default editor via
+        /// StorageFile + Launcher. The file is seeded first (comments only, no
+        /// model section), so the editor always opens something useful. The
+        /// Launcher's false result and any exception become a short actionable
+        /// status rather than a crash or silence.
+        /// </summary>
+        private async void OpenOverrideFile_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            if (_overrideActionInFlight) return;
+            _overrideActionInFlight = true;
+            OpenOverrideFileButton.IsEnabled = false;
+            ApplyOverridesButton.IsEnabled = false;
+            try
+            {
+                var overrides = Llama.UserModelOverrides.Shared;
+                // Seed without adding a model section: the template is all
+                // comments, so a seeded file has no effect until the user
+                // writes a section of their own.
+                overrides.SeedTemplateIfNeeded();
+
+                var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(overrides.FilePath);
+                bool ok = await Windows.System.Launcher.LaunchFileAsync(file);
+                SetOverrideStatus(ok
+                    ? "Opened models.user.ini in your default editor."
+                    : "Windows couldn't open the file — open it manually from the path above.",
+                    error: !ok);
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "open override file failed");
+                SetOverrideStatus("Couldn't open the file — open it manually from the path above.", error: true);
+            }
+            finally
+            {
+                _overrideActionInFlight = false;
+                OpenOverrideFileButton.IsEnabled = true;
+                ApplyOverridesButton.IsEnabled = true;
+            }
+        }
+
+        /// <summary>
+        /// Pushes the current override file to the llama server: awaits the
+        /// manager's preset reload and reports truthfully what came of it —
+        /// applied on the running app-managed server, deferred until Llama
+        /// next runs a server of its own (none running, or an adopted external
+        /// server that never reads the app's preset file),
+        /// suspended because of a rejected option, or failed. The branch
+        /// mapping and its copy live in <see cref="OverrideApplyPresentation"/>
+        /// (pure, unit-tested); this handler only wires it to the status line.
+        /// No process is launched here and nothing is written to settings.json.
+        /// </summary>
+        private async void ApplyOverrides_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+        {
+            if (_overrideActionInFlight) return;
+            _overrideActionInFlight = true;
+            OpenOverrideFileButton.IsEnabled = false;
+            ApplyOverridesButton.IsEnabled = false;
+            ApplyOverridesRing.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+            ApplyOverridesRing.IsActive = true;
+            SetOverrideStatus("Applying overrides…");
+            try
+            {
+                bool ok = await Llama.LlamaManager.Shared.ReloadModelPresetsAsync();
+                // ServerUsesModelPresets is what separates "applied" from
+                // "deferred": an adopted external server answers the reload
+                // but never reads the app's --models-preset file, so an ok
+                // result there is a saved configuration, not an applied one.
+                var outcome = OverrideApplyPresentation.Describe(
+                    ok,
+                    Llama.UserModelOverrides.Shared.SuspendedOption,
+                    Llama.LlamaManager.Shared.ServerStatus == Llama.LlamaManager.ServerState.Running,
+                    Llama.LlamaManager.Shared.ServerUsesModelPresets);
+                SetOverrideStatus(outcome.StatusText, error: outcome.IsError);
+            }
+            catch (Exception ex)
+            {
+                Common.Log.Warn(ex, "apply overrides failed");
+                SetOverrideStatus("Couldn't apply the overrides — try again.", error: true);
+            }
+            finally
+            {
+                _overrideActionInFlight = false;
+                OpenOverrideFileButton.IsEnabled = true;
+                ApplyOverridesButton.IsEnabled = true;
+                ApplyOverridesRing.IsActive = false;
+                ApplyOverridesRing.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            }
+        }
+
+        /// <summary>
+        /// Sets the overrides card's status line, in the inherited text brush
+        /// (or the error red for problems the user must act on).
+        /// </summary>
+        private void SetOverrideStatus(string text, bool error = false)
+        {
+            OverrideStatusText.Text = text;
+            OverrideStatusText.Foreground = error
+                ? OverrideStatusErrorBrush
+                : _overrideStatusNormalBrush ?? OverrideStatusText.Foreground;
         }
 
         // ---- llama.cpp runtime update card ----
@@ -678,6 +826,23 @@ namespace LlamaApp
                 ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
         }
 
+        /// <summary>
+        /// Selects the existing Llama navigation item (Tag "llama"), so a
+        /// caller can deep-link to the Llama page (e.g. a warning's "see
+        /// settings" action) without renaming any page.
+        /// </summary>
+        public void ShowLlamaPage()
+        {
+            foreach (var item in NavView.MenuItems)
+            {
+                if (item is Microsoft.UI.Xaml.Controls.NavigationViewItem { Tag: "llama" } llamaItem)
+                {
+                    llamaItem.IsSelected = true;
+                    return;
+                }
+            }
+        }
+
         // ---- Win32: center on the cursor's monitor ----
 
         private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
@@ -712,5 +877,85 @@ namespace LlamaApp
         [DllImport("user32.dll", ExactSpelling = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool GetCursorPos(out POINT lpPoint);
+    }
+
+    /// <summary>How the Model Overrides card's Apply attempt came out.</summary>
+    internal enum OverrideApplyOutcome
+    {
+        /// <summary>The reload errored or the server refused it outright.</summary>
+        Failed,
+
+        /// <summary>The server rejected an option; overrides are suspended until the file changes.</summary>
+        Suspended,
+
+        /// <summary>The running app-managed server accepted the reload — overrides are in effect now.</summary>
+        AppliedToRunningServer,
+
+        /// <summary>
+        /// Saved, but the running server is adopted (it never reads the app's
+        /// <c>--models-preset</c> file): the configuration is deferred to a
+        /// future app-managed server, NOT applied to the running one.
+        /// </summary>
+        DeferredToFutureServer,
+
+        /// <summary>No server is running: saved and picked up on the next run.</summary>
+        Deferred,
+    }
+
+    /// <summary>
+    /// Pure mapping from the Apply attempt's facts to its status line — kept
+    /// out of <see cref="SettingsWindow"/> so the outcomes are unit-testable
+    /// (the test host can't construct a Window). Truthfulness is the point:
+    /// an adopted external server never reads the override file, so an ok
+    /// reload there must read as deferred configuration for a future
+    /// app-managed server, never as application to the running one.
+    /// </summary>
+    internal static class OverrideApplyPresentation
+    {
+        /// <summary>The rendered outcome: kind, status line, and whether it's an error.</summary>
+        public readonly record struct Description(
+            OverrideApplyOutcome Outcome, string StatusText, bool IsError);
+
+        /// <summary>
+        /// Maps the Apply attempt to its rendering:
+        /// <paramref name="reloadSucceeded"/> is the manager's
+        /// <c>ReloadModelPresetsAsync</c> result,
+        /// <paramref name="suspendedOption"/> is
+        /// <see cref="UserModelOverrides.SuspendedOption"/> after the reload,
+        /// <paramref name="serverRunning"/> whether a server is up, and
+        /// <paramref name="serverUsesModelPresets"/> the manager's
+        /// <c>ServerUsesModelPresets</c> (false for an adopted external
+        /// server). Checked in order: failure, suspension, running, deferred.
+        /// </summary>
+        public static Description Describe(
+            bool reloadSucceeded,
+            string? suspendedOption,
+            bool serverRunning,
+            bool serverUsesModelPresets)
+        {
+            if (!reloadSucceeded)
+                return new(OverrideApplyOutcome.Failed,
+                    "Couldn't apply the overrides — check the file's syntax, then try again.",
+                    IsError: true);
+
+            if (suspendedOption is { } badOption)
+                return new(OverrideApplyOutcome.Suspended,
+                    $"Overrides are suspended: the server rejected the option \"{badOption}\". " +
+                    "Fix or remove it in the file, then apply again.",
+                    IsError: true);
+
+            if (serverRunning)
+                return serverUsesModelPresets
+                    ? new(OverrideApplyOutcome.AppliedToRunningServer,
+                        "Overrides applied to the running llama server.", IsError: false)
+                    : new(OverrideApplyOutcome.DeferredToFutureServer,
+                        "Overrides saved but deferred to a future app-managed server — " +
+                        "the running server isn't managed by Llama and doesn't use them.",
+                        IsError: false);
+
+            return new(OverrideApplyOutcome.Deferred,
+                "Overrides saved — they'll apply when the llama server next runs.",
+                IsError: false);
+        }
     }
 }
