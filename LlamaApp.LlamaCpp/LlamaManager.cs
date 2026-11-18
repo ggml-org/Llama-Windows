@@ -540,6 +540,55 @@ public sealed class LlamaManager
 
     private Process? _serverProcess;
 
+    // The CURRENTLY running server's identity: its stderr tail (created with
+    // the spawn, cleared when it is stopped or an external one is adopted —
+    // always keyed to a real spawn, never stale across an adoption; the
+    // preset-rejection latch is per-process — a "fresh tail per spawned
+    // process" — so a restart's diagnostics can never be satisfied by the
+    // previous attempt's output), the uses-presets flag (whether the server
+    // was actually launched by this app WITH --models-preset — i.e. it reads
+    // the generated model-context-presets.ini and can really apply the user's
+    // models.user.ini overrides; false for an adopted server without the
+    // preset-capability evidence), the managed PID that owns the identity
+    // (the spawn's pid, or the pid adopted from the PID file — 0 when the
+    // identity has no managed PID), and the identity REVISION (epoch). Guarded
+    // by _tailGate; mutated ONLY through the identity transitions below (spawn
+    // install, stop/teardown, adoption, confirmed process loss), which is what
+    // keeps publication and invalidation mutually exclusive.
+    private readonly object _tailGate = new();
+    private ServerOutputTail? _serverTail;
+    private bool _serverUsesModelPresets;
+    private int _serverManagedPid;
+
+    // The UserModelOverrides.Generation staged into the --models-preset file
+    // by the last successful write — the exact override revision the server is
+    // being asked to accept. Launch and reload recovery condition their
+    // suspension on it (see UserModelOverrides.Suspend(string, long)): a
+    // rejection about this revision may suspend it, but a user edit after the
+    // rejection advances Generation and the corrected file must never be
+    // suspended for a revision it no longer carries. Cross-thread: reads and
+    // writes use Interlocked.Read/Interlocked.Exchange (a `volatile long` is
+    // illegal in C# and plain access is not atomic on 32-bit).
+    private long _writtenOverridesGeneration = -1;
+
+    // The server-identity REVISION ("epoch"): advanced under _tailGate on
+    // every TRUE identity change — a new spawn, a stop, an adoption — and
+    // never on a transient connectivity failure. Every publication attempt
+    // captures the revision together with the uses-presets flag BEFORE its
+    // HTTP request and re-validates both atomically with the publish (see
+    // PublishOverrides(long, long)): a response that comes back after the
+    // server identity moved can only carry acceptance from a retired
+    // configuration and must never republish its pins. Cross-thread: read and
+    // written only under _tailGate, via the ServerIdentity transitions.
+    private long _serverIdentityRevision;
+
+    // Reloads retain their identity until rejection recovery has finished.
+    // Supervisor loss is deferred for that epoch, never for its replacement.
+    // Both fields are protected by _tailGate and reset on identity changes.
+    private int _pendingPresetRecoveries;
+    private long? _deferredRetirementRevision;
+    private readonly UserModelOverrides _overrides;
+
     // Single-flight guard for EnsureLlamaOrDownloadAsync / StartServerAsync. Called
     // fire-and-forget from App.OnLaunched and re-entrant via StateChanged
     // handlers; without it, two concurrent callers can both pass the initial
@@ -598,6 +647,101 @@ public sealed class LlamaManager
             field = value;
             StateChanged?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    /// <summary>
+    /// Projection of <see cref="UserModelOverrides.SuspendedOption"/> for
+    /// status/footer rendering: the preset option the server refused while the
+    /// user's <c>models.user.ini</c> overrides are suspended, or
+    /// <see langword="null"/> when overrides are live (or none are configured).
+    /// The warning PERSISTS while suspended even though the overrides
+    /// themselves are omitted from the generated preset file. Changes flow
+    /// through <see cref="StateChanged"/>: a suspension is announced by the
+    /// recovery, and a successful startup / accepted reload publishes the
+    /// override state (see <see cref="PublishOverrides"/>), forwarding the
+    /// unsuspend that a user edit of the file triggers.
+    /// </summary>
+    public string? UserOverridesWarning => _overrides.SuspendedOption;
+
+    /// <summary>
+    /// Whether the currently running server was actually launched by this app
+    /// with <c>--models-preset</c> — so it reads the generated
+    /// <c>model-context-presets.ini</c> and its <c>models.user.ini</c>
+    /// overrides genuinely apply. False for an adopted external server (a
+    /// manual launch never receives the app's preset file), where a reload is
+    /// a plain rescan: the UI must not claim an override application, and the
+    /// server is never restarted over its preset file.
+    /// </summary>
+    public bool ServerUsesModelPresets
+    {
+        get { lock (_tailGate) return _serverUsesModelPresets; }
+    }
+
+    /// <summary>
+    /// Publishes the staged user-override state to the UI after the server has
+    /// actually accepted it — an app-managed startup that reached Running with
+    /// <c>--models-preset</c>, or an accepted (re)load on such a server.
+    /// Publish is what makes <see cref="UserModelOverrides.OverriddenCtxSize"/>
+    /// answer from the ACCEPTED configuration (see
+    /// <see cref="UserModelOverrides.PublishOverrides(long)"/>); an adopted
+    /// external server never publishes, because its reload applies none of the
+    /// overrides. <paramref name="acceptedGeneration"/> is
+    /// the generation the accepting transaction wrote (see
+    /// <see cref="WriteContextPresetsIniCoreAsync"/>): the guarded publish
+    /// refuses any other revision, so content a later write staged can never
+    /// be claimed as accepted. <paramref name="identityRevision"/> is the
+    /// server-identity revision captured together with the current
+    /// preset-capability BEFORE the accepting request went out: the publish
+    /// re-validates both atomically under <see cref="_tailGate"/> with the
+    /// publication itself, so a response that straddles a stop/adoption or
+    /// any other true identity change can never republish pins a retired
+    /// server accepted (publication and invalidation are mutually
+    /// exclusive). Raises <see cref="StateChanged"/> so open UI refreshes the
+    /// override presentation; handler exceptions are swallowed
+    /// (see <see cref="RaiseOverridesStateChanged"/>) and must not be mistaken
+    /// for a failed startup/reload.
+    /// </summary>
+    internal void PublishOverrides(long acceptedGeneration, long identityRevision)
+    {
+        lock (_tailGate)
+        {
+            // Still the same server identity AND still the same
+            // preset-capable configuration the acceptance was captured for —
+            // otherwise the acceptance belongs to a retired server and the
+            // invalidation that retired it already settled the pins.
+            if (!PublicationAllowed(
+                    identityRevision, _serverIdentityRevision, _serverUsesModelPresets))
+                return;
+            _overrides.PublishOverrides(acceptedGeneration);
+        }
+        RaiseOverridesStateChanged();
+    }
+
+    /// <summary>
+    /// The identity validation of the guarded publish: an acceptance may only
+    /// be claimed while the server identity its publication attempt captured
+    /// (see <see cref="PublishOverrides(long, long)"/>) is still the current
+    /// one AND that identity still consumes the app's preset file. Any true
+    /// identity change — a spawn install, a stop, an adoption, a confirmed
+    /// process loss — advances the revision, so a response that comes back
+    /// after the identity moved can only carry acceptance from a retired
+    /// server and must never republish its pins. Pure so the stale-publication
+    /// rule is testable without a server.
+    /// </summary>
+    internal static bool PublicationAllowed(
+        long capturedRevision, long currentRevision, bool serverUsesModelPresets)
+        => capturedRevision == currentRevision && serverUsesModelPresets;
+
+    /// <summary>
+    /// Raises <see cref="StateChanged"/> for an override-state change. A
+    /// throwing handler must not be mistaken for a failed startup/reload (or
+    /// take down the supervisor), so handler exceptions are logged and
+    /// swallowed — same rule as <see cref="ModelsChanged"/>.
+    /// </summary>
+    private void RaiseOverridesStateChanged()
+    {
+        try { StateChanged?.Invoke(this, EventArgs.Empty); }
+        catch (Exception ex) { Log.Warn(ex, "StateChanged handler threw"); }
     }
 
     /// <summary>Path to the resolved <c>llama.exe</c>, or <c>null</c> if none.</summary>
@@ -671,7 +815,19 @@ public sealed class LlamaManager
     public event EventHandler<IReadOnlyList<ServerModel>>? ModelsChanged;
 
     private LlamaManager(int serverPort, string listenAddress, string? apiKey)
+        : this(serverPort, listenAddress, apiKey, UserModelOverrides.Shared, AppData.Root, startSupervisor: true)
     {
+    }
+
+    // Instance-scoped persistence and an optional supervisor let lifecycle
+    // tests exercise the real transitions without processes or HTTP traffic.
+    internal LlamaManager(
+        int serverPort, string listenAddress, string? apiKey,
+        UserModelOverrides overrides, string identityDirectory, bool startSupervisor)
+    {
+        _overrides = overrides;
+        PidFilePath = Path.Combine(identityDirectory, ".llama.pid");
+        PresetCapabilityPath = Path.Combine(identityDirectory, ".llama.presets");
         ServerPort = serverPort;
         ListenAddress = listenAddress;
         // The app's REST client follows the bind address, except that
@@ -687,7 +843,7 @@ public sealed class LlamaManager
         // ServerStatus from the answers — no process-handle assumptions.
         // Fire-and-forget: the loop is inert while Stopped and every tick is
         // guarded, so it can't fault the process.
-        _ = Task.Run(SupervisorLoopAsync);
+        if (startSupervisor) _ = Task.Run(SupervisorLoopAsync);
     }
 
     /// <summary>
@@ -858,7 +1014,7 @@ public sealed class LlamaManager
 
             Log.Info("restarting the llama server to apply changed settings");
             StopServer();
-            return await StartServerAsync(cancel);
+            return await StartServerCoreAsync(allowPresetRecovery: true, ownsEnsureGate: true, cancel);
         }
         finally { _ensureGate.Release(); }
     }
@@ -907,6 +1063,13 @@ public sealed class LlamaManager
             {
                 Log.Info("adopted an already-running llama server");
                 ServerStatus = ServerState.Running;
+                // Adopted — no spawn of ours owns a tail. The preset
+                // capability is carried in only with positive evidence: live
+                // managed PID ownership PLUS the sidecar written when a launch
+                // actually received --models-preset (a managed PID alone is
+                // unknown legacy capability — conservative). Without it the
+                // tail AND the published pins are dropped.
+                AdoptRunningServerFromEvidence();
                 // Best-effort: resolve the binary so Version is populated for display,
                 // but don't block the client on it.
                 _ = ResolveAndReadVersionAsync(cancel);
@@ -923,18 +1086,18 @@ public sealed class LlamaManager
                     CurrentOrigin = Origin.Managed;
                     Version = await ReadVersionAsync(resolved.Path!, cancel);
                     State = InstallState.Idle;
-                    return await StartServerAsync(cancel);
+                    return await StartServerCoreAsync(allowPresetRecovery: true, ownsEnsureGate: true, cancel);
 
                 case ResolutionKind.External:
                     BinaryPath = resolved.Path;
                     CurrentOrigin = Origin.External;
                     Version = await ReadVersionAsync(resolved.Path!, cancel);
                     State = InstallState.Idle;
-                    return await StartServerAsync(cancel);
+                    return await StartServerCoreAsync(allowPresetRecovery: true, ownsEnsureGate: true, cancel);
 
                 default: // Missing — download then launch.
                     if (await InstallAsync(cancel))
-                        return await StartServerAsync(cancel);
+                        return await StartServerCoreAsync(allowPresetRecovery: true, ownsEnsureGate: true, cancel);
                     return false;
             }
         }
@@ -1241,6 +1404,20 @@ public sealed class LlamaManager
     /// true) if the server is already running.
     /// </summary>
     public async Task<bool> StartServerAsync(CancellationToken cancel = default)
+        => await StartServerCoreAsync(allowPresetRecovery: true, ownsEnsureGate: false, cancel);
+
+    /// <summary>
+    /// <see cref="StartServerAsync"/>'s implementation, with the preset
+    /// rejection recovery made explicit.
+    /// <paramref name="allowPresetRecovery"/> is the recovery OWNER — only the
+    /// ordinary attempt sets it, so the one-shot retry never cascades into a
+    /// second retry. <paramref name="ownsEnsureGate"/> marks callers that
+    /// already hold <see cref="_ensureGate"/> (the ensure/restart pipelines):
+    /// the recovery must then not acquire the gate again — the retry runs
+    /// under the caller's existing hold, never a recursive acquisition.
+    /// </summary>
+    private async Task<bool> StartServerCoreAsync(
+        bool allowPresetRecovery, bool ownsEnsureGate, CancellationToken cancel)
     {
         if (ServerStatus == ServerState.Running) return true;
         if (BinaryPath is null || !File.Exists(BinaryPath))
@@ -1260,6 +1437,11 @@ public sealed class LlamaManager
             Log.Info("adopted an already-running llama server (pre-start re-probe)");
             FailureMessage = null;
             ServerStatus = ServerState.Running;
+            // Adopted — no spawn of ours owns a tail. The preset capability is
+            // carried in only with positive evidence (managed PID + sidecar),
+            // exactly like the ensure path; without it the tail AND the
+            // published pins are dropped.
+            AdoptRunningServerFromEvidence();
             _ = ResolveAndReadVersionAsync(cancel);
             return true;
         }
@@ -1278,6 +1460,15 @@ public sealed class LlamaManager
                 Log.Info($"adopted the managed llama server (pid {managedPid})");
                 FailureMessage = null;
                 ServerStatus = ServerState.Running;
+                // MANAGED adoption: the tail goes; the preset capability and
+                // the published pins stay only when the sidecar positively
+                // proves this server was handed --models-preset (a managed PID
+                // alone is unknown legacy capability — conservative). With the
+                // evidence the accepted overrides are still in effect and the
+                // next accepted (re)load republishes them. The identity tracks
+                // the very PID this path validated (one read feeds both
+                // ownership and capability).
+                AdoptRunningServerFromEvidence(managedPid: managedPid);
                 _ = ResolveAndReadVersionAsync(cancel);
                 // An adopted server already holds the key in memory (it was
                 // started with LLAMA_API_KEY); sweep any plaintext file a
@@ -1338,6 +1529,7 @@ public sealed class LlamaManager
         FailureMessage = null;
         ServerStatus = ServerState.Starting;
 
+        long? ownedIdentityRevision = null;
         try
         {
             var psi = new ProcessStartInfo
@@ -1357,8 +1549,11 @@ public sealed class LlamaManager
             psi.Environment["PATH"] = EffectivePath();
             // Per-model context lengths are merged into each model's child args
             // via --models-preset (see BuildServeArguments). Written fresh every
-            // launch from the current preferences.
-            var contextPresetPath = await WriteContextPresetsIniAsync();
+            // launch from the current preferences. The override generation
+            // these bytes carry is captured for the launch's recovery: only
+            // that exact revision may be suspended if the server rejects it,
+            // and only that revision may be published once it is accepted.
+            var (contextPresetPath, writtenGeneration) = await WriteContextPresetsIniAsync();
             // The app-generated API key (non-loopback binds) reaches the server
             // via the LLAMA_API_KEY environment variable (set on the launch
             // below) — never argv (WMI-readable) and never a file on disk. The
@@ -1439,16 +1634,27 @@ public sealed class LlamaManager
                 ServerStatus = ServerState.Failed;
                 return false;
             }
-            _serverProcess = proc;
-            // Track ownership across app restarts: if the app crashes, the next
-            // instance recognizes this server as managed via the PID file.
-            WritePidFile(proc.Id);
 
             // The server's stdout/stderr are redirected; drain them or a chatty
             // server blocks once the pipe buffer fills. Draining also captures
             // server errors (e.g. a bad launch flag) into the app log — and, via
-            // the stderr tail, into the user-facing failure reason below.
+            // the stderr tail, into the user-facing failure reason below. A
+            // fresh tail per spawned process carries the revisioned
+            // preset-rejection latch; the current-tail reference lets the
+            // reload path find this spawn's output.
             var stderrTail = new ServerOutputTail();
+            // The uses-presets flag travels with the spawn: set here, BEFORE
+            // the child can be observed Running, and cleared with the tail on
+            // stop. The spawn was handed --models-preset iff the write landed —
+            // it reads the generated preset file and genuinely applies the
+            // user's overrides. The identity revision this spawn installs is
+            // the token this launch's publication attempt validates later — a
+            // stop/adoption while the startup is in flight moves the revision
+            // and the publish below refuses to claim a retired server's
+            // acceptance.
+            var spawnIdentityRevision = SetServerTailIdentity(
+                proc, stderrTail, contextPresetPath, proc.Id);
+            ownedIdentityRevision = spawnIdentityRevision;
             var (stdoutTask, stderrTask) = DrainServerOutput(proc, stderrTail);
 
             // Wait for the port to respond — the server takes a moment to bind.
@@ -1460,6 +1666,18 @@ public sealed class LlamaManager
                 Log.Info("llama server is reachable");
                 FailureMessage = null;
                 ServerStatus = ServerState.Running;
+                // The child took the preset file it was launched with — when
+                // the running server uses --models-preset, the user's overrides
+                // are part of the accepted configuration now and the cached
+                // override state (pinned ctx-size) becomes effective. Without
+                // the flag there is nothing to publish: the server applies no
+                // overrides. The guarded publish commits only the generation
+                // this launch wrote AND only while the spawn's identity is
+                // still current: a file the user edited mid-startup is never
+                // claimed as accepted, and a stop/adoption racing the startup
+                // never resurrects a retired server's pins.
+                if (contextPresetPath is not null)
+                    PublishOverrides(writtenGeneration, spawnIdentityRevision);
                 return true;
             }
 
@@ -1477,11 +1695,58 @@ public sealed class LlamaManager
             // stderr arrived before giving up.
             try { await Task.WhenAll(stdoutTask, stderrTask).WaitAsync(TimeSpan.FromMilliseconds(500)); }
             catch { /* snapshot whatever arrived */ }
+            var output = stderrTail.Snapshot();
             var timedOut = !proc.HasExited && !stderrTail.HasBindFailure;
+
+            // Recovery ownership: only the ordinary attempt (never its own
+            // retry) may recover, and only on an exact preset rejection while
+            // user overrides are active — the app's own keys are always
+            // known-good and generic custom-CLI errors never match. The
+            // recovery suspends the overrides, kills/reaps this child, and the
+            // one retry relaunches with recovery disabled — no third spawn,
+            // and no Failed status or toast for the retry window: the state
+            // stays Starting until the outcome is known. Caller cancellation
+            // and generic failures fall through to the ordinary failure below —
+            // cancellation is checked BEFORE the recovery can suspend/retry, so
+            // a cancelled attempt never mutates override state.
+            // _ensureGate is never acquired recursively: a caller that already
+            // holds it runs the retry under its hold; a caller that doesn't
+            // acquires it here around teardown + retry.
+            //
+            // The rejected option comes from the tail's LATCH, never from
+            // reparsing the bounded startup snapshot: the diagnostic's line may
+            // already be evicted from the 20-line buffer, and the latch is what
+            // outlives it. The latch is per-process, and this tail belongs to
+            // the spawn that just failed — any rejection on it is this
+            // launch's.
+            var rejected = stderrTail.LatestRejection?.Option;
+            if (ServerLaunch.ShouldRecoverFromLaunchRejection(
+                    allowPresetRecovery, _overrides.HasActiveOverrides,
+                    rejected, cancel.IsCancellationRequested))
+            {
+                if (ownsEnsureGate)
+                {
+                    if (RecoverFromPresetRejection(rejected!, stderrTail, writtenGeneration))
+                        return await StartServerCoreAsync(
+                            allowPresetRecovery: false, ownsEnsureGate: true, cancel);
+                }
+                else
+                {
+                    await _ensureGate.WaitAsync(cancel);
+                    try
+                    {
+                        if (RecoverFromPresetRejection(rejected!, stderrTail, writtenGeneration))
+                            return await StartServerCoreAsync(
+                                allowPresetRecovery: false, ownsEnsureGate: true, cancel);
+                    }
+                    finally { _ensureGate.Release(); }
+                }
+            }
+
             FailureMessage = FormatStartFailureMessage(
-                stderrTail.Snapshot(), ServerPort, ListenAddress, timedOut);
+                output, ServerPort, ListenAddress, timedOut);
             Log.Error(FailureMessage);
-            StopServer();
+            StopServer(spawnIdentityRevision);
             ServerStatus = ServerState.Failed;
             return false;
         }
@@ -1490,7 +1755,7 @@ public sealed class LlamaManager
             // WaitForPortAsync observes caller cancellation. Cancellation is
             // also a failed launch: never rethrow while leaving our child and
             // its listening socket behind for the next attempt to collide with.
-            if (_serverProcess is not null) StopServer();
+            if (ownedIdentityRevision.HasValue) StopServer(ownedIdentityRevision.Value);
             throw;
         }
         catch (Exception ex)
@@ -1498,7 +1763,7 @@ public sealed class LlamaManager
             // The same ownership rule applies to drain/setup/probe failures
             // after Process.Start: clean up only a process spawned by this
             // attempt, never an unrelated process using the configured port.
-            if (_serverProcess is not null) StopServer();
+            if (ownedIdentityRevision.HasValue) StopServer(ownedIdentityRevision.Value);
             Log.Error(ex, "llama server start threw");
             FailureMessage = ex.Message;
             ServerStatus = ServerState.Failed;
@@ -1560,28 +1825,38 @@ public sealed class LlamaManager
     /// with no valid PID file (started manually by the user, whatever the
     /// binary) is not ours and is left running.</para>
     /// </summary>
-    public void StopServer()
-    {
-        ServerStatus = ServerState.Stopped;
+    public void StopServer() => StopServer(expectedRevision: null);
 
-        var proc = _serverProcess;
-        _serverProcess = null;
+    private void StopServer(long? expectedRevision)
+    {
+        Process? proc;
+        int managedPid;
+        bool droppedPins;
+        lock (_tailGate)
+        {
+            if (expectedRevision.HasValue && expectedRevision.Value != _serverIdentityRevision)
+                return;
+            proc = _serverProcess;
+            managedPid = _serverManagedPid;
+            if (proc is null && managedPid == 0)
+                managedPid = ReadLiveManagedPid(PidFilePath) ?? 0;
+            if (managedPid != 0 && ReadPidFile(PidFilePath) == managedPid)
+                DeletePidFile();
+            droppedPins = RetireServerIdentityCore();
+        }
+        ServerStatus = ServerState.Stopped;
+        if (droppedPins) RaiseOverridesStateChanged();
 
         if (proc is not null)
         {
-            // Spawned this session. Clear the PID file only if it still tracks
-            // THIS process — a racing instance may have rewritten it for a
-            // newer server.
-            if (ReadPidFile(PidFilePath) == proc.Id) DeletePidFile();
             ServerLaunch.TerminateProcessTree(proc, TimeSpan.FromSeconds(2));
             return;
         }
 
-        // Adopted managed server (started by a previous/crashed instance): no
-        // handle of ours, but a valid PID file proves ownership — kill by PID.
-        if (ReadLiveManagedPid(PidFilePath) is { } managedPid)
+        // Kill only the managed PID captured before retirement. A replacement
+        // may already have rewritten the PID file by the time we get here.
+        if (managedPid != 0)
         {
-            DeletePidFile();
             try
             {
                 Log.Info($"killing managed llama server by PID file (pid {managedPid})");
@@ -1590,6 +1865,173 @@ public sealed class LlamaManager
             }
             catch (Exception ex) { Log.Warn(ex, $"best-effort managed server kill failed (pid {managedPid})"); }
         }
+    }
+
+    /// <summary>Retires the current server identity: drops its output tail and
+    /// uses-presets flag (a retired server applies nothing, so no preset claim
+    /// survives it) and advances the identity revision (a true identity
+    /// change, so an acceptance still in flight can never publish against the
+    /// retired server). Used for a deliberate stop AND a confirmed process
+    /// loss (see <see cref="PollFailureRetiresIdentity"/>) — the identity is over
+    /// either way. A preset-consuming server's published pins die with it (raw
+    /// config and suspension survive — a successful restart republishes), so
+    /// the UI never presents pins no running server is known to hold. The
+    /// capability sidecar goes too. A poll may retire only the epoch whose
+    /// liveness it checked; pending reload recovery defers that retirement
+    /// until its last observer finishes.</summary>
+    internal bool RetireServerIdentity(long expectedRevision)
+    {
+        bool droppedPins;
+        lock (_tailGate)
+        {
+            if (expectedRevision != _serverIdentityRevision) return false;
+            if (_pendingPresetRecoveries != 0)
+            {
+                _deferredRetirementRevision = expectedRevision;
+                return false;
+            }
+            droppedPins = RetireServerIdentityCore();
+        }
+        if (droppedPins) RaiseOverridesStateChanged();
+        return true;
+    }
+
+    // Caller holds _tailGate. Identity, published cache and persisted proof
+    // change together; no notification may escape from this critical section.
+    private bool RetireServerIdentityCore()
+    {
+        var droppedPins = _serverUsesModelPresets;
+        if (_serverManagedPid != 0 && ReadPidFile(PidFilePath) == _serverManagedPid)
+            DeletePidFile();
+        _serverProcess = null;
+        _serverTail = null;
+        _serverUsesModelPresets = false;
+        _serverManagedPid = 0;
+        _serverIdentityRevision++;
+        _pendingPresetRecoveries = 0;
+        _deferredRetirementRevision = null;
+        DeletePresetCapabilityFile(PresetCapabilityPath);
+        if (droppedPins) _overrides.InvalidatePublishedOverrides();
+        return droppedPins;
+    }
+
+    internal (ServerOutputTail? Tail, bool UsesPresets, long Revision, long Baseline) BeginPresetReload()
+    {
+        lock (_tailGate)
+        {
+            _pendingPresetRecoveries++;
+            return (_serverTail, _serverUsesModelPresets, _serverIdentityRevision, _serverTail?.Revision ?? 0);
+        }
+    }
+
+    internal void EndPresetReload(long identityRevision)
+    {
+        var droppedPins = false;
+        lock (_tailGate)
+        {
+            // A recovery or explicit stop already consumed the old identity.
+            // Its finally must never decrement or retire the replacement.
+            if (identityRevision != _serverIdentityRevision) return;
+            if (--_pendingPresetRecoveries == 0 && _deferredRetirementRevision == identityRevision)
+                droppedPins = RetireServerIdentityCore();
+        }
+        if (droppedPins) RaiseOverridesStateChanged();
+    }
+
+    /// <summary>
+    /// Installs a spawn's tail identity as soon as it is created (before the
+    /// child can be observed Running), so the reload path can find this
+    /// spawn's output while startup is still in flight. The spawn was handed
+    /// <c>--models-preset</c> iff the write landed — it reads the generated
+    /// preset file and genuinely applies the user's overrides. A spawn is a
+    /// new server identity, so the revision advances here as well — along
+    /// with the managed PID that now owns the identity (the liveness the loss
+    /// rule checks — see <see cref="IdentityProcessAlive"/>). Returns
+    /// the identity revision this spawn installed — the token every
+    /// publication attempt that follows from this launch captures and
+    /// re-validates (see <see cref="PublishOverrides(long, long)"/>).
+    /// </summary>
+    internal long SetServerTailIdentity(
+        Process process, ServerOutputTail tail, string? presetPath, int managedPid)
+    {
+        long revision;
+        bool droppedPins;
+        lock (_tailGate)
+        {
+            droppedPins = _serverUsesModelPresets;
+            if (droppedPins) _overrides.InvalidatePublishedOverrides();
+            _serverProcess = process;
+            _serverTail = tail;
+            _serverUsesModelPresets = presetPath is not null;
+            _serverManagedPid = managedPid;
+            revision = ++_serverIdentityRevision;
+            _pendingPresetRecoveries = 0;
+            _deferredRetirementRevision = null;
+            // A replacement's proof cannot be erased by an older retirement.
+            RecordPresetCapability(PresetCapabilityPath, presetPath);
+            WritePidFile(managedPid);
+        }
+        if (droppedPins) RaiseOverridesStateChanged();
+        return revision;
+    }
+
+    /// <summary>
+    /// Adopts an already-running server as the client: drops the previous
+    /// spawn's tail and rejection latch (an adopted server runs no spawn of
+    /// ours — recovery must never reason about a process that is gone), and
+    /// carries the <c>--models-preset</c> capability in only when it is
+    /// positively proven (see <see cref="TryAdoptPresetCapability"/>): live
+    /// managed ownership PLUS the capability sidecar written at launch. A
+    /// managed PID alone is unknown legacy capability and is treated
+    /// conservatively — <see cref="ServerUsesModelPresets"/> stays false and
+    /// the published pins are dropped, exactly like an external adoption (see
+    /// <see cref="AdoptionUsesModelPresets"/>). A capability-less adoption
+    /// cleans up any stale sidecar. Every adoption is a true identity change
+    /// and advances the revision — and records the managed PID that now owns
+    /// the identity (0 when none does); pins die with the capability (raw
+    /// config and suspension survive — see
+    /// <see cref="UserModelOverrides.InvalidatePublishedOverrides"/>). Pure policy:
+    /// <see cref="AdoptionInvalidatesPublishedOverrides"/>.
+    /// </summary>
+    private bool AdoptRunningServer(int managedPid, bool hasPresetCapability)
+    {
+        // Caller holds _tailGate and has already ruled out pending recovery.
+        var usesPresets = AdoptionUsesModelPresets(managedPid != 0, hasPresetCapability);
+        _serverProcess = null;
+        _serverTail = null;
+        _serverUsesModelPresets = usesPresets;
+        _serverManagedPid = managedPid;
+        _serverIdentityRevision++;
+        _pendingPresetRecoveries = 0;
+        _deferredRetirementRevision = null;
+        if (!usesPresets) DeletePresetCapabilityFile(PresetCapabilityPath);
+        var droppedPins = AdoptionInvalidatesPublishedOverrides(usesPresets);
+        if (droppedPins) _overrides.InvalidatePublishedOverrides();
+        return droppedPins;
+    }
+
+    /// <summary>
+    /// Adopts the running server from the CURRENT adoption evidence: one
+    /// live-managed-PID read (ownership — see <see cref="ReadLiveManagedPid"/>)
+    /// feeds both the identity's managed PID and the capability verdict (see
+    /// <see cref="TryAdoptPresetCapability"/>), so a PID that goes stale
+    /// between two reads can never be paired with capability proof that
+    /// outlived it. Conservative when the ownership is unproven.
+    /// </summary>
+    internal bool AdoptRunningServerFromEvidence(long? expectedRevision = null, int? managedPid = null)
+    {
+        bool droppedPins;
+        lock (_tailGate)
+        {
+            if ((expectedRevision.HasValue && expectedRevision.Value != _serverIdentityRevision) ||
+                _pendingPresetRecoveries != 0)
+                return false;
+            var pid = managedPid ?? ReadLiveManagedPid(PidFilePath) ?? 0;
+            droppedPins = AdoptRunningServer(
+                pid, TryAdoptPresetCapability(pid != 0, PresetCapabilityPath));
+        }
+        if (droppedPins) RaiseOverridesStateChanged();
+        return true;
     }
 
     // ---- Managed-server PID file ----
@@ -1602,8 +2044,107 @@ public sealed class LlamaManager
     /// as ours (managed) — and therefore safe to stop. Deleted when the managed
     /// server is stopped or found dead.
     /// </summary>
-    private static string PidFilePath =>
-        Path.Combine(AppData.Root, ".llama.pid");
+    private string PidFilePath { get; }
+
+    /// <summary>
+    /// Path of the crash-surviving <c>--models-preset</c> CAPABILITY sidecar:
+    /// <c>%LOCALAPPDATA%\Llama\.llama.presets</c>. Unlike the PID file — which
+    /// proves only that an app instance started the server — this file is
+    /// written ONLY when a launch actually handed the process a non-null
+    /// <c>--models-preset</c> path, and it stores that path. That is the
+    /// positive evidence that the managed server reads the app's generated
+    /// preset INI (a failed preset write launches WITHOUT the flag while the
+    /// PID is still recorded, so the PID alone cannot prove the capability).
+    /// It is deleted whenever the capability is definitively gone: a stop, a
+    /// failed launch, or an adoption that does not carry it. A managed PID
+    /// without this sidecar is UNKNOWN legacy capability and is treated
+    /// conservatively (no preset claim); a live managed PID WITH the sidecar
+    /// is a preset-consuming server whose accepted overrides survive.
+    /// </summary>
+    private string PresetCapabilityPath { get; }
+
+    /// <summary>Records positive <c>--models-preset</c> capability evidence for
+    /// a launch: writes the sidecar at <paramref name="capabilityPath"/>
+    /// recording <paramref name="presetPath"/>. ONLY a launch that actually
+    /// handed the process a preset path may persist proof — a null
+    /// <paramref name="presetPath"/> (the preset write failed and the server
+    /// runs without the flag) records nothing and clears any evidence an
+    /// earlier launch left behind, so proof never outlives the process it
+    /// describes. Best-effort — a failed write simply leaves the capability
+    /// unproven. Internal for tests.</summary>
+    internal static void RecordPresetCapability(string capabilityPath, string? presetPath)
+    {
+        if (presetPath is null)
+        {
+            DeletePresetCapabilityFile(capabilityPath);
+            return;
+        }
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(capabilityPath)!);
+            File.WriteAllText(capabilityPath, presetPath);
+        }
+        catch (Exception ex) { Log.Warn(ex, "best-effort preset-capability file write failed"); }
+    }
+
+    /// <summary>The preset path the managed server was launched with, per the
+    /// capability sidecar — or <see langword="null"/> when there is no positive
+    /// evidence (missing/unreadable/empty sidecar). Internal for tests.</summary>
+    internal static string? ReadPresetCapabilityFile(string capabilityPath)
+    {
+        try
+        {
+            if (!File.Exists(capabilityPath)) return null;
+            var text = File.ReadAllText(capabilityPath).Trim();
+            return text.Length == 0 ? null : text;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(ex, "preset-capability file read failed");
+            return null;
+        }
+    }
+
+    /// <summary>Deletes <paramref name="capabilityPath"/> if present. Best-effort.
+    /// Internal for tests.</summary>
+    internal static void DeletePresetCapabilityFile(string capabilityPath)
+    {
+        try { if (File.Exists(capabilityPath)) File.Delete(capabilityPath); }
+        catch (Exception ex) { Log.Warn(ex, "best-effort preset-capability file delete failed"); }
+    }
+
+    /// <summary>
+    /// The adoptable preset capability of a MANAGED server: positive only when
+    /// a live managed PID (ownership — supplied by the caller from a single
+    /// <see cref="ReadLiveManagedPid"/> read) is paired with the capability
+    /// sidecar (proof the process was handed <c>--models-preset</c>). A
+    /// managed PID without the sidecar — a legacy instance, or one whose
+    /// preset write failed and launched without the flag — is unknown
+    /// capability and stays conservative: no preset claim. External servers
+    /// (no live managed PID) never carry the capability, and a stale sidecar
+    /// from a server that is no longer ours is cleaned up. Internal for tests.
+    /// </summary>
+    internal static bool TryAdoptPresetCapability(
+        bool hasLiveManagedPid, string capabilityPath)
+    {
+        if (!hasLiveManagedPid)
+        {
+            // Nothing managed is running: whatever the sidecar recorded is
+            // stale evidence and must not outlive its server.
+            DeletePresetCapabilityFile(capabilityPath);
+            return false;
+        }
+        return ReadPresetCapabilityFile(capabilityPath) is not null;
+    }
+
+    /// <summary>
+    /// Whether an adoption carries the <c>--models-preset</c> capability into
+    /// the running-server identity: managed + positively proven. Unknown
+    /// legacy capability (managed without evidence) is deliberately false —
+    /// pins must not be kept on inference. Internal for tests.
+    /// </summary>
+    internal static bool AdoptionUsesModelPresets(bool isManaged, bool hasCapabilityEvidence)
+        => isManaged && hasCapabilityEvidence;
 
     /// <summary>
     /// Path of the llama.cpp <c>--models-preset</c> INI the app generates from
@@ -1696,14 +2237,40 @@ public sealed class LlamaManager
     /// the flag at launch, the reload endpoint re-reads nothing and the entry
     /// would only engage after an app restart. An empty INI parses to zero
     /// sections server-side. Null only when the write fails (the server then
-    /// launches without the flag — best-effort).
+    /// launches without the flag — best-effort). The user-owned overrides in
+    /// <c>models.user.ini</c> (see <see cref="UserModelOverrides"/>) are merged
+    /// into the rendered bytes before the write, so the file the server reads
+    /// always carries the user's wins — staged here, published only after the
+    /// server accepts them. Returns the path (null when the write failed) plus
+    /// the <see cref="UserModelOverrides.Generation"/> the bytes now on disk
+    /// carry: the exact revision a server acceptance of this file commits to,
+    /// and the only generation the surrounding transaction may publish.
     /// </summary>
-    private async Task<string?> WriteContextPresetsIniAsync()
+    private async Task<(string? Path, long Generation)> WriteContextPresetsIniAsync()
     {
         await _presetWriteGate.WaitAsync();
         try
         {
-            var contexts = ModelContextLengths;
+            return await WriteContextPresetsIniCoreAsync();
+        }
+        finally
+        {
+            _presetWriteGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// <see cref="WriteContextPresetsIniAsync"/> without the gate: the reload
+    /// transaction's own write, made while it already holds
+    /// <see cref="_presetWriteGate"/> across write → request → publish. The
+    /// caller MUST hold the gate; every other writer (including the recovery's
+    /// restart) uses the gated wrapper and acquires it fresh — the transaction
+    /// releases the gate before recovery runs, so the gate is never re-entered
+    /// and cannot deadlock against itself.
+    /// </summary>
+    private async Task<(string? Path, long Generation)> WriteContextPresetsIniCoreAsync()
+    {
+        var contexts = ModelContextLengths;
             var specs = ModelSpeculativeTypes;
 
             // Snapshot the dictionaries under their locks before rendering: both
@@ -1752,23 +2319,38 @@ public sealed class LlamaManager
             contextItems = FilterExistingModels(contextItems, IsBusy, Exists);
             specItems = FilterExistingModels(specItems, IsBusy, Exists);
 
+            string? presetPath;
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(ContextPresetPath)!);
-                File.WriteAllText(ContextPresetPath,
+                // User-owned overrides (models.user.ini) are merged in after the
+                // ghost-filtered render, before the bytes the server reads are
+                // written — the user file wins per key and is itself untouched.
+                // ReloadAndApply only STAGES the override state (sections/raw
+                // for the merge); it never publishes the ctx-size cache — that
+                // happens on PublishOverrides once the server has accepted this
+                // configuration (successful startup / accepted reload).
+                var merged = _overrides.ReloadAndApply(
                     RenderModelsPresetIni(contextItems, specItems, enrolled));
-                return ContextPresetPath;
+                // The override revision these bytes carry, so a rejection of
+                // THIS configuration can be suspended only if the user file is
+                // still the same revision when the rejection arrives (see
+                // RecoverFromPresetRejection).
+                var mergedGeneration = _overrides.Generation;
+                File.WriteAllText(ContextPresetPath, merged);
+                Interlocked.Exchange(ref _writtenOverridesGeneration, mergedGeneration);
+                presetPath = ContextPresetPath;
             }
             catch (Exception ex)
             {
                 Log.Warn(ex, "failed to write model context preset file");
-                return null;
+                presetPath = null;
             }
-        }
-        finally
-        {
-            _presetWriteGate.Release();
-        }
+
+            // The staged revision this write recorded (the last one on a
+            // failed write — nothing newer landed, so the on-disk file still
+            // carries it).
+            return (presetPath, Interlocked.Read(ref _writtenOverridesGeneration));
     }
 
     /// <summary>
@@ -1784,24 +2366,227 @@ public sealed class LlamaManager
     /// (no <c>--models-preset</c> flag) won't read the file — the preference
     /// then takes effect on the next app-launched start.
     /// </summary>
-    public async Task ReloadModelPresetsAsync(CancellationToken cancel = default)
+    /// <returns><see langword="true"/> for running success, or when the
+    /// server is stopped and the regenerated file is simply deferred to its
+    /// next start; <see langword="false"/> on write/reload failure. A
+    /// rejection recovered by suspending the user's overrides and restarting
+    /// the server counts as success. An adopted external server that accepts
+    /// the reload counts as success too, but never publishes override state —
+    /// it runs no <c>--models-preset</c> and applies none of the overrides.</returns>
+    public async Task<bool> ReloadModelPresetsAsync(CancellationToken cancel = default)
     {
-        await WriteContextPresetsIniAsync();
-        if (ServerStatus != ServerState.Running) return;
+        string? presetPath;
+        long stagedGeneration;
+        bool serverRunning, accepted = false, recovered = false;
+        ServerOutputTail? tail = null;
+        var baseline = 0L;
+        long? identityRevision = null;
+
+        // Keep the captured identity alive from before the HTTP request until
+        // recovery (including its restart) finishes. A rejection may kill the
+        // process before the diagnostic arrives on the drain task.
         try
         {
-            using var budget = WithTimeout(TimeSpan.FromSeconds(10), cancel);
-            using var resp = await _http.GetAsync("/models?reload=1", budget.Token);
-            Log.Info($"model context presets reloaded (HTTP {(int)resp.StatusCode})");
+            // Serialize write → request → publish. Release this gate before
+            // recovery: its restart writes through the same gated wrapper.
+            await _presetWriteGate.WaitAsync();
+            try
+            {
+                (presetPath, stagedGeneration) = await WriteContextPresetsIniCoreAsync();
+                serverRunning = ServerStatus == ServerState.Running;
+
+                if (serverRunning)
+                {
+                    var captured = BeginPresetReload();
+                    tail = captured.Tail;
+                    baseline = captured.Baseline;
+                    identityRevision = captured.Revision;
+
+                    try
+                    {
+                        using var budget = WithTimeout(TimeSpan.FromSeconds(10), cancel);
+                        using var resp = await _http.GetAsync("/models?reload=1", budget.Token);
+                        accepted = resp.IsSuccessStatusCode;
+                        Log.Info($"model context presets reloaded (HTTP {(int)resp.StatusCode})");
+                    }
+                    catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+                    {
+                        throw; // caller cancellation: never a recovery trigger
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Debug("model context preset reload failed: " + ex.Message);
+                    }
+
+                    if (ServerLaunch.ShouldPublishOverrides(
+                            presetPath is not null, accepted, captured.UsesPresets))
+                    {
+                        // Both the staged generation and accepting identity
+                        // must still be current; neither guard replaces the other.
+                        PublishOverrides(stagedGeneration, captured.Revision);
+                    }
+                }
+            }
+            finally
+            {
+                _presetWriteGate.Release();
+            }
+
+            // Never acquire _ensureGate or restart while holding the writer.
+            // Cancellation cannot suspend overrides or trigger a retry.
+            if (serverRunning && !accepted && !cancel.IsCancellationRequested)
+                recovered = await TryRecoverFromReloadRejectionAsync(
+                    tail, baseline, stagedGeneration, cancel);
+
+            return ServerLaunch.ReloadSucceeded(
+                presetPath is not null, serverRunning, accepted, recovered);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        finally
         {
-            Log.Debug("model context preset reload failed: " + ex.Message);
+            if (identityRevision.HasValue) EndPresetReload(identityRevision.Value);
         }
     }
 
+    /// <summary>
+    /// The reload-side recovery: after a rejected/refused
+    /// <c>GET /models?reload=1</c>, wait briefly for a preset-rejection
+    /// diagnostic that is NEW on the observed spawn's tail (revision-latched,
+    /// so it survives the tail's 20-line eviction and never matches output
+    /// from before the reload), then suspend the user's overrides for the
+    /// exact rejected revision, kill/reap the spawn and restart the server
+    /// once. False — with no side effects — on anything less: no active user
+    /// overrides (nothing to suspend), no current spawn, an old rejection, no
+    /// new diagnostic within the wait, a caller cancellation, or an identity
+    /// change under the gate. The rejected option comes from the latched
+    /// <see cref="ServerOutputTail.LatestRejection"/>, never from re-parsing
+    /// the bounded startup <see cref="ServerOutputTail.Snapshot"/> — the
+    /// diagnostic's line may already be evicted, and a rejection that arrives
+    /// while the wait is running must reach the recovery just the same.
+    /// </summary>
+    private async Task<bool> TryRecoverFromReloadRejectionAsync(
+        ServerOutputTail? tail, long baselineRevision, long writtenGeneration,
+        CancellationToken cancel)
+    {
+        // Never recover generic reload failures, and never without user
+        // overrides actually in play — the app's own preset keys are always
+        // known-good.
+        if (tail is null || !_overrides.HasActiveOverrides) return false;
+
+        try
+        {
+            if (!await tail.WaitForNewRejectionAsync(baselineRevision, TimeSpan.FromSeconds(2), cancel))
+                return false;
+
+            // Cancellation is never a recovery trigger: re-check before any
+            // suspension/retry side effect — the wait above may have raced a
+            // rejection in just as the caller gave up.
+            if (cancel.IsCancellationRequested) return false;
+
+            // The latched diagnostic, not the bounded snapshot: its line may
+            // have been evicted by the wait's own chatter, and it carries the
+            // revision that proved it is the NEW rejection we waited for.
+            if (tail.LatestRejection is not { } rejection || rejection.Revision <= baselineRevision)
+                return false;
+
+            // Teardown + the single restart run under one _ensureGate
+            // acquisition (never recursive): the reload path doesn't hold it
+            // yet.
+            await _ensureGate.WaitAsync(cancel);
+            try
+            {
+                // Re-check after the wait for the gate: it may have raced the
+                // caller's cancellation too.
+                if (cancel.IsCancellationRequested) return false;
+
+                if (!RecoverFromPresetRejection(
+                        rejection.Option, tail, writtenGeneration))
+                    return false;
+
+                // One restart, strictly: the retry pass runs with recovery
+                // disabled.
+                return await StartServerCoreAsync(
+                    allowPresetRecovery: false, ownsEnsureGate: true, cancel);
+            }
+            finally { _ensureGate.Release(); }
+        }
+        catch (OperationCanceledException)
+        {
+            // Caller cancellation never triggers a recovery (the waits above
+            // return false on timeout / cancellation) and never escapes this
+            // side path — callers of the fetch/reload see it as an ordinary
+            // failure.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The one-shot preset-rejection recovery: suspends the user's
+    /// <c>models.user.ini</c> overrides (the refused option is remembered for
+    /// the warning row; the file's next edit re-enables them), then kills and
+    /// reaps this app's spawned server so a clean relaunch is possible.
+    /// The relaunch itself is the CALLER's job (one more
+    /// <see cref="StartServerCoreAsync"/> pass with recovery disabled), keeping
+    /// the retry strictly one-shot. Teardown marks the server Stopped before
+    /// the retry starts; the supervisor cannot adopt the process being reaped
+    /// or surface a Failed toast before the retry's outcome is known.
+    ///
+    /// <para>The caller MUST hold <see cref="_ensureGate"/> (this method never
+    /// acquires it): the gate is taken exactly once around teardown + retry,
+    /// never recursively.</para>
+    ///
+    /// <para>Returns <see langword="false"/> when the process/tail identity
+    /// moved underneath the caller (a stop/adoption or a concurrent recovery
+    /// already replaced the spawn): recovering a different process than the
+    /// one that rejected is never safe — and also when the user file is no
+    /// longer the revision the server rejected (see
+    /// <paramref name="expectedGeneration"/>), where the corrected file must
+    /// not be suspended for a revision it no longer carries.</para>
+    /// </summary>
+    /// <param name="expectedTail">The exact spawn's tail that observed the
+    /// rejection, on either the reload or launch path.</param>
+    /// <param name="expectedGeneration">The
+    /// <see cref="UserModelOverrides.Generation"/> the rejected preset file
+    /// carried (the revision last staged by
+    /// <see cref="WriteContextPresetsIniAsync"/>). The suspension only lands
+    /// if the user file is still that revision — a user edit after the
+    /// rejection advances the generation, and that corrected file is left
+    /// alone for a fresh attempt instead of being suspended.</param>
+    private bool RecoverFromPresetRejection(
+        string rejectedOption, ServerOutputTail expectedTail, long expectedGeneration)
+    {
+        var proc = PreparePresetRecovery(rejectedOption, expectedTail, expectedGeneration);
+        if (proc is null) return false;
+
+        // The process was detached under _tailGate. Never re-read the current
+        // process or PID file here: an observer may already have installed a
+        // replacement. Notifications and blocking teardown stay outside the lock.
+        ServerLaunch.TerminateProcessTree(proc, TimeSpan.FromSeconds(2));
+        return true;
+    }
+
+    internal Process? PreparePresetRecovery(
+        string rejectedOption, ServerOutputTail expectedTail, long expectedGeneration)
+    {
+        Process proc;
+        lock (_tailGate)
+        {
+            if (_serverProcess is null || !ReferenceEquals(_serverTail, expectedTail))
+                return null;
+            if (!_overrides.Suspend(rejectedOption, expectedGeneration))
+                return null;
+
+            Log.Warn($"llama server rejected preset option '{rejectedOption}'");
+            Log.Warn("suspending user model overrides and relaunching without them");
+            proc = _serverProcess;
+            RetireServerIdentityCore();
+        }
+        ServerStatus = ServerState.Stopped;
+        RaiseOverridesStateChanged();
+        return proc;
+    }
+
     /// <summary>Writes <paramref name="pid"/> to the PID file. Best-effort.</summary>
-    private static void WritePidFile(int pid)
+    private void WritePidFile(int pid)
     {
         try
         {
@@ -1815,17 +2600,45 @@ public sealed class LlamaManager
     /// A bounded, thread-safe tail of the server's stderr. The drain task
     /// appends every line; a failed launch reads the tail back so the footer
     /// can say WHY the server died (llama.cpp prints its errors to stderr).
+    /// Internal (and instantiable) for tests.
+    ///
+    /// <para>Besides the 20-line buffer, the tail LATCHES two diagnostics that
+    /// must outlive the buffer: the bind failure and the preset rejection.
+    /// The rejection latch is REVISIONED — every accepted line advances
+    /// <see cref="Revision"/>, and a latched rejection remembers the revision
+    /// its line arrived at — so a caller can tell "a rejection just appeared"
+    /// from "the buffer still shows an old one" even after the line itself has
+    /// been evicted (see <see cref="WaitForNewRejectionAsync"/>). One tail per
+    /// spawned server process; the latch is per-process by construction.</para>
     /// </summary>
-    private sealed class ServerOutputTail
+    internal sealed class ServerOutputTail
     {
         private const int Capacity = 20;
         private readonly object _gate = new();
         private readonly Queue<string> _lines = new();
         private bool _hasBindFailure;
+        private long _revision;
+        private (string Option, long Revision)? _rejection;
 
         public bool HasBindFailure
         {
             get { lock (_gate) return _hasBindFailure; }
+        }
+
+        /// <summary>Total lines ever accepted — monotonic, never rewound by
+        /// buffer eviction. The revision a caller observed before an event is
+        /// its "did anything new happen" baseline.</summary>
+        public long Revision
+        {
+            get { lock (_gate) return _revision; }
+        }
+
+        /// <summary>The most recent preset rejection (option name verbatim,
+        /// with the revision its line arrived at), or <see langword="null"/>
+        /// when none was seen. Survives the 20-line eviction.</summary>
+        public (string Option, long Revision)? LatestRejection
+        {
+            get { lock (_gate) return _rejection; }
         }
 
         public void Add(string line)
@@ -1836,6 +2649,12 @@ public sealed class LlamaManager
                 // Remember the diagnostic so startup can fail immediately
                 // instead of waiting for a health check that can never pass.
                 _hasBindFailure |= ServerLaunch.IsBindFailure(line);
+                // Same for the preset rejection: latched per line, at that
+                // line's revision, so eviction can't erase it and a caller can
+                // wait for a NEW one (see WaitForNewRejectionAsync).
+                if (ServerLaunch.TryGetPresetRejection(line, out var option))
+                    _rejection = (option, _revision + 1);
+                _revision++;
                 _lines.Enqueue(line);
                 while (_lines.Count > Capacity)
                     _lines.Dequeue();
@@ -1850,6 +2669,36 @@ public sealed class LlamaManager
                 return _lines.Count == 0 ? null : string.Join(Environment.NewLine, _lines);
             }
         }
+
+        /// <summary>
+        /// Waits (boundedly) until a preset rejection arrives with a revision
+        /// greater than <paramref name="afterRevision"/> — i.e. one this
+        /// caller has not seen yet, even if an OLDER rejection lingers in the
+        /// snapshot or its line has already been evicted. Returns
+        /// <see langword="false"/> on timeout without one. A rejection already
+        /// latched beyond the baseline answers immediately; the polling step
+        /// only bounds the wait, so tests need no real timing.
+        /// </summary>
+        public async Task<bool> WaitForNewRejectionAsync(
+            long afterRevision, TimeSpan timeout, CancellationToken cancel)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (true)
+            {
+                lock (_gate)
+                {
+                    if (_rejection is not null && _rejection.Value.Revision > afterRevision)
+                        return true;
+                }
+                var remaining = deadline - DateTime.UtcNow;
+                if (remaining <= TimeSpan.Zero) return false;
+                await Task.Delay(remaining > PollInterval ? PollInterval : remaining, cancel);
+            }
+        }
+
+        /// <summary>Upper bound on how long a rejection arriving mid-wait can
+        /// go unnoticed; not a guarantee of anything.</summary>
+        private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(50);
     }
 
     /// <summary>
@@ -1884,7 +2733,7 @@ public sealed class LlamaManager
         return (Drain(proc.StandardOutput, "", null), Drain(proc.StandardError, " stderr", stderrTail));
     }
 
-    private static void DeletePidFile() => DeletePidFile(PidFilePath);
+    private void DeletePidFile() => DeletePidFile(PidFilePath);
 
     /// <summary>Deletes the PID file if present. Best-effort.</summary>
     private static void DeletePidFile(string pidFilePath)
@@ -2031,13 +2880,54 @@ public sealed class LlamaManager
         };
 
     /// <summary>
+    /// Whether adopting a running server must drop the published override
+    /// pins (the <see cref="UserModelOverrides.InvalidatePublishedOverrides"/> step): only a
+    /// preset-capable adoption — live managed ownership PLUS the
+    /// <c>--models-preset</c> capability evidence (see
+    /// <see cref="TryAdoptPresetCapability"/>) — keeps the pins, because that
+    /// is the one adoption that still reads our preset file and holds the
+    /// overrides it accepted. An adoption without the capability (external, or
+    /// a managed server whose capability is unproven) runs no preset of ours:
+    /// its pins are claims no running server holds and must be invalidated.
+    /// Pure so the adoption outcome is testable without a process.
+    /// </summary>
+    internal static bool AdoptionInvalidatesPublishedOverrides(bool usesModelPresets) => !usesModelPresets;
+
+    /// <summary>
     /// Applies a <see cref="DeriveServerStatus"/> result, with logging on the
     /// two transitions that matter operationally: declaring a crash
     /// (<see cref="ServerState.Failed"/>) and confirming/adopting a server
-    /// (<see cref="ServerState.Running"/>).
+    /// (<see cref="ServerState.Running"/>). The loss rule is re-evaluated on
+    /// EVERY failing tick, not just the transition (see
+    /// <see cref="PollFailureRetiresIdentity"/>): a temporary
+    /// <c>/models</c>+<c>/health</c> failure with the identity's managed
+    /// process still live preserves the accepted pins and the identity epoch
+    /// — nothing to republish, the state simply survives — and only a
+    /// CONFIRMED process loss retires the identity, whose pins then die with
+    /// it (see <see cref="RetireServerIdentity"/>). A re-appeared server is
+    /// adopted through the same rule as the startup paths
+    /// (see <see cref="AdoptRunningServer(int, bool)"/>).
     /// </summary>
     private void ApplyPolledStatus(ServerState derived)
     {
+        var processAlive = IdentityProcessAlive(out var identityRevision);
+        lock (_tailGate)
+        {
+            if (identityRevision != _serverIdentityRevision) return;
+            if (_pendingPresetRecoveries != 0)
+            {
+                if (derived == ServerState.Failed && PollFailureRetiresIdentity(processAlive))
+                    _deferredRetirementRevision = identityRevision;
+                return;
+            }
+        }
+
+        // The process check may straddle a replacement. Retirement and
+        // adoption revalidate its epoch together with every side effect.
+        if (derived == ServerState.Failed && PollFailureRetiresIdentity(processAlive) &&
+            !RetireServerIdentity(identityRevision))
+            return;
+
         if (derived == ServerStatus) return;
         if (derived == ServerState.Failed)
         {
@@ -2046,9 +2936,83 @@ public sealed class LlamaManager
         }
         else if (derived == ServerState.Running)
         {
+            if (ServerStatus == ServerState.Failed && PollRecoveryAdoptsServer(processAlive) &&
+                !AdoptRunningServerFromEvidence(identityRevision))
+                return;
             Log.Info($"llama server reachable; {ServerStatus} → Running (API-polled)");
         }
         ServerStatus = derived;
+    }
+
+    /// <summary>
+    /// What a failing poll — a failed <c>GET /models</c> fetch confirmed by a
+    /// failed <c>/health</c> probe — does to the server identity. A
+    /// <b>transient</b> failure (the identity's managed process — the spawned
+    /// child or the adopted managed PID — is still live) preserves everything:
+    /// the accepted pins and the identity epoch survive untouched, so no poll
+    /// republishes what never died. Only a <b>confirmed process loss</b>
+    /// retires the identity (see <see cref="RetireServerIdentity"/>), which
+    /// advances the epoch and drops the pins with it. Unknown liveness (an
+    /// external adoption — nothing of ours to observe, or a process check that
+    /// could not run) is never "confirmed", so it preserves too: the
+    /// re-adoption on recovery is what settles a replaced server. Pure so the
+    /// transient-versus-loss rule is testable without a process.
+    /// </summary>
+    internal static bool PollFailureRetiresIdentity(bool? identityProcessAlive)
+        => identityProcessAlive == false;
+
+    /// <summary>
+    /// Whether a Failed → Running recovery adopts the answering server (see
+    /// <see cref="AdoptRunningServerFromEvidence"/>): everything except a
+    /// verifiably live identity process — a live spawn/managed PID means the
+    /// SAME server is back after a transient failure, and its identity, pins
+    /// and epoch simply survive; anything else (confirmed loss, an external
+    /// identity, an unverifiable process) means the answer may come from a
+    /// server this identity never tracked. Pure so the rule is testable
+    /// without a process.
+    /// </summary>
+    internal static bool PollRecoveryAdoptsServer(bool? identityProcessAlive)
+        => identityProcessAlive != true;
+
+    /// <summary>
+    /// Whether the current server identity's managed process is still alive —
+    /// the spawned child's own handle (definitive), or the managed PID an
+    /// adopted identity carries (see <see cref="ReadLiveManagedPid"/>). Null
+    /// when there is nothing of ours to observe (an external adoption) or the
+    /// process cannot be checked — never a confirmation of loss. The process
+    /// and epoch are captured together under <see cref="_tailGate"/>. Callers
+    /// must revalidate that epoch when acting on the liveness result, since
+    /// the identity may change while the process check runs.
+    /// </summary>
+    private bool? IdentityProcessAlive(out long identityRevision)
+    {
+        Process? proc;
+        int managedPid;
+        lock (_tailGate)
+        {
+            proc = _serverProcess;
+            managedPid = _serverManagedPid;
+            identityRevision = _serverIdentityRevision;
+        }
+
+        // The spawned child's own handle answers definitively.
+        if (proc is not null) return !proc.HasExited;
+
+        // An adopted identity carries only its managed PID (validated as ours
+        // at adoption): the process itself is the liveness signal. Gone is
+        // confirmed; anything that prevents the check is unknown.
+        if (managedPid == 0) return null;
+        try
+        {
+            using var adopted = Process.GetProcessById(managedPid);
+            return !adopted.HasExited;
+        }
+        catch (ArgumentException) { return false; } // no such process — confirmed loss
+        catch (Exception ex)
+        {
+            Log.Warn(ex, $"managed-server liveness check failed (pid {managedPid})");
+            return null;
+        }
     }
 
     // ---- Supervisor poll pacing / change detection ----
@@ -2986,11 +3950,53 @@ public sealed class LlamaManager
     /// is a valid answer from a living server. Not running is not a failure:
     /// callers get a valid empty list. Public callers keep the non-throwing
     /// empty-list-on-anything contract via <see cref="GetModelsAsync"/>.
+    ///
+    /// <para>A failed <c>reload</c> fetch additionally gets the one-shot
+    /// preset-rejection recovery (see
+    /// <see cref="TryRecoverFromReloadRejectionAsync"/>): the reload endpoint
+    /// is what re-reads the preset file, so its failure is where a rejected
+    /// <c>models.user.ini</c> option surfaces. Its identity is retained until
+    /// recovery finishes, so supervisor retirement cannot erase the evidence.
+    /// Ordinary <c>reload: false</c> polling — the supervisor's liveness tick —
+    /// neither retains an identity nor triggers recovery; caller cancellation
+    /// never triggers recovery either.</para>
+    ///
+    /// <para>A SUCCESSFUL <c>reload</c> is an acceptance like any other: the
+    /// router re-read the preset file and took it, so on a preset-consuming
+    /// server the staged generation captured for this fetch is published —
+    /// including after an earlier failed reload, whose staged revision is
+    /// exactly what this fetch's re-read accepted. The guarded publish commits
+    /// only the captured revision (see
+    /// <see cref="PublishOverrides(long, long)"/>), never a newer one a racing write
+    /// staged mid-request.</para>
     /// </summary>
     private async Task<IReadOnlyList<ServerModel>?> FetchModelsAsync(bool reload, CancellationToken cancel)
     {
         if (ServerStatus != ServerState.Running)
             return [];
+
+        // Baseline before the request, so only a rejection THIS fetch provokes
+        // can trigger recovery (same rule as ReloadModelPresetsAsync). The
+        // staged override generation is captured for the same reason: a
+        // recovery may only suspend the exact revision the on-disk preset
+        // file carries — and an accepted reload publishes exactly that
+        // revision. The identity revision and preset capability are captured
+        // together, exactly like ReloadModelPresetsAsync: the guarded publish
+        // refuses an acceptance that straddled a true identity change (see
+        // PublishOverrides(long, long)).
+        ServerOutputTail? tail = null;
+        var baseline = 0L;
+        var writtenGeneration = Interlocked.Read(ref _writtenOverridesGeneration);
+        var usesPresets = false;
+        var identityRevision = 0L;
+        if (reload)
+        {
+            var captured = BeginPresetReload();
+            tail = captured.Tail;
+            usesPresets = captured.UsesPresets;
+            identityRevision = captured.Revision;
+            baseline = captured.Baseline;
+        }
 
         try
         {
@@ -2998,11 +4004,32 @@ public sealed class LlamaManager
             using var resp = await _http.GetAsync(reload ? "/models?reload=1" : "/models", budget.Token);
             resp.EnsureSuccessStatusCode();
             await using var stream = await resp.Content.ReadAsStreamAsync(cancel);
-            return await ParseModelsAsync(stream, cancel);
+            var models = await ParseModelsAsync(stream, cancel);
+            if (reload && models is not null && usesPresets)
+            {
+                // The reload re-read the preset file and took it: the staged
+                // revision becomes the accepted configuration — same rule as
+                // ReloadModelPresetsAsync's publish (an adopted server and a
+                // failed parse are deliberately excluded). The guarded publish
+                // also refuses a stop/adoption/retirement that raced this
+                // response — a retired identity's acceptance is never claimed.
+                PublishOverrides(writtenGeneration, identityRevision);
+            }
+            return models;
         }
         catch
         {
-            return null; // failed fetch — deliberately distinct from an empty model list
+            // Failed fetch — deliberately distinct from an empty model list.
+            // Only an explicit reload may recover, and never on caller
+            // cancellation.
+            if (reload && !cancel.IsCancellationRequested)
+                await TryRecoverFromReloadRejectionAsync(
+                    tail, baseline, writtenGeneration, cancel);
+            return null;
+        }
+        finally
+        {
+            if (reload) EndPresetReload(identityRevision);
         }
     }
 

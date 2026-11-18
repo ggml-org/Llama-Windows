@@ -1906,6 +1906,32 @@ namespace LlamaApp.Views
             catch (Exception ex) { Log.Warn(ex, "open uri failed: " + uri); }
         }
 
+        /// <summary>
+        /// Prepares the model's section in <c>models.user.ini</c> (the exact
+        /// server model id heads the section; the file is created from its
+        /// template when missing) and opens the file in the user's default
+        /// editor via StorageFile + Launcher. Failures (unsafe id, file I/O,
+        /// no handler) propagate to the details view's error line.
+        /// </summary>
+        async Task IModelItemDetailsHost.EditModelPresetAsync(string serverModelId)
+        {
+            var path = UserModelOverrides.Shared.EnsureSection(serverModelId);
+            var file = await Windows.Storage.StorageFile.GetFileFromPathAsync(path);
+            bool ok = await Windows.System.Launcher.LaunchFileAsync(file);
+            if (!ok) throw new InvalidOperationException("no editor handler for " + path);
+        }
+
+        /// <summary>
+        /// The ctx-size the user pinned for <paramref name="serverModelId"/>
+        /// in <c>models.user.ini</c>, from the manager's PUBLISHED override
+        /// state (null when there is none, or the overrides are suspended).
+        /// The published cache advances only when a configuration is accepted
+        /// (app-managed startup or an accepted reload) or suspended — a failed
+        /// or deferred write never shows up here.
+        /// </summary>
+        string? IModelItemDetailsHost.GetContextSizeOverride(string serverModelId)
+            => UserModelOverrides.Shared.OverriddenCtxSize(serverModelId);
+
         void IModelItemDetailsHost.CloseDetails() => HideDetails();
 
         // ----- IModelFamilyDetailsHost: the family details view drives the shell's workflows -----
@@ -2315,13 +2341,45 @@ namespace LlamaApp.Views
             var d = ServerStatusPresentation.Describe(
                 LlamaManager.Shared.ServerStatus, LlamaManager.Shared.State,
                 LlamaManager.Shared.FailureMessage,
-                LlamaManager.Shared.BinaryPath is not null);
+                LlamaManager.Shared.BinaryPath is not null,
+                UserModelOverrides.Shared.SuspendedOption);
             ServerStatusDot.Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(d.Dot);
             Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(ServerStatusDot, d.ToolTip);
             ServerRestartButton.Visibility = d.CanRelaunch
                 ? Microsoft.UI.Xaml.Visibility.Visible
                 : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+            UpdatePresetWarningRow();
         }
+
+        /// <summary>
+        /// Re-renders the persistent warning row above the model list from
+        /// <see cref="UserModelOverrides.SuspendedOption"/>: shown only while
+        /// the per-model preset overrides are suspended, naming the refused
+        /// option and the file that carries it. Its "Open settings" button
+        /// deep-links to the Settings → Llama page (where the file is
+        /// documented and linked). Called with the status re-render (manager
+        /// StateChanged, startup) and when Settings closes.
+        /// </summary>
+        private void UpdatePresetWarningRow()
+        {
+            var option = UserModelOverrides.Shared.SuspendedOption;
+            if (option is null)
+            {
+                PresetWarningRow.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+                return;
+            }
+            PresetWarningText.Text =
+                $"Model overrides are ignored: \"{option.Trim()}\" is not a known option in {UserModelOverrides.FileName}.";
+            PresetWarningRow.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+        }
+
+        /// <summary>
+        /// The preset-override warning's "Open settings" action: the Settings
+        /// → Llama page, where the user file is documented and linked.
+        /// </summary>
+        private void PresetWarningSettings_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
+            => OpenSettings(showAdvanced: true);
 
         /// <summary>
         /// Refreshes the footer's device indicator from the accelerator
@@ -2485,6 +2543,14 @@ namespace LlamaApp.Views
             {
                 LoadVersionInfo();
                 UpdateServerStatusUI();
+                // The status re-render above also refreshes the preset warning
+                // row; the open details view re-reads its cached ctx-size
+                // override. StateChanged carries PUBLISHED override state
+                // only (an accepted reload / app-managed startup commit, or a
+                // suspension) — never an unconfirmed preset-file write — so
+                // the details view can't adopt a configuration the server
+                // hasn't taken.
+                if (_detailsViewModel is { } vm) _ = vm.RefreshOverridesAsync();
                 // The GPU probe can spawn llama.exe --list-devices — deferred
                 // until the first flyout show like the ctor's initial call.
                 if (_startupWorkDone)
@@ -3037,22 +3103,29 @@ namespace LlamaApp.Views
         /// context menu). Hides the flyout first so the settings dialog isn't
         /// drawn behind it (the flyout would otherwise immediately deactivate
         /// and hide on its own, but doing it explicitly avoids a flash).
+        /// <paramref name="showAdvanced"/> deep-links to the Settings → Llama
+        /// page (the preset-override warning's "Open settings" action).
         /// </summary>
-        public void OpenSettings()
+        public void OpenSettings(bool showAdvanced = false)
         {
             HideFlyout();
 
             var w = new SettingsWindow();
+            if (showAdvanced) w.ShowLlamaPage();
             // The token may have changed — re-resolve the header avatar. Skip
             // when the flyout was never shown (Settings is reachable from the
             // tray menu): the header isn't visible, and the first show's
             // EnsureStartupWork resolves the avatar with the latest token.
             // The API-key requirement may have changed too — refresh the
-            // footer glyph (local-only, so no startup gate).
+            // footer glyph (local-only, so no startup gate). So may the
+            // models.user.ini overrides: re-read the warning row and the open
+            // details view.
             w.Closed += (_, _) =>
             {
                 if (_startupWorkDone) _ = LoadAvatarAsync();
                 UpdateApiKeyIndicator();
+                UpdatePresetWarningRow();
+                if (_detailsViewModel is { } vm) _ = vm.RefreshOverridesAsync();
             };
             w.Activate();
         }
