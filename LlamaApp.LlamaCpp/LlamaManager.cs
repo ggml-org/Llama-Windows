@@ -449,8 +449,11 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Maximum number of models loaded in parallel in router mode, passed as
-    /// <c>--models-max</c> at launch; 1 (the default) avoids accumulating
-    /// models in limited GPU memory, while 0 means unlimited. Set by
+    /// <c>--models-max</c> at launch; 0 (the default) leaves the count
+    /// unlimited — the router's own memory margin (see
+    /// <see cref="ModelsMemoryMarginMb"/>) is the budget that decides when a
+    /// load must wait. A positive value caps the number of simultaneously
+    /// resident models; negative inputs clamp to 0. Set by
     /// the caller (App.OnLaunched reads it from
     /// <c>Settings.Current.MaxLoadedModels</c>) — kept here rather than reading
     /// <c>Settings</c> directly to avoid a circular project dependency. Only
@@ -458,7 +461,16 @@ public sealed class LlamaManager
     /// keeps whatever arguments it was started with, and a changed value takes
     /// effect on the next server start.
     /// </summary>
-    public int MaxLoadedModels { get; set; } = 1;
+    public int MaxLoadedModels { get; set; }
+
+    /// <summary>
+    /// Memory (MiB) the router reserves for the OS and decoder children before
+    /// starting a model load, passed as <c>--models-memory-margin</c> at every
+    /// launch. Fixed — not a user setting: the value is a safety margin, and a
+    /// too-small one reproduces the memory-starvation launches this flag
+    /// exists to prevent.
+    /// </summary>
+    internal const int ModelsMemoryMarginMb = 1024;
 
     /// <summary>
     /// KV cache quantization type for the key tensor, passed as
@@ -1077,21 +1089,37 @@ public sealed class LlamaManager
             }
 
             // 2/3. Resolve the binary; install if missing; then launch the server.
-            var resolved = Resolve();
+            var resolved = await ResolveAsync(cancel);
             Log.Info($"resolved llama binary: kind={resolved.Kind} path={resolved.Path ?? "<none>"}");
             switch (resolved.Kind)
             {
                 case ResolutionKind.Managed:
                     BinaryPath = resolved.Path;
                     CurrentOrigin = Origin.Managed;
-                    Version = await ReadVersionAsync(resolved.Path!, cancel);
+                    Version = resolved.Version;
                     State = InstallState.Idle;
                     return await StartServerCoreAsync(allowPresetRecovery: true, ownsEnsureGate: true, cancel);
 
                 case ResolutionKind.External:
                     BinaryPath = resolved.Path;
                     CurrentOrigin = Origin.External;
-                    Version = await ReadVersionAsync(resolved.Path!, cancel);
+                    Version = resolved.Version;
+                    // The engine floor (b11930 — the first build with
+                    // --models-memory-margin) is enforced on engines we did not
+                    // install: an older or unrecognizable external binary would
+                    // die at launch on the flag (and leave no diagnosable
+                    // failure behind), so install the managed build instead.
+                    // ResolveAsync already fell back to any managed install for
+                    // such an engine, so this is the no-managed-binary case.
+                    if (!ExternalEngineSupportsLaunchFlags(Version))
+                    {
+                        Log.Warn($"external llama binary at '{resolved.Path}' does not support the " +
+                                 $"required --models-memory-margin flag (version '{Version ?? "<unreadable>"}'); " +
+                                 "installing the app-managed build instead");
+                        if (await InstallAsync(cancel))
+                            return await StartServerCoreAsync(allowPresetRecovery: true, ownsEnsureGate: true, cancel);
+                        return false;
+                    }
                     State = InstallState.Idle;
                     return await StartServerCoreAsync(allowPresetRecovery: true, ownsEnsureGate: true, cancel);
 
@@ -1177,12 +1205,12 @@ public sealed class LlamaManager
     {
         try
         {
-            var resolved = Resolve();
+            var resolved = await ResolveAsync(cancel);
             if (resolved.Path is { } p && File.Exists(p))
             {
                 BinaryPath = p;
                 CurrentOrigin = resolved.Kind == ResolutionKind.Managed ? Origin.Managed : Origin.External;
-                Version = await ReadVersionAsync(p, cancel);
+                Version = resolved.Version;
             }
         }
         catch (Exception ex) { Log.Warn(ex, "best-effort version resolve failed"); }
@@ -1199,15 +1227,21 @@ public sealed class LlamaManager
         {
             await DownloadAndRunInstallerAsync(cancel);
             // Exit code 0 = success (DownloadAndRunInstallerAsync throws
-            // otherwise): llama is now on PATH. Resolve its absolute path
-            // dynamically ("which") instead of assuming a fixed location —
-            // FindOnPath also reads the registry user/machine PATH, which is
-            // what sees a PATH entry the installer just added (a child process
-            // can't update our own environment block).
-            BinaryPath = FindOnPath("llama.exe")
-                ?? throw new IOException("Install script succeeded but 'llama' was not found on PATH.");
+            // otherwise): the managed build is now installed. Pick the active
+            // binary through the same rule as a normal resolve
+            // (PreferManagedBinary): a supported external PATH hit still wins
+            // — the install must not displace the user's own engine — while an
+            // older or unreadable external hit earlier on PATH is never
+            // reselected over the build that was just installed (that shadow
+            // is exactly the fallback this rule exists for). FindOnPath reads
+            // the registry user/machine PATH, which is what sees a PATH entry
+            // the installer just added (a child process can't update our own
+            // environment block).
+            if (await SelectBinaryAsync(FindOnPath("llama.exe"), ExistingManagedBinary(), cancel) is not { } chosen)
+                throw new IOException("Install script succeeded but 'llama' was not found on PATH.");
+            BinaryPath = chosen.Path;
             CurrentOrigin = IsManagedPath(BinaryPath) ? Origin.Managed : Origin.External;
-            Version = await ReadVersionAsync(BinaryPath, cancel);
+            Version = chosen.Version;
             State = InstallState.Idle;
             return true;
         }
@@ -1231,9 +1265,10 @@ public sealed class LlamaManager
     /// so the launch flag matrix (which flags are always passed, which are
     /// conditional on their value, and in what order) is unit-testable without
     /// spawning a process. The fixed prefix is <c>serve --host &lt;addr&gt;
-    /// --port &lt;port&gt; --jinja</c>; <c>0</c>/negative
-    /// <paramref name="maxLoadedModels"/> means unlimited and omits
-    /// <c>--models-max</c>; supported non-empty
+    /// <c>--port &lt;port&gt; --jinja</c>; <c>--models-max</c> is always
+    /// emitted with <paramref name="maxLoadedModels"/> clamped to a
+    /// non-negative value (<c>0</c> = unlimited count) followed by the fixed
+    /// <c>--models-memory-margin</c> budget; supported non-empty
     /// <paramref name="cacheTypeK"/>/<paramref name="cacheTypeV"/> values add
     /// <c>--cache-type-k</c>/<c>--cache-type-v</c>; a non-null
     /// <paramref name="contextPresetPath"/> adds <c>--models-preset</c>; a
@@ -1297,14 +1332,17 @@ public sealed class LlamaManager
             args.Add(idleUnloadSeconds.ToString());
         }
 
-        // Max loaded models. Router mode loads each model in its own child
-        // process; 0 (the default) leaves the server's unlimited behavior,
-        // otherwise the router refuses to exceed N simultaneous loads.
-        if (maxLoadedModels > 0)
-        {
-            args.Add("--models-max");
-            args.Add(maxLoadedModels.ToString());
-        }
+        // Max loaded models and the memory budget the router frees before
+        // starting a load. Router mode loads each model in its own child
+        // process; --models-max is always explicit (negative clamps to 0 =
+        // unlimited count) and --models-memory-margin reserves free memory
+        // for the OS/decoder children so a model load never starves them.
+        // Always passed together as a pair: the margin is the budget that
+        // decides when a load waits, whatever the count cap is.
+        args.Add("--models-max");
+        args.Add(Math.Max(0, maxLoadedModels).ToString());
+        args.Add("--models-memory-margin");
+        args.Add(ModelsMemoryMarginMb.ToString());
 
         // KV cache quantization. K and V are configured independently so a
         // user can, for example, keep keys in q8_0 while values stay f16 when
@@ -1611,7 +1649,7 @@ public sealed class LlamaManager
             Log.Info($"starting llama server: {BinaryPath} serve --host {ListenAddress} --port {ServerPort} --jinja" +
                 (ApiKey is not null ? " (LLAMA_API_KEY set)" : "") +
                 (IdleUnloadSeconds > 0 ? $" --sleep-idle-seconds {IdleUnloadSeconds}" : "") +
-                (MaxLoadedModels > 0 ? $" --models-max {MaxLoadedModels}" : "") +
+                $" --models-max {Math.Max(0, MaxLoadedModels)} --models-memory-margin {ModelsMemoryMarginMb}" +
                 (!string.IsNullOrWhiteSpace(CacheTypeK) ? $" --cache-type-k {CacheTypeK}" : "") +
                 (!string.IsNullOrWhiteSpace(CacheTypeV) ? $" --cache-type-v {CacheTypeV}" : "") +
                 customArgsText);
@@ -4722,22 +4760,100 @@ public sealed class LlamaManager
 
     private enum ResolutionKind { Missing, Managed, External }
 
-    private record Resolution(ResolutionKind Kind, string? Path);
+    private record Resolution(ResolutionKind Kind, string? Path, string? Version);
 
     /// <summary>
-    /// Resolves the active <c>llama</c> binary with a single <c>which</c>-style
-    /// PATH lookup (<see cref="FindOnPath(string)"/>). A hit under the install
-    /// dir is the app-managed installation; a hit anywhere else is the user's
-    /// own external installation; no hit is <see cref="ResolutionKind.Missing"/>.
+    /// Resolves the active <c>llama</c> binary from a single <c>which</c>-style
+    /// PATH lookup (<see cref="FindOnPath(string)"/>) plus the managed install
+    /// (<see cref="ExistingManagedBinary"/>). A hit under the install dir is
+    /// the app-managed installation; a hit anywhere else is the user's own
+    /// external installation; no hit is <see cref="ResolutionKind.Missing"/>.
+    /// When both exist, a supported external engine wins (see
+    /// <see cref="PreferManagedBinary"/>) — PATH order must not let the binary
+    /// the app installed shadow the user's own engine. Only an external engine
+    /// below the b11930 floor, or one whose version cannot be read, falls back
+    /// to the managed install. The chosen binary's version is read here (the
+    /// same <c>--version</c> spawn the choice needs) so callers never re-spawn
+    /// it.
     /// </summary>
-    private static Resolution Resolve()
+    private static async Task<Resolution> ResolveAsync(CancellationToken cancel)
     {
-        if (FindOnPath("llama.exe") is { } found)
+        if (await SelectBinaryAsync(FindOnPath("llama.exe"), ExistingManagedBinary(), cancel) is { } chosen)
             return new Resolution(
-                IsManagedPath(found) ? ResolutionKind.Managed : ResolutionKind.External, found);
+                IsManagedPath(chosen.Path) ? ResolutionKind.Managed : ResolutionKind.External,
+                chosen.Path, chosen.Version);
 
-        return new Resolution(ResolutionKind.Missing, null);
+        return new Resolution(ResolutionKind.Missing, null, null);
     }
+
+    /// <summary>The managed binary when the install actually produced it
+    /// (its file exists on disk), else null.</summary>
+    private static string? ExistingManagedBinary()
+    {
+        var candidate = Path.Combine(ManagedDir, "llama.exe");
+        return File.Exists(candidate) ? candidate : null;
+    }
+
+    /// <summary>
+    /// Applies <see cref="PreferManagedBinary"/> to a live PATH hit and the
+    /// managed binary, returning the chosen binary with its version line so
+    /// the choice and the callers' version display share one
+    /// <c>--version</c> spawn per binary: the PATH hit's version both decides
+    /// the choice and is reused when the PATH hit wins; only a managed
+    /// fallback needs a second read. Null when neither candidate exists.
+    /// </summary>
+    private static async Task<(string Path, string? Version)?> SelectBinaryAsync(
+        string? pathHit, string? managedHit, CancellationToken cancel)
+    {
+        if (pathHit is null && managedHit is null) return null;
+
+        var pathHitVersion = pathHit is null ? null : await ReadVersionAsync(pathHit, cancel);
+        var chosen = PreferManagedBinary(pathHit, managedHit, pathHitVersion)!;
+        var version = pathHit is not null &&
+                      string.Equals(chosen, pathHit, StringComparison.OrdinalIgnoreCase)
+            ? pathHitVersion
+            : await ReadVersionAsync(chosen, cancel);
+        return (chosen, version);
+    }
+
+    /// <summary>
+    /// Binary-selection rule, pure for tests: a PATH hit wins over the managed
+    /// install only when it supports the launch flags — a build of at least
+    /// <see cref="MinimumExternalEngineBuild"/> (see
+    /// <see cref="ExternalEngineSupportsLaunchFlags"/>) — because an older or
+    /// unreadable external engine would die at launch on
+    /// <c>--models-memory-margin</c>. For those the managed install wins
+    /// instead, and after an install an older external hit earlier on PATH is
+    /// never reselected. When only one candidate exists it wins whatever its
+    /// build: there is nothing to fall back to (the Ensure floor check still
+    /// refuses to launch an unsupported engine and installs the managed build
+    /// instead). <paramref name="pathHitVersion"/> is the PATH hit's
+    /// <c>--version</c> line; it only decides the outcome when both candidates
+    /// exist.
+    /// </summary>
+    internal static string? PreferManagedBinary(string? pathHit, string? managedHit, string? pathHitVersion)
+        => pathHit is not null && ExternalEngineSupportsLaunchFlags(pathHitVersion)
+            ? pathHit
+            : managedHit ?? pathHit;
+
+    /// <summary>
+    /// The engine floor for engines the app did not install, pure for tests:
+    /// the launch always passes <c>--models-memory-margin</c> (see
+    /// <see cref="BuildServeArguments"/>) and older engines reject unknown
+    /// flags at startup. A build of at least <paramref name="minBuild"/>
+    /// (b11930, the first with the flag) is required; an unreadable version —
+    /// <see cref="RuntimeUpdateScheduler.ParseInstalledBuild"/> returns null —
+    /// is rejected too: it could be anything, including a build that dies on
+    /// the flag with no diagnosable failure. App-managed engines are exempt
+    /// (the app owns their update cadence).
+    /// </summary>
+    internal static bool ExternalEngineSupportsLaunchFlags(
+        string? versionLine, uint minBuild = MinimumExternalEngineBuild)
+        => RuntimeUpdateScheduler.ParseInstalledBuild(versionLine) is { } build && build >= minBuild;
+
+    /// <summary>Oldest engine build allowed for a non-managed binary — the
+    /// first llama.cpp build with <c>--models-memory-margin</c>.</summary>
+    internal const uint MinimumExternalEngineBuild = 11930;
 
     /// <summary>
     /// <c>which llama.exe</c>: resolves the absolute path of

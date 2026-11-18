@@ -140,14 +140,15 @@ public sealed class Settings
 
     /// <summary>
     /// Maximum number of models the llama server loads simultaneously in
-    /// router mode: 1 (the default) keeps a single model resident, avoiding
-    /// cumulative VRAM/RAM exhaustion while trying several models; 0 means
-    /// unlimited, and any other positive value sets a higher cap. Handed to
-    /// the server as <c>--models-max</c> at launch (see
-    /// <see cref="Llama.LlamaManager.MaxLoadedModels"/>), so a changed value
-    /// takes effect on the next server start.
+    /// router mode. 0 (the default) bounds residency by memory instead of by
+    /// count: the router keeps models loaded while their combined memory fits,
+    /// always reserving a 1024 MiB margin — it does not mean unbounded memory
+    /// use. Any positive value is an explicit cap on the number of models
+    /// loaded at once. Handed to the server as <c>--models-max</c> at launch
+    /// (see <see cref="Llama.LlamaManager.MaxLoadedModels"/>), so a changed
+    /// value takes effect on the next server start.
     /// </summary>
-    public int MaxLoadedModels { get; set; } = 1;
+    public int MaxLoadedModels { get; set; } = 0;
 
     /// <summary>
     /// KV cache quantization type for the key tensor, handed to the server as

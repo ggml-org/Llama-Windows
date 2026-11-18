@@ -39,7 +39,8 @@ public sealed class SettingsIdleUnloadTests
 
         Assert.NotNull(settings);
         Assert.Equal(300, settings.IdleUnloadSeconds);
-        Assert.Equal(1, settings.MaxLoadedModels);
+        // 0 = memory-bounded multi-model default (1024 MiB margin), not a count cap.
+        Assert.Equal(0, settings.MaxLoadedModels);
     }
 
     [Theory]
