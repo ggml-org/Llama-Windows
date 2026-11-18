@@ -6,10 +6,14 @@ namespace LlamaApp.LlamaCpp.Tests;
 /// <summary>
 /// Tests for the argv matrix assembled when the app launches a llama server:
 /// <c>BuildServeArguments</c> owns the fixed prefix (<c>serve --host …
-/// --port … --jinja</c>) plus the conditional <c>--sleep-idle-seconds</c>,
-/// <c>--models-max</c>, <c>--cache-type-k</c>, <c>--cache-type-v</c>, and
-/// <c>--models-preset</c> flags, plus the trailing custom-argument tokens, so
-/// changes don't accidentally reorder or drop flags.
+/// --port … --jinja</c>) plus the always-emitted <c>--models-max</c> /
+/// <c>--models-memory-margin</c> pair and the conditional
+/// <c>--sleep-idle-seconds</c>, <c>--cache-type-k</c>, <c>--cache-type-v</c>,
+/// and <c>--models-preset</c> flags, plus the trailing custom-argument tokens,
+/// so changes don't accidentally reorder or drop flags. Also covers the pure
+/// external-engine floor (<c>ExternalEngineSupportsLaunchFlags</c>) and the
+/// managed-vs-external binary selection (<c>PreferManagedBinary</c>) that gate
+/// the launch.
 /// </summary>
 public sealed class LlamaManagerArgumentsTests
 {
@@ -20,29 +24,46 @@ public sealed class LlamaManagerArgumentsTests
 
         Assert.Equal(
             new[] { "serve", "--host", "0.0.0.0", "--port", "9931", "--jinja" },
-            args);
+            args.Take(6));
     }
 
     [Fact]
-    public void BuildServeArguments_OmitsOptionalFlags_AtDefaults()
+    public void BuildServeArguments_OmitsRemainingOptionalFlags_AtDefaults()
     {
-        // -1 = idle unload disabled; 0 = unlimited loaded models; K/V types
-        // blank = keep the server's default (no flag).
+        // -1 = idle unload disabled; 0 = unlimited loaded models (emitted as
+        // an explicit --models-max 0); K/V types blank = keep the server's
+        // default (no flag).
         var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, null, null, null, null);
 
         Assert.DoesNotContain("--sleep-idle-seconds", args);
-        Assert.DoesNotContain("--models-max", args);
         Assert.DoesNotContain("--cache-type-k", args);
         Assert.DoesNotContain("--cache-type-v", args);
         Assert.DoesNotContain("--models-preset", args);
     }
 
     [Fact]
+    public void BuildServeArguments_EmitsModelsMaxZeroAndMargin_AtDefaults()
+    {
+        // The default 0 is not "omitted": it is passed explicitly so the
+        // server's own unlimited count applies with a known argv — together
+        // with the fixed memory margin that decides when a load waits.
+        var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, 0, null, null, null, null);
+
+        var maxIndex = args.IndexOf("--models-max");
+        Assert.True(maxIndex >= 0);
+        Assert.Equal("0", args[maxIndex + 1]);
+        var marginIndex = args.IndexOf("--models-memory-margin");
+        Assert.True(marginIndex >= 0);
+        Assert.Equal("1024", args[marginIndex + 1]);
+    }
+
+    [Fact]
     public void BuildServeArguments_SafeMemoryDefaults_AreEmitted()
     {
-        // New/migrated Settings use 300 seconds and one resident model. Keep
-        // the launch mapping covered so those defaults cannot silently turn
-        // back into omitted (unlimited) server flags.
+        // New/migrated Settings use 300 seconds and zero cap (unlimited count
+        // under the memory margin). Keep the launch mapping covered so those
+        // defaults cannot silently turn back into omitted (unknown) server
+        // flags.
         var args = LlamaManager.BuildServeArguments(
             9931, "127.0.0.1", 300, 1, null, null, null, null);
 
@@ -52,6 +73,9 @@ public sealed class LlamaManagerArgumentsTests
         var maxIndex = args.IndexOf("--models-max");
         Assert.True(maxIndex >= 0);
         Assert.Equal("1", args[maxIndex + 1]);
+        var marginIndex = args.IndexOf("--models-memory-margin");
+        Assert.True(marginIndex >= 0);
+        Assert.Equal("1024", args[marginIndex + 1]);
     }
 
     [Fact]
@@ -63,6 +87,9 @@ public sealed class LlamaManagerArgumentsTests
         var flagIndex = args.IndexOf("--models-max");
         Assert.True(flagIndex >= 0);
         Assert.Equal("3", args[flagIndex + 1]);
+        var marginIndex = args.IndexOf("--models-memory-margin");
+        Assert.True(marginIndex >= 0);
+        Assert.Equal("1024", args[marginIndex + 1]);
     }
 
     [Fact]
@@ -85,14 +112,19 @@ public sealed class LlamaManagerArgumentsTests
         Assert.Equal(@"C:\temp\models.ini", args[flagIndex + 1]);
     }
 
-    [Fact]
-    public void BuildServeArguments_MaxModelsZeroOrNegative_MeansUnlimited()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(int.MinValue)]
+    public void BuildServeArguments_MaxModelsZeroOrNegative_ClampsToZero(int value)
     {
-        foreach (var value in new[] { 0, -1 })
-        {
-            var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, value, null, null, null, null);
-            Assert.DoesNotContain("--models-max", args);
-        }
+        // 0 and negative = no count cap, emitted as an explicit --models-max 0
+        // so the server never falls back to its own per-build default.
+        var args = LlamaManager.BuildServeArguments(9931, "127.0.0.1", -1, value, null, null, null, null);
+
+        var flagIndex = args.IndexOf("--models-max");
+        Assert.True(flagIndex >= 0);
+        Assert.Equal("0", args[flagIndex + 1]);
     }
 
     // ---- API key: env-only delivery (never argv) ----
@@ -318,5 +350,130 @@ public sealed class LlamaManagerArgumentsTests
 
         Assert.DoesNotContain("temperture", message);
         Assert.Contains("chatter line 24", message);
+    }
+
+    // ----- External engine floor (b11930) ----------------------------------
+
+    [Theory]
+    [InlineData("llama-server (llama) b11930 (abcdef)")]
+    [InlineData("version: 0.7.0-dev (build 11941, commit 19ff817fb)")]
+    [InlineData("llama-server (llama) b12000")]
+    [InlineData("version: 11930 (abcdef)")]
+    public void ExternalEngineSupportsLaunchFlags_AcceptsB11930AndNewer(string versionLine)
+    {
+        // --models-memory-margin exists from b11930 on, so these engines can
+        // be launched as-is — no managed-install fallback.
+        Assert.True(LlamaManager.ExternalEngineSupportsLaunchFlags(versionLine));
+    }
+
+    [Theory]
+    [InlineData("llama-server (llama) b11929 (abcdef)")]
+    [InlineData("version: 6726 (abcdef)")]
+    [InlineData("llama-server (llama) b9553 (build: 9553)")]
+    [InlineData("version: 0.8.0")]
+    public void ExternalEngineSupportsLaunchFlags_RejectsOlderBuilds(string versionLine)
+    {
+        // A bare "version: 0.8.0" parses as build 0 (below the floor) — an
+        // ambiguous engine is treated like an old one, never launched blindly.
+        Assert.False(LlamaManager.ExternalEngineSupportsLaunchFlags(versionLine));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("some unrecognizable banner")]
+    public void ExternalEngineSupportsLaunchFlags_RejectsUnreadableVersions(string? versionLine)
+    {
+        // An unreadable version cannot prove the flag exists — rejected so the
+        // ensure pipeline installs the managed build instead of launching a
+        // possibly-unsupported engine.
+        Assert.False(LlamaManager.ExternalEngineSupportsLaunchFlags(versionLine));
+    }
+
+    [Fact]
+    public void ExternalEngineSupportsLaunchFlags_UsesTheFloorBoundary()
+    {
+        Assert.Equal(11930u, LlamaManager.MinimumExternalEngineBuild);
+    }
+
+    // ----- Managed vs external binary preference ---------------------------
+
+    // The version strings the selection rule classifies (see
+    // ExternalEngineSupportsLaunchFlags above): "b12000" is a supported
+    // external engine, "b9553" an unsupported one, null an unreadable one.
+
+    [Fact]
+    public void PreferManagedBinary_SupportedExternalWinsOverManaged()
+    {
+        // The regression this guards: a PATH hit at or above the b11930 floor
+        // is the user's own supported engine — it must win over the managed
+        // install regardless of PATH order or install recency.
+        Assert.Equal(
+            @"C:\external\llama.exe",
+            LlamaManager.PreferManagedBinary(
+                @"C:\external\llama.exe", @"C:\managed\llama.exe", "llama-server (llama) b12000 (abcdef)"));
+    }
+
+    [Fact]
+    public void PreferManagedBinary_UnsupportedExternalFallsBackToManaged()
+    {
+        // Below the floor the external engine would die at launch on
+        // --models-memory-margin — the managed install wins instead.
+        Assert.Equal(
+            @"C:\managed\llama.exe",
+            LlamaManager.PreferManagedBinary(
+                @"C:\external\llama.exe", @"C:\managed\llama.exe", "llama-server (llama) b9553 (abcdef)"));
+    }
+
+    [Fact]
+    public void PreferManagedBinary_UnreadableExternalFallsBackToManaged()
+    {
+        // An unreadable version cannot prove the flag exists — same fallback
+        // as an old engine, never launched blindly over the managed build.
+        Assert.Equal(
+            @"C:\managed\llama.exe",
+            LlamaManager.PreferManagedBinary(
+                @"C:\external\llama.exe", @"C:\managed\llama.exe", null));
+    }
+
+    [Theory]
+    [InlineData("llama-server (llama) b9553 (abcdef)")]
+    [InlineData("some unrecognizable banner")]
+    [InlineData(null)]
+    public void PreferManagedBinary_OldExternalAfterInstall_IsNotReselected(string? versionLine)
+    {
+        // The post-install case: an older/unreadable external hit earlier on
+        // PATH must not re-shadow the managed build that was just installed.
+        Assert.Equal(
+            @"C:\managed\llama.exe",
+            LlamaManager.PreferManagedBinary(
+                @"C:\external\llama.exe", @"C:\managed\llama.exe", versionLine));
+    }
+
+    [Fact]
+    public void PreferManagedBinary_NoManagedBinary_UsesExternal()
+    {
+        // Managed missing, external present: the external engine is the only
+        // candidate and wins whatever its build — there is nothing to fall
+        // back to (the Ensure floor check still refuses to launch it if it
+        // turns out unsupported).
+        Assert.Equal(
+            @"C:\external\llama.exe",
+            LlamaManager.PreferManagedBinary(@"C:\external\llama.exe", null, "llama-server (llama) b12000 (abcdef)"));
+    }
+
+    [Fact]
+    public void PreferManagedBinary_NoExternalBinary_UsesManaged()
+    {
+        Assert.Equal(
+            @"C:\managed\llama.exe",
+            LlamaManager.PreferManagedBinary(null, @"C:\managed\llama.exe", null));
+    }
+
+    [Fact]
+    public void PreferManagedBinary_NothingFound_StaysNull()
+    {
+        Assert.Null(LlamaManager.PreferManagedBinary(null, null, null));
     }
 }

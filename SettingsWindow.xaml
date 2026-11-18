@@ -671,7 +671,7 @@
                                 </Grid>
                             </Border>
 
-                            <!-- Max models loaded in parallel (0 = unlimited) -->
+                            <!-- Max models loaded in parallel (0 = bounded by memory with a 1024 MiB margin) -->
                             <Border Grid.Row="2"
                                     Grid.Column="1"
                                     Padding="16,14"
@@ -709,7 +709,7 @@
                                                    VerticalAlignment="Center" />
                                     </Grid>
                                     <TextBlock Grid.Row="1"
-                                               Text="Maximum number of models the router keeps loaded at the same time. 0 means unlimited. Llama restarts a running server to apply the change."
+                                               Text="Maximum number of models the router keeps loaded at the same time. 0 (the default) keeps as many models loaded as fit in memory, always leaving a 1024 MiB margin — it does not mean unlimited memory use. Any positive number is an explicit cap. Llama restarts a running server to apply the change."
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />
@@ -720,7 +720,7 @@
                                                SmallChange="1"
                                                LargeChange="4"
                                                SpinButtonPlacementMode="Hidden"
-                                               ToolTipService.ToolTip="Maximum number of models loaded at once (0 = unlimited)" />
+                                               ToolTipService.ToolTip="Maximum number of models loaded at once (0 = bounded by memory with a 1024 MiB margin)" />
                                 </Grid>
                             </Border>
 
