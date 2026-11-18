@@ -536,8 +536,11 @@
                                        HorizontalAlignment="Center" />
                         </StackPanel>
 
-                        <!-- Open in new window: model is loaded, click to open
-                             the running server's WebUI in the browser. -->
+                        <!-- Chat: model is loaded, click to open the running
+                             server's WebUI in the browser. Labeled "Chat with
+                             model" (as on the Mac) rather than "Open WebUI":
+                             someone who came to chat has no reason to know
+                             what a WebUI is. -->
                         <Button Visibility="{x:Bind Model.OpenGlyphVisible, Mode=OneWay}"
                                 Click="LocalModelOpen_Click"
                                 Tag="{x:Bind Model}"
@@ -545,8 +548,8 @@
                                 MinWidth="0" MinHeight="0"
                                 Background="Transparent"
                                 BorderThickness="0"
-                                AutomationProperties.Name="Open WebUI"
-                                ToolTipService.ToolTip="Open WebUI">
+                                AutomationProperties.Name="Chat with model"
+                                ToolTipService.ToolTip="Chat with model">
                             <FontIcon Glyph="&#xE8A7;"
                                       FontSize="16"
                                       Opacity="0.5" />
@@ -1037,9 +1040,10 @@
                         <RowDefinition Height="Auto" /> <!-- browse status -->
                     </Grid.RowDefinitions>
 
-                    <!-- "Models" heading + link to the running server's API.
-                         The link is styled gray/non-bold (not white/bold) to
-                         read as a subtle href. -->
+                    <!-- "Models" heading + link that opens the running
+                         server's WebUI. The link is styled gray/non-bold (not
+                         white/bold) to read as a subtle href. Its tooltip says
+                         "Open chat", as on the Mac, not "Open WebUI". -->
                     <StackPanel Grid.Row="0"
                                 Orientation="Horizontal" Spacing="8"
                                 Margin="0,0,-2,4">
@@ -1054,8 +1058,8 @@
                                 MinHeight="0"
                                 Opacity="0.55"
                                 VerticalAlignment="Center"
-                                ToolTipService.ToolTip="Open WebUI"
-                                AutomationProperties.Name="Open the server WebUI">
+                                ToolTipService.ToolTip="Open chat"
+                                AutomationProperties.Name="Open chat">
                             <FontIcon Glyph="&#xE8A7;"
                                       FontSize="14" />
                         </Button>
