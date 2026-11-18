@@ -15,6 +15,7 @@ Grab the latest `.msixbundle` (x64 + ARM64) from [**Releases**](https://github.c
 - **Lives in your tray** — a borderless, Mica-backed flyout anchored to the tray icon
 - **Zero-setup llama.cpp** — uses your existing `llama.exe`, or downloads one for you
 - **One-click models** — browse and download recommended models from the Hugging Face Hub
+- **Memory-bounded multi-model serving** — models stay loaded while they fit, with a 1 GiB safety margin and least-recently-used eviction instead of a one-model cap
 - **Model details** — click any model for a context-length picker with per-option memory estimates (read from the GGUF header), remembered per model, plus chat, copy-model-ID, curl-request, and Hugging Face actions
 - **Standard storage** — models live in the Hugging Face cache, shared with `llama.cpp` and other tools
 - **Spotlight-like overlay** — press `Alt+Space` from any app to chat with your loaded model
