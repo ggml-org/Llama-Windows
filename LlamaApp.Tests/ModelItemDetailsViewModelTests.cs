@@ -32,12 +32,36 @@ public sealed class ModelItemDetailsViewModelTests
         public List<ModelItem> Deletes { get; } = [];
         public int CloseDetailsCalls;
 
+        /// <summary>The raw ctx-size currently "in models.user.ini", if any.</summary>
+        public string? CtxSizeOverride;
+
+        /// <summary>Every server model id the ViewModel looked an override up with.</summary>
+        public List<string> OverrideLookups { get; } = [];
+
+        /// <summary>Every server model id the ViewModel asked to edit, as passed.</summary>
+        public List<string> EditPresetCalls { get; } = [];
+
+        /// <summary>Hook to gate or fail the edit flow (null = complete at once).</summary>
+        public Func<string, Task>? OnEditPreset;
+
         public Task LoadModelAsync(ModelItem model) { Loads.Add(model); return Task.CompletedTask; }
         public Task DownloadAsync(ModelItem model) { Downloads.Add(model); return Task.CompletedTask; }
         public Task<bool> DeleteAsync(ModelItem model) { Deletes.Add(model); return Task.FromResult(true); }
         public void CopyText(string text) => CopiedTexts.Add(text);
         public void OpenUri(string uri) => OpenedUris.Add(uri);
         public void CloseDetails() => CloseDetailsCalls++;
+
+        public Task EditModelPresetAsync(string serverModelId)
+        {
+            EditPresetCalls.Add(serverModelId);
+            return OnEditPreset?.Invoke(serverModelId) ?? Task.CompletedTask;
+        }
+
+        public string? GetContextSizeOverride(string serverModelId)
+        {
+            OverrideLookups.Add(serverModelId);
+            return CtxSizeOverride;
+        }
     }
 
     /// <summary>In-memory stand-in for Settings.ModelContextLengths.</summary>
@@ -480,6 +504,214 @@ public sealed class ModelItemDetailsViewModelTests
         await vm2.InitializeAsync();
 
         Assert.Null(vm2.SelectedContextLength);
+    }
+
+    // ---- models.user.ini overrides ----
+
+    [Fact]
+    public async Task Override_Lookups_And_Edit_Use_The_Case_Preserved_Repo_Quant_Id()
+    {
+        // The user file keys sections by the exact [repo:QUANT] header — a
+        // re-cased id would silently miss every pinned value and edit the
+        // wrong section.
+        var host = new FakeHost();
+        var item = new ModelItem
+        {
+            Name = "DeepSeek-V4-Flash",
+            RepoName = "unsloth/DeepSeek-V4-Flash-0731-GGUF",
+            Quant = "UD-Q2_K_XL",
+        };
+        var vm = MakeVm(item, host, new FakePreferences());
+
+        await vm.InitializeAsync();
+        await vm.EditModelPresetAsync();
+
+        const string id = "unsloth/DeepSeek-V4-Flash-0731-GGUF:UD-Q2_K_XL";
+        Assert.NotEmpty(host.OverrideLookups);
+        Assert.All(host.OverrideLookups, lookedUp => Assert.Equal(id, lookedUp));
+        Assert.Equal([id], host.EditPresetCalls);
+    }
+
+    [Fact]
+    public async Task Edit_Preset_Is_Offered_For_Installed_Models_Only()
+    {
+        var installedHost = new FakeHost();
+        var installed = MakeVm(InstalledItem(), installedHost, new FakePreferences());
+        Assert.True(installed.EditPresetVisible);
+        Assert.True(installed.EditPresetEnabled);
+
+        var hubHost = new FakeHost();
+        var hub = MakeVm(HubItem(), hubHost, new FakePreferences());
+        Assert.False(hub.EditPresetVisible);
+        Assert.False(hub.EditPresetEnabled);
+
+        await hub.EditModelPresetAsync(); // a Hub row has nothing to configure
+        Assert.Empty(hubHost.EditPresetCalls);
+    }
+
+    [Fact]
+    public async Task Edit_Preset_Is_Forwarded_While_The_Model_Is_Loaded()
+    {
+        // A resident model is exactly when a user tunes sampler settings —
+        // the edit must not be gated on the model being idle.
+        var host = new FakeHost();
+        var item = InstalledItem();
+        item.IsLoaded = true;
+        var vm = MakeVm(item, host, new FakePreferences());
+
+        await vm.EditModelPresetAsync();
+
+        Assert.Equal(["unsloth/Qwen3-4B-GGUF:Q4_K_M"], host.EditPresetCalls);
+    }
+
+    [Fact]
+    public async Task Edit_Preset_Is_Single_Flight()
+    {
+        var host = new FakeHost();
+        var gate = new TaskCompletionSource();
+        host.OnEditPreset = _ => gate.Task;
+        var vm = MakeVm(InstalledItem(), host, new FakePreferences());
+
+        var first = vm.EditModelPresetAsync();
+        Assert.True(vm.IsEditPresetInFlight);
+        Assert.False(vm.EditPresetEnabled);
+
+        await vm.EditModelPresetAsync(); // a second click while in flight — ignored
+        Assert.False(vm.EditPresetEnabled);
+
+        gate.SetResult();
+        await first;
+
+        Assert.False(vm.IsEditPresetInFlight);
+        Assert.True(vm.EditPresetEnabled);
+        Assert.Equal(["unsloth/Qwen3-4B-GGUF:Q4_K_M"], host.EditPresetCalls);
+    }
+
+    [Fact]
+    public async Task Edit_Preset_Failure_Lands_In_The_Error_Line_And_Restores_Availability()
+    {
+        var host = new FakeHost();
+        host.OnEditPreset = _ => throw new IOException("access denied");
+        var vm = MakeVm(InstalledItem(), host, new FakePreferences());
+
+        await vm.EditModelPresetAsync();
+
+        Assert.True(vm.HasError);
+        Assert.Contains("models.user.ini", vm.ErrorMessage);
+        Assert.False(vm.IsEditPresetInFlight);
+        Assert.True(vm.EditPresetEnabled);
+
+        // The error clears on the next details load.
+        host.OnEditPreset = null;
+        await vm.InitializeAsync();
+        Assert.False(vm.HasError);
+    }
+
+    [Fact]
+    public async Task A_Pinned_Ctx_Size_Replaces_The_Picker_And_Blocks_Selection()
+    {
+        var prefs = new FakePreferences();
+        prefs.Saved["unsloth/Qwen3-4B-GGUF:Q4_K_M"] = 16384;
+        var host = new FakeHost { CtxSizeOverride = "24576" }; // not a ladder value
+        var vm = MakeVm(InstalledItem(), host, prefs);
+        await vm.InitializeAsync();
+
+        Assert.True(vm.HasContextSizeOverride);
+        Assert.Equal("24576", vm.ContextSizeOverride);
+        Assert.Equal("ctx-size = 24576 — set in models.user.ini", vm.ContextSizeOverrideDisplay);
+        Assert.False(vm.ContextPickerVisible);
+
+        // The saved 16k is NOT restored — the picker must not read as an
+        // applied context while the user's value is in charge.
+        Assert.Null(vm.SelectedContextLength);
+        Assert.True(string.IsNullOrEmpty(vm.EstimatedMemoryDisplay));
+
+        // Selecting is blocked outright: no selection, no persistence.
+        vm.SelectContextLength(vm.ContextLengths[2]);
+        Assert.Null(vm.SelectedContextLength);
+        Assert.Equal(16384, prefs.Saved["unsloth/Qwen3-4B-GGUF:Q4_K_M"]);
+    }
+
+    [Fact]
+    public async Task Arbitrary_Override_Values_Are_Shown_Verbatim()
+    {
+        // Whatever the user typed — off-ladder, padded, non-numeric — is
+        // presented exactly as written; nothing is parsed or rounded.
+        foreach (var raw in new[] { "12288", "32768", "  8192  ", "banana", "0" })
+        {
+            var host = new FakeHost { CtxSizeOverride = raw };
+            var vm = MakeVm(InstalledItem(), host, new FakePreferences());
+            await vm.InitializeAsync();
+
+            Assert.Equal(raw, vm.ContextSizeOverride);
+            Assert.Equal($"ctx-size = {raw} — set in models.user.ini", vm.ContextSizeOverrideDisplay);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshOverridesAsync_Picks_Up_An_Override_Added_And_Removed()
+    {
+        var prefs = new FakePreferences();
+        prefs.Saved["unsloth/Qwen3-4B-GGUF:Q4_K_M"] = 16384;
+        var host = new FakeHost();
+        var vm = MakeVm(InstalledItem(), host, prefs);
+        await vm.InitializeAsync();
+
+        Assert.False(vm.HasContextSizeOverride);
+        Assert.Equal(16384, vm.SelectedContextLength?.Tokens);
+        Assert.False(string.IsNullOrEmpty(vm.EstimatedMemoryDisplay));
+
+        // Added while the page is open: the picker (and its estimate) swaps
+        // out for the pinned value.
+        host.CtxSizeOverride = "32768";
+        await vm.RefreshOverridesAsync();
+
+        Assert.Equal("32768", vm.ContextSizeOverride);
+        Assert.False(vm.ContextPickerVisible);
+        Assert.Null(vm.SelectedContextLength);
+        Assert.True(string.IsNullOrEmpty(vm.EstimatedMemoryDisplay));
+
+        // Removed: the picker and the persisted selection come back.
+        host.CtxSizeOverride = null;
+        await vm.RefreshOverridesAsync();
+
+        Assert.False(vm.HasContextSizeOverride);
+        Assert.True(vm.ContextPickerVisible);
+        Assert.Equal(16384, vm.SelectedContextLength?.Tokens);
+    }
+
+    [Fact]
+    public async Task Pinned_Ctx_Size_Text_Notifies_The_Binding_On_Every_Change()
+    {
+        // The pinned line's TextBlock binds ContextSizeOverrideDisplay (OneWay
+        // x:Bind): the computed text re-renders only when the setter raises
+        // PropertyChanged for that name. Getter assertions can't see this —
+        // the binding goes stale without the notification, leaving the text
+        // blank on first population (ShowDetails binds before InitializeAsync
+        // fills the cache) and stale on every later change.
+        var host = new FakeHost { CtxSizeOverride = "24576" };
+        var vm = MakeVm(InstalledItem(), host, new FakePreferences());
+        var raised = new List<string?>();
+        vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        // First population — the value lands after the binding is attached.
+        await vm.InitializeAsync();
+        Assert.Contains(nameof(vm.ContextSizeOverrideDisplay), raised);
+        Assert.Equal("ctx-size = 24576 — set in models.user.ini", vm.ContextSizeOverrideDisplay);
+
+        // A different value while the page is open.
+        raised.Clear();
+        host.CtxSizeOverride = "32768";
+        await vm.RefreshOverridesAsync();
+        Assert.Contains(nameof(vm.ContextSizeOverrideDisplay), raised);
+        Assert.Equal("ctx-size = 32768 — set in models.user.ini", vm.ContextSizeOverrideDisplay);
+
+        // And removal: the text clears, and that is a binding change too.
+        raised.Clear();
+        host.CtxSizeOverride = null;
+        await vm.RefreshOverridesAsync();
+        Assert.Contains(nameof(vm.ContextSizeOverrideDisplay), raised);
+        Assert.Equal("", vm.ContextSizeOverrideDisplay);
     }
 
     // ---- Actions ----
