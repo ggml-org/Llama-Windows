@@ -45,6 +45,11 @@ public sealed partial class ModelItemDetailsView : UserControl
             ViewModel?.SelectContextLength(option);
     }
 
+    private async void EditPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { } vm) await vm.EditModelPresetAsync();
+    }
+
     private async void Chat_Click(object sender, RoutedEventArgs e)
     {
         if (ViewModel is { } vm) await vm.ChatAsync();
