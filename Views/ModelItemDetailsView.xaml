@@ -183,10 +183,33 @@
                                                  IsIndeterminate="True"
                                                  IsActive="{x:Bind ViewModel.IsLoadingDetails, Mode=OneWay}"
                                                  Visibility="{x:Bind ViewModel.IsLoadingDetails, Mode=OneWay}" />
+                        <!-- The estimate describes the picker's selection; a
+                             pinned ctx-size replaces both. -->
                         <TextBlock Text="{x:Bind ViewModel.EstimatedMemoryDisplay, Mode=OneWay}"
                                    FontSize="11"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                    VerticalAlignment="Center" />
+                        <!-- Small "Edit": opens the model's models.user.ini
+                             section (installed models only; single-flight). -->
+                        <Button Click="EditPreset_Click"
+                                Visibility="{x:Bind ViewModel.EditPresetVisible, Mode=OneWay}"
+                                IsEnabled="{x:Bind ViewModel.EditPresetEnabled, Mode=OneWay}"
+                                Padding="6,2"
+                                MinWidth="0" MinHeight="0"
+                                Background="Transparent"
+                                CornerRadius="{ThemeResource ControlCornerRadius}"
+                                AutomationProperties.Name="Edit models.user.ini"
+                                ToolTipService.ToolTip="Set custom options for this model in models.user.ini">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <FontIcon Glyph="&#xE70F;"
+                                          FontSize="10"
+                                          Opacity="0.6"
+                                          VerticalAlignment="Center" />
+                                <TextBlock Text="Edit"
+                                           FontSize="11"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
                     </StackPanel>
                 </Grid>
 
@@ -195,6 +218,15 @@
                            Foreground="#F85149"
                            TextWrapping="Wrap"
                            Visibility="{x:Bind ViewModel.HasError, Mode=OneWay}" />
+
+                <!-- A pinned ctx-size from models.user.ini replaces the ladder
+                     outright: the raw value is shown as typed, the picker and
+                     its estimate go away until the key is removed. -->
+                <TextBlock Text="{x:Bind ViewModel.ContextSizeOverrideDisplay, Mode=OneWay}"
+                           FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           Visibility="{x:Bind ViewModel.HasContextSizeOverride, Mode=OneWay}" />
 
                 <!-- The context ladder: one row of compact label-only cells
                      (7 × 50 = 350 ≤ the 370 content width, scrollbar included).
@@ -205,8 +237,10 @@
                      red (won't fit) badge — the same bands as the variant
                      picker, refined by llama fit-params for on-disk models.
                      Only red (and options beyond the model's max context)
-                     disable. The accent ring marks the selection. -->
-                <ItemsControl ItemsSource="{x:Bind ViewModel.ContextLengths, Mode=OneWay}">
+                     disable. The accent ring marks the selection. A pinned
+                     ctx-size override hides the whole ladder. -->
+                <ItemsControl ItemsSource="{x:Bind ViewModel.ContextLengths, Mode=OneWay}"
+                              Visibility="{x:Bind ViewModel.ContextPickerVisible, Mode=OneWay}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
                             <StackPanel Orientation="Horizontal" />
