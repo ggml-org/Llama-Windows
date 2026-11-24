@@ -82,9 +82,10 @@ public class EmptyStatePresentationTests
     [Fact]
     public void Installing_With_An_Existing_Runtime_Says_Updating()
     {
-        // The weekly updater shares InstallState.Installing with first install.
-        // On later launches the binary is already resolved, so don't claim a
-        // first-time installation is happening again.
+        // Repair or reinstall over an existing runtime shares
+        // InstallState.Installing with first install. On later launches the
+        // binary is already resolved, so don't claim a first-time
+        // installation is happening again.
         var text = EmptyStatePresentation.Describe(
             LlamaManager.ServerState.Stopped, LlamaManager.InstallState.Installing,
             runtimeAlreadyInstalled: true, initialModelLoadCompleted: false);
