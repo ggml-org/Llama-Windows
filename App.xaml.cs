@@ -914,7 +914,7 @@ namespace LlamaApp
             }
 
             var toastTag = ToastTagForInstall(serverId);
-            var toastShown = false;
+            Notifications.BeginProgress(toastTag);
             try
             {
                 // Surface the download: a deep link fires with the flyout
@@ -944,7 +944,6 @@ namespace LlamaApp
 
                     var bytesPerSecond = speed.Observe(p.DownloadedBytes, now);
 
-                    toastShown = true;
                     Notifications.ShowProgress(toastTag,
                         "Downloading " + serverId,
                         InstallToastStatus(p.Fraction, bytesPerSecond),
@@ -953,6 +952,11 @@ namespace LlamaApp
 
                 Common.Log.Info($"deep link install: downloading {serverId}");
                 var ok = await Llama.LlamaManager.Shared.DownloadModelAsync(target, progress, cts.Token);
+                // A canceled stream can end without a terminal event and
+                // return false. Do not turn that race into a failure toast.
+                if (!ok && cts.IsCancellationRequested)
+                    throw new OperationCanceledException(cts.Token);
+
                 if (ok)
                 {
                     Common.Log.Info($"deep link install: {serverId} downloaded — " +
@@ -966,10 +970,12 @@ namespace LlamaApp
                 Notifications.Show("Download failed",
                     DownloadFailurePresentation.ToastBody(serverId, failure));
             }
-            catch (OperationCanceledException) when (cts.IsCancellationRequested)
+            catch (Exception) when (cts.IsCancellationRequested)
             {
                 // Cancel button on the progress toast — the server has been
-                // asked to abort and drops the partial bytes.
+                // asked to abort and drops the partial bytes. This also covers
+                // a transport exception racing cancellation; neither is a
+                // failure toast.
                 Common.Log.Info($"deep link install: {serverId} canceled");
             }
             catch (OperationCanceledException ex)
@@ -990,9 +996,11 @@ namespace LlamaApp
             }
             finally
             {
-                // Unregister + close before the `using` disposes so a late
-                // Cancel click can never reach a disposed source.
-                if (toastShown) Notifications.Close(toastTag);
+                // Seal before removal, even when no toast was shown: a queued
+                // progress callback must not recreate one after termination.
+                Notifications.Close(toastTag, terminal: true);
+                // Unregister before the `using` disposes so a late Cancel click
+                // can never reach a disposed source.
                 InstallDownloads.TryRemove(serverId, out _);
             }
         }

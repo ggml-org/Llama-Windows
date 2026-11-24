@@ -1053,14 +1053,14 @@ namespace LlamaApp.Views
             using var cts = new CancellationTokenSource();
             item.DownloadCancellation = cts;
 
-            // Progress toast: replaces itself in place under this tag, so a
-            // long download streams its percent without flooding Action
-            // Center. Shown only while the flyout is hidden (when it's visible
-            // the row's ring tells the story) — the throttled progress
-            // callback below toggles it either way as the flyout comes and
-            // goes. Closed on every terminal path so no ghost toast
-            // outlives the download.
+            // Progress toast: the first report shows a data-bound toast and
+            // later reports update it silently. Shown only while the flyout is
+            // hidden (when it's visible the row's ring tells the story) — the
+            // throttled progress callback below toggles it either way as the
+            // flyout comes and goes. The terminal close seals it so a queued
+            // callback cannot recreate a ghost toast.
             var toastTag = "download:" + ((IModel)item).ServerModelId;
+            Notifications.BeginProgress(toastTag);
             var toastShown = false;
             var cancelToastAction = new ToastAction("Cancel",
                 ("action", "cancelDownload"), ("id", ((IModel)item).ServerModelId));
@@ -1169,9 +1169,14 @@ namespace LlamaApp.Views
                 var draftHeads = DraftHeadDetection.DetectAsync(modelId);
 
                 var ok = await mgr.DownloadModelAsync(item, progress, cts.Token);
+                // A cancel can race a dropped SSE stream, which returns false
+                // instead of throwing. Cancellation must not become a failure
+                // toast; a successful completion still wins a late cancel.
+                if (!ok && cts.IsCancellationRequested)
+                    throw new OperationCanceledException(cts.Token);
+
                 void Complete()
                 {
-                    if (toastShown) { toastShown = false; Notifications.Close(toastTag); }
                     item.IsDownloading = false;
                     // A pause click that raced the completion is discarded —
                     // the download is over, there is nothing left to resume.
@@ -1216,11 +1221,13 @@ namespace LlamaApp.Views
                 else
                     queue.TryEnqueue(Complete);
             }
-            catch (OperationCanceledException)
+            catch (Exception ex) when (ex is OperationCanceledException || cts.IsCancellationRequested)
             {
                 // User canceled from the row's cancel button, or paused by
-                // clicking the ring — the server has already been asked to
-                // abort (see DownloadModelAsync). A cancel of a first-time
+                // clicking the ring. The filter also covers a transport
+                // exception racing cancellation; neither case is a failure.
+                // The server has already been asked to abort (see
+                // DownloadModelAsync). A cancel of a first-time
                 // download removes the row from the installed list (no file
                 // ever landed — leaving it would show a "playable" model
                 // whose load can only fail); a pause (DownloadPaused set by
@@ -1230,7 +1237,6 @@ namespace LlamaApp.Views
                 // Resume can continue the same download after this unwind.
                 void Abort()
                 {
-                    if (toastShown) { toastShown = false; Notifications.Close(toastTag); }
                     if (item is { PendingFirstDownload: true, DownloadPaused: false })
                         RemovePendingDownloadRow(item);
                     else
@@ -1254,7 +1260,6 @@ namespace LlamaApp.Views
                 var failureExceptionType = serverMessage is not null ? serverExceptionType : ex.GetType().Name;
                 void Fail()
                 {
-                    if (toastShown) { toastShown = false; Notifications.Close(toastTag); }
                     item.IsDownloading = false;
                     item.DownloadPaused = false;
                     var failure = DownloadFailurePresentation.Classify(
@@ -1274,6 +1279,9 @@ namespace LlamaApp.Views
             }
             finally
             {
+                // Seal before removal, even when no toast was shown: a queued
+                // progress callback must not recreate one after termination.
+                Notifications.Close(toastTag, terminal: true);
                 // Clear before the `using` disposes so a late cancel click can
                 // never touch a disposed source.
                 item.DownloadCancellation = null;
