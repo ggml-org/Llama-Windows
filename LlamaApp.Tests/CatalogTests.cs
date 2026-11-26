@@ -254,4 +254,221 @@ public class CatalogTests
     {
         Assert.Null(Catalog.ExtractQuant(fileName));
     }
+
+    // ----- Forced catalog supplements ---------------------------------------
+
+    [Theory]
+    [InlineData("https://huggingface.co/ggml-org/Aion-1.0-Instruct-2.3B", "ggml-org/Aion-1.0-Instruct-2.3B")]
+    [InlineData("https://huggingface.co/ggml-org/Aion-1.0-Instruct-2.3B/", "ggml-org/Aion-1.0-Instruct-2.3B")]
+    [InlineData("https://huggingface.co/some-org/some-repo", "some-org/some-repo")]
+    public void Target_Url_Parses_To_Hf_Repo_Id(string url, string expected)
+    {
+        Assert.Equal(expected, CatalogForcedModels.TryGetTargetRepo(url));
+    }
+
+    [Theory]
+    [InlineData("https://example.com/some-org/some-repo")] // not huggingface.co
+    [InlineData("https://huggingface.co/some-org/some-repo/tree/main")] // file/tree page
+    [InlineData("https://huggingface.co/some-org")] // not owner/name
+    [InlineData("https://huggingface.co/")] // no repo path
+    [InlineData("some-org/some-repo")] // not absolute
+    [InlineData("not a url")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void Non_Repo_Target_Urls_Do_Not_Resolve(string? url)
+    {
+        Assert.Null(CatalogForcedModels.TryGetTargetRepo(url));
+    }
+
+    [Fact]
+    public void Aion_Supplement_Carries_Source_Target_And_Model_Metadata()
+    {
+        // The first supplement: Microsoft's on-device SLM, published as
+        // microsoft/Aion-1.0-Instruct-2.3B but downloadable from the
+        // ggml-org GGUF mirror.
+        var aion = CatalogForcedModels.All[0];
+
+        Assert.Equal("Aion 1.0 Instruct", aion.Name);
+        Assert.Equal("Microsoft", aion.Brand);
+        Assert.Equal("microsoft/Aion-1.0-Instruct-2.3B", aion.Source);
+        Assert.Equal("ggml-org/Aion-1.0-Instruct-2.3B", CatalogForcedModels.TryGetTargetRepo(aion.TargetUrl));
+        Assert.Equal("MIT", aion.License);
+        Assert.Equal("2.3B", aion.Params);
+        Assert.True(aion.Featured);
+        Assert.Equal(new[] { "text" }, aion.InputModalities);
+        Assert.False(string.IsNullOrWhiteSpace(aion.Description));
+    }
+
+    [Fact]
+    public void Materialize_Maps_Target_Files_To_Builds_With_Real_Sizes_In_File_Order()
+    {
+        var aion = CatalogForcedModels.All[0];
+        var files = new List<HubClient.RepoFile>
+        {
+            new("README.md", 1_234),                                              // not a GGUF
+            new("Aion-1.0-Instruct-2.3B-Q8_0.gguf", 2_526_080_992),
+            new("Aion-1.0-Instruct-2.3B-Q2_K.gguf", 0),                           // size not reported
+            new("Aion-1.0-Instruct-2.3B.gguf", 999),                              // no quant segment
+            new("Aion-1.0-Instruct-2.3B-Q4_K_M.gguf", 1_234_567_890),
+        };
+
+        var family = CatalogForcedModels.Materialize(aion, "ggml-org/Aion-1.0-Instruct-2.3B", files)!;
+
+        Assert.NotNull(family);
+        Assert.Equal("Aion 1.0 Instruct", family.Name);
+        Assert.Equal("microsoft/Aion-1.0-Instruct-2.3B", family.Source);
+        var size = Assert.Single(family.Sizes);
+        Assert.Equal("Aion 1.0 Instruct 2.3B", size.Name);
+        Assert.Equal("2.3B", size.Params);
+        Assert.False(size.Vision);
+
+        // Only files with a quant label become builds, in target file order,
+        // with the actual sizes; an unreported size (0) keeps its 0 bytes and a
+        // blank display size instead of being dropped.
+        Assert.Equal(3, size.Builds.Count);
+        Assert.Equal("Q8_0", size.Builds[0].Quant);
+        Assert.Equal(2_526_080_992UL, size.Builds[0].SizeBytes);
+        Assert.Equal("2.5 GB", size.Builds[0].Size);
+        Assert.Equal("Q2_K", size.Builds[1].Quant);
+        Assert.Equal(0UL, size.Builds[1].SizeBytes);
+        Assert.Equal("", size.Builds[1].Size);
+        Assert.Equal("Q4_K_M", size.Builds[2].Quant);
+        Assert.Equal(1_234_567_890UL, size.Builds[2].SizeBytes);
+        Assert.Equal("1.2 GB", size.Builds[2].Size);
+        Assert.All(size.Builds, build => Assert.Equal("ggml-org/Aion-1.0-Instruct-2.3B", build.Repo));
+    }
+
+    [Fact]
+    public void Materialized_Aion_Family_Flattens_To_Target_Builds_With_Source_Metadata()
+    {
+        var aion = CatalogForcedModels.All[0];
+        var family = CatalogForcedModels.Materialize(
+            aion, "ggml-org/Aion-1.0-Instruct-2.3B",
+            [new HubClient.RepoFile("Aion-1.0-Instruct-2.3B-Q4_K_M.gguf", 1_234_567_890)])!;
+
+        var repo = Assert.Single(Catalog.Flatten((IReadOnlyList<ModelFamily>)[family]));
+
+        // Downloads and the server id target the GGUF mirror …
+        Assert.Equal("ggml-org/Aion-1.0-Instruct-2.3B", repo.Name);
+        Assert.Equal("ggml-org/Aion-1.0-Instruct-2.3B:Q4_K_M", repo.ServerModelId);
+        // … while branding keeps the original source repo.
+        Assert.Equal("microsoft/Aion-1.0-Instruct-2.3B", repo.Source);
+        Assert.Equal("2.3B", repo.Parameters);
+        Assert.Equal("Microsoft", repo.Brand);
+        Assert.Equal("MIT", repo.License);
+        Assert.Equal("1.2 GB", repo.Size);
+        Assert.True(repo.Featured);
+        Assert.False(repo.Vision);
+    }
+
+    [Fact]
+    public void Empty_Or_Unusable_Target_Produces_No_Supplement()
+    {
+        var aion = CatalogForcedModels.All[0];
+        const string targetRepo = "ggml-org/Aion-1.0-Instruct-2.3B";
+
+        Assert.Null(CatalogForcedModels.Materialize(aion, targetRepo, []));
+        Assert.Null(CatalogForcedModels.Materialize(aion, targetRepo, [new("README.md", 4_096)]));
+        Assert.Null(CatalogForcedModels.Materialize(aion, targetRepo, [new("Aion-1.0-Instruct-2.3B.gguf", 1_000)]));
+    }
+
+    // The append behavior FetchFamiliesAsync relies on, driven with a stub
+    // materializer so no network is involved.
+
+    [Fact]
+    public async Task Supplement_Skipped_When_Remote_Family_Has_The_Same_Name()
+    {
+        var families = new List<ModelFamily> { new() { Name = "aion 1.0 instruct" } };
+        var materialized = new List<string>();
+
+        await CatalogForcedModels.AppendMissingAsync(families, (model, _) =>
+        {
+            materialized.Add(model.Name);
+            return Task.FromResult(CatalogForcedModels.Materialize(
+                model, "ggml-org/Aion-1.0-Instruct-2.3B",
+                [new HubClient.RepoFile("Aion-1.0-Instruct-2.3B-Q4_K_M.gguf", 1_000_000_000)]));
+        });
+
+        Assert.DoesNotContain("Aion 1.0 Instruct", materialized); // remote wins, not even fetched
+        var remote = Assert.Single(families); // no supplemented duplicate
+        Assert.Equal("aion 1.0 instruct", remote.Name); // untouched
+    }
+
+    [Fact]
+    public async Task Supplement_Skipped_When_Remote_Build_Already_Uses_The_Target_Repo()
+    {
+        var families = new List<ModelFamily>
+        {
+            new()
+            {
+                Name = "A Rebranded Family",
+                Sizes = [new ModelFamilySize
+                {
+                    Builds = [new ModelFamilyBuild { Repo = "GGML-ORG/aion-1.0-instruct-2.3b" }],
+                }],
+            },
+        };
+        var materialized = new List<string>();
+
+        await CatalogForcedModels.AppendMissingAsync(families, (model, _) =>
+        {
+            materialized.Add(model.Name);
+            return Task.FromResult(CatalogForcedModels.Materialize(
+                model, "ggml-org/Aion-1.0-Instruct-2.3B",
+                [new HubClient.RepoFile("Aion-1.0-Instruct-2.3B-Q4_K_M.gguf", 1_000_000_000)]));
+        });
+
+        Assert.DoesNotContain("Aion 1.0 Instruct", materialized);
+        var remote = Assert.Single(families); // no supplemented duplicate
+        Assert.Equal("A Rebranded Family", remote.Name); // untouched
+    }
+
+    [Fact]
+    public async Task Supplement_Appended_After_Remote_Families_When_Missing()
+    {
+        var families = new List<ModelFamily> { new() { Name = "Some Remote Family" } };
+
+        await CatalogForcedModels.AppendMissingAsync(families, (model, _) =>
+            Task.FromResult(CatalogForcedModels.Materialize(
+                model, CatalogForcedModels.TryGetTargetRepo(model.TargetUrl)!,
+                [new HubClient.RepoFile("Aion-1.0-Instruct-2.3B-Q4_K_M.gguf", 1_000_000_000)])));
+
+        // The remote entry keeps its place; the supplement is appended behind it.
+        Assert.Equal("Some Remote Family", families[0].Name);
+        var aion = Assert.Single(families, f => f.Name == "Aion 1.0 Instruct");
+        Assert.Equal("microsoft/Aion-1.0-Instruct-2.3B", aion.Source);
+    }
+
+    [Fact]
+    public async Task Supplement_Dropped_Without_Failing_When_Target_Unavailable()
+    {
+        var families = new List<ModelFamily> { new() { Name = "Some Remote Family" } };
+
+        await CatalogForcedModels.AppendMissingAsync(families, (_, _) => Task.FromResult<ModelFamily?>(null));
+
+        // Unavailable target: no broken entry, the base catalog stays intact.
+        Assert.Single(families);
+        Assert.Equal("Some Remote Family", families[0].Name);
+    }
+
+    [Fact]
+    public void Remote_Catalog_Source_Maps_Through_Flatten()
+    {
+        const string withSource = """
+            [{"name":"X","source":"microsoft/x-2.3B","sizes":[{"name":"X 2.3B","params":"2.3B",
+              "builds":[{"quant":"Q4_0","size":"1.2 GB","sizeBytes":1234567890,"repo":"ggml-org/x-GGUF"}]}]}]
+            """;
+        const string withoutSource = """
+            [{"name":"X","sizes":[{"name":"X 2.3B","params":"2.3B",
+              "builds":[{"quant":"Q4_0","size":"1.2 GB","sizeBytes":1234567890,"repo":"ggml-org/x-GGUF"}]}]}]
+            """;
+
+        var sourced = Assert.Single(Catalog.Flatten(
+            JsonSerializer.Deserialize(withSource, HubJsonContext.Default.CatalogFamilyArray)!));
+        Assert.Equal("microsoft/x-2.3B", sourced.Source);
+
+        var legacy = Assert.Single(Catalog.Flatten(
+            JsonSerializer.Deserialize(withoutSource, HubJsonContext.Default.CatalogFamilyArray)!));
+        Assert.Null(legacy.Source);
+    }
 }

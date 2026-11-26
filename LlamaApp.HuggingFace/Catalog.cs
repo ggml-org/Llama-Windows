@@ -20,12 +20,15 @@ public sealed class Catalog : IModelSource
     /// <summary>
     /// Fetches the catalog and returns the family → size → build hierarchy as
     /// public <see cref="ModelFamily"/> objects — the shape the browse list
-    /// renders (one row per family, sizes and quants a click deeper).
+    /// renders (one row per family, sizes and quants a click deeper). Families
+    /// the remote catalog doesn't carry yet are supplemented from
+    /// <see cref="CatalogForcedModels"/>; remote entries always win.
     /// </summary>
     public static async Task<IReadOnlyList<ModelFamily>> FetchFamiliesAsync(CancellationToken cancel = default)
     {
-        var families = await FetchCatalogFamiliesAsync(cancel);
-        return families.Length == 0 ? [] : families.Select(ToModelFamily).ToList();
+        var families = (await FetchCatalogFamiliesAsync(cancel)).Select(ToModelFamily).ToList();
+        await CatalogForcedModels.AppendMissingAsync(families, cancel);
+        return families;
     }
 
     /// <summary>
@@ -63,6 +66,7 @@ public sealed class Catalog : IModelSource
     {
         Name = family.Name,
         Brand = family.Brand,
+        Source = family.Source,
         // The catalog marks a highlight in each description as markdown bold
         // (llama.app renders it); the app shows descriptions as plain text.
         Description = family.Description.Replace("**", ""),
@@ -112,6 +116,7 @@ public sealed class Catalog : IModelSource
                 InputModalities = size.InputModalities,
                 DisplayName = size.Name,
                 Brand = family.Brand,
+                Source = family.Source,
                 Quant = build.Quant,
                 SizeBytes = build.SizeBytes,
                 Featured = family.Featured,
@@ -225,6 +230,7 @@ public sealed class Catalog : IModelSource
                             InputModalities = matched.InputModalities,
                             DisplayName = matched.DisplayName,
                             Brand = matched.Brand,
+                            Source = matched.Source,
                             Quant = matched.Quant,
                             SizeBytes = sizeBytes ?? matched.SizeBytes,
                             Featured = matched.Featured,
@@ -318,6 +324,7 @@ public sealed class Catalog : IModelSource
     {
         [JsonPropertyName("name")] public string Name { get; set; } = "";
         [JsonPropertyName("brand")] public string Brand { get; set; } = "";
+        [JsonPropertyName("source")] public string? Source { get; set; }
         [JsonPropertyName("description")] public string Description { get; set; } = "";
         [JsonPropertyName("details")] public string Details { get; set; } = "";
         [JsonPropertyName("released")] public string Released { get; set; } = "";

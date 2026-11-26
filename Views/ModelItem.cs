@@ -270,6 +270,15 @@ public sealed class ModelItem : IModel, INotifyPropertyChanged
     public bool Downloadable { get; set; }
     public string? Brand { get; set; }
 
+    /// <summary>
+    /// The original Hugging Face repo id the model was published as (e.g.
+    /// <c>microsoft/Aion-1.0-Instruct-2.3B</c>) — the publisher's repo, which
+    /// differs from <see cref="RepoName"/> when the catalog serves downloads
+    /// from a GGUF mirror. Drives the publisher-avatar lookup; downloads and
+    /// repository links keep using <see cref="RepoName"/>.
+    /// </summary>
+    public string? Source { get; set; }
+
     // ---- Download progress state (drives the progress ring) ----
 
     /// <summary>True while a download is in flight; the row shows a progress ring.</summary>

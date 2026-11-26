@@ -471,10 +471,12 @@ namespace LlamaApp.Views
                 LocalModels.Add(item);
 
                 // Rows the brand-logo mapping can't fill (Hub-downloaded
-                // models have no catalog brand) fall back to the author's
-                // Hub avatar — disk first, then a fetch on miss (per-author
-                // coalesced and globally bounded; see AttachCachedItemAvatarAsync).
-                if (item.Logo is null)
+                // models have no catalog brand) fall back to the publisher's
+                // / author's Hub avatar over the generic icon — disk first,
+                // then a fetch on miss (per-author coalesced and globally
+                // bounded; see AttachCachedItemAvatarAsync). Rows carrying a
+                // bundled brand mark are skipped: Gemma & co. keep theirs.
+                if (item.Logo is null || !ModelItem.HasBrandLogo(item.Brand))
                     _ = AttachCachedItemAvatarAsync(item);
             }
 
@@ -523,6 +525,11 @@ namespace LlamaApp.Views
             {
                 Name = DeriveDisplayName(repo, quant, byRepo),
                 RepoName = repo,
+                // The catalog's original repo (the publisher's, e.g. a
+                // microsoft/… source served from a ggml-org GGUF mirror) —
+                // drives the publisher-avatar lookup only; downloads and
+                // repository links keep using the mirror repo above.
+                Source = matched?.Source,
                 Quant = quant,
                 Description = matched?.Description ?? "",
                 Parameters = matched?.Parameters ?? "",
@@ -1967,6 +1974,9 @@ namespace LlamaApp.Views
             {
                 Name = $"{size.Name} ({build.Quant})",
                 RepoName = build.Repo,
+                // The family's original repo (the publisher's) — same role as
+                // in BuildLocalItem: avatar lookup only.
+                Source = family.Source,
                 Description = family.Description,
                 Parameters = size.Params,
                 Size = build.Size,
@@ -1979,6 +1989,12 @@ namespace LlamaApp.Views
             };
             item.ApplyInputModalities(size.InputModalities);
             _ = StartVariantDownloadAsync(item);
+
+            // Without a bundled brand mark the row swaps its generic icon
+            // for the publisher's / author's Hub avatar once it lands (the
+            // same chain the populate guards run); Gemma & co. keep theirs.
+            if (!ModelItem.HasBrandLogo(family.Brand))
+                _ = AttachCachedItemAvatarAsync(item);
 
             // Await the preflights (disk + memory): IsDownloading only flips
             // once both pass, and only then may the details close.
@@ -2838,8 +2854,9 @@ namespace LlamaApp.Views
                     _localByServerId[sm.Id] = newItem;
                     LocalModels.Add(newItem);
                     // Disk first, Hub fetch on miss (per-author coalesced and
-                    // globally bounded; see AttachCachedItemAvatarAsync).
-                    if (newItem.Logo is null)
+                    // globally bounded; see AttachCachedItemAvatarAsync);
+                    // rows with a bundled brand mark keep it.
+                    if (newItem.Logo is null || !ModelItem.HasBrandLogo(newItem.Brand))
                         _ = AttachCachedItemAvatarAsync(newItem);
                     Log.Info("added new local row from poller: " + sm.Id);
                 }
@@ -3540,42 +3557,47 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// The Hub avatar for a model row: the provider's ("org's") avatar
-        /// first — a catalog model downloaded from a GGUF mirror (ggml-org/…)
-        /// is still its maker's model — then the repo author's. Only brands
-        /// without a bundled logo mark go looking: Gemma & co. keep theirs.
+        /// The Hub avatar for a model row: the original publisher's avatar
+        /// first — the source repo's author ("microsoft/Aion-1.0-Instruct-2.3B"
+        /// → microsoft), then the brand label's slug candidates — a catalog
+        /// model downloaded from a GGUF mirror (ggml-org/…) is still its
+        /// maker's model — and finally the repo author's as the local-model
+        /// fallback. Only brands without a bundled logo mark go looking:
+        /// Gemma & co. keep theirs.
         /// </summary>
         private static async Task<Microsoft.UI.Xaml.Media.ImageSource?> AvatarForAsync(ModelItem item)
         {
-            if (!string.IsNullOrWhiteSpace(item.Brand) && !ModelItem.HasBrandLogo(item.Brand))
+            if (string.IsNullOrWhiteSpace(item.Brand) || !ModelItem.HasBrandLogo(item.Brand))
             {
-                var byBrand = await AvatarCache.GetOrFetchForBrandAsync(item.Brand);
-                if (byBrand is not null) return byBrand;
+                var byModel = await AvatarCache.GetOrFetchForModelAsync(item.Source, item.Brand ?? "");
+                if (byModel is not null) return byModel;
             }
             return await AvatarCache.GetOrFetchAsync(AuthorOf(item.RepoName ?? item.Name));
         }
 
         /// <summary>
         /// Attaches the provider's Hub avatar to a family row the brand-logo
-        /// mapping can't fill (LFM 2.5 → Liquid AI's mark). Decorative: a
-        /// failure just leaves the generic icon the row already shows.
+        /// mapping can't fill (LFM 2.5 → Liquid AI's mark): the family's
+        /// original source repo's author first, then its brand label's slug
+        /// candidates. Decorative: a failure just leaves the generic icon the
+        /// row already shows.
         /// </summary>
         private async Task AttachFamilyAvatarAsync(ModelFamilyViewModel row)
         {
             if (ModelItem.HasBrandLogo(row.Brand)) return;
-            var avatar = await AvatarCache.GetOrFetchForBrandAsync(row.Brand);
+            var avatar = await AvatarCache.GetOrFetchForModelAsync(row.Family.Source, row.Brand);
             if (avatar is not null && Families.Contains(row)) row.AttachAvatar(avatar);
         }
 
         /// <summary>
         /// The family-details header counterpart of
-        /// <see cref="AttachFamilyAvatarAsync"/>: the same org lookup, applied
-        /// only while this details view is still the one on screen.
+        /// <see cref="AttachFamilyAvatarAsync"/>: the same publisher lookup,
+        /// applied only while this details view is still the one on screen.
         /// </summary>
         private async Task AttachFamilyDetailsAvatarAsync(ModelFamilyDetailsViewModel vm, ModelFamily family)
         {
             if (ModelItem.HasBrandLogo(family.Brand)) return;
-            var avatar = await AvatarCache.GetOrFetchForBrandAsync(family.Brand);
+            var avatar = await AvatarCache.GetOrFetchForModelAsync(family.Source, family.Brand);
             if (avatar is not null && ReferenceEquals(_familyDetailsViewModel, vm))
                 vm.AttachAvatar(avatar);
         }

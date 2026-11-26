@@ -83,21 +83,50 @@ public static class AvatarCache
     }
 
     /// <summary>
-    /// Returns the cached avatar for a brand label ("Liquid AI"), fetching
-    /// it from the Hub on first use — the provider's ("org's") avatar, not a
-    /// repo author's. Brand labels are human display names, not Hub slugs,
-    /// so the lookup tries the plausible slug forms in order (see
-    /// <see cref="BrandSlugs"/>), each through the usual coalesced fetch.
-    /// Null when no candidate actor exists or has an avatar.
+    /// Returns the cached avatar for a model's maker, fetching it from the
+    /// Hub on first use: the original source repo's author first (a model
+    /// served from a GGUF mirror is still its publisher's model), then the
+    /// brand label ("Liquid AI") as Hub actor slugs — see
+    /// <see cref="ModelSlugs"/> for the candidate order. Each candidate goes
+    /// through the usual coalesced fetch. Null when no candidate actor exists
+    /// or has an avatar.
     /// </summary>
-    public static async Task<ImageSource?> GetOrFetchForBrandAsync(string brand)
+    public static async Task<ImageSource?> GetOrFetchForModelAsync(string? sourceRepo, string brand)
     {
-        foreach (var slug in BrandSlugs(brand))
+        foreach (var slug in ModelSlugs(sourceRepo, brand))
         {
             var image = await GetOrFetchAsync(slug);
             if (image is not null) return image;
         }
         return null;
+    }
+
+    /// <summary>
+    /// The Hub actor slugs to try for a model, in order: the original source
+    /// repo's author first ("microsoft/Aion-1.0-Instruct-2.3B" → "microsoft"
+    /// — the publisher's own avatar), then the brand label's plausible slug
+    /// forms (see <see cref="BrandSlugs"/>). The Hub resolves slugs
+    /// case-insensitively, so candidates are de-duplicated case-insensitively
+    /// while preserving order.
+    /// Pure — unit-tested.
+    /// </summary>
+    internal static string[] ModelSlugs(string? sourceRepo, string brand)
+    {
+        var candidates = new List<string>();
+        var author = AuthorOf(sourceRepo);
+        if (author.Length > 0) candidates.Add(author);
+        candidates.AddRange(BrandSlugs(brand));
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return [.. candidates.Where(c => c.Length > 0 && seen.Add(c))];
+    }
+
+    /// <summary>The author/org part of a HF repo id ("" when there is none).</summary>
+    private static string AuthorOf(string? repoId)
+    {
+        if (string.IsNullOrWhiteSpace(repoId)) return "";
+        var trimmed = repoId.Trim();
+        var sep = trimmed.LastIndexOf('/');
+        return sep > 0 ? trimmed[..sep] : "";
     }
 
     /// <summary>

@@ -18,6 +18,13 @@ namespace LlamaApp.HuggingFace
         /// <summary>Brand/publisher label, e.g. "Google", "OpenAI" (drives the logo).</summary>
         public string Brand { get; init; } = "";
 
+        /// <summary>
+        /// Original HF repo id the model was published as, e.g.
+        /// "microsoft/Aion-1.0-Instruct-2.3B" — the builds' repos may point at
+        /// a GGUF mirror. Null when unknown.
+        /// </summary>
+        public string? Source { get; init; }
+
         /// <summary>One-line catalog description shown in the family row/details.</summary>
         public string Description { get; init; } = "";
 

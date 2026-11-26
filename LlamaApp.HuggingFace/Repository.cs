@@ -41,6 +41,13 @@ public record Repository : IModel
     /// <summary>Brand/family label, e.g. "OpenAI", "Qwen".</summary>
     public string? Brand { get; init; }
 
+    /// <summary>
+    /// Original HF repo id the model was published as, e.g.
+    /// "microsoft/Aion-1.0-Instruct-2.3B" — <see cref="Name"/> may point at a
+    /// GGUF mirror. Null when unknown.
+    /// </summary>
+    public string? Source { get; init; }
+
     /// <summary>Quantization label, e.g. "Q4_0", "mxfp4".</summary>
     public string? Quant { get; init; }
 
