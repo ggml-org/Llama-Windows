@@ -9,7 +9,6 @@ namespace LlamaApp
         private TrayIconManager? _trayIcon;
         private OverlayWindow? _overlay;
         private GlobalHotkey? _hotkey;
-        private Llama.RuntimeUpdateScheduler? _runtimeUpdates;
 
         /// <summary>
         /// In-flight <c>llama://install</c> downloads by server model id
@@ -264,22 +263,22 @@ namespace LlamaApp
             Common.Log.Info($"cache directory: {Settings.Current.CacheDirectory}");
             // Presence only — never log the token itself.
             Common.Log.Info($"HF token: {(string.IsNullOrWhiteSpace(Settings.Current.HuggingFaceToken) ? "not set" : "configured")}");
-            // Weekly runtime self-update: when the last check (persisted under
-            // %LOCALAPPDATA%\Llama) is a week old or older, check llama.cpp's
-            // latest release and install it via install.ps1 BEFORE the server
-            // launches — the one point where llama.exe is not in use. The
-            // scheduler then runs the ensure and keeps an hourly watch; it
-            // defers installs while the server is up. Fire-and-forget like
-            // the ensure it wraps.
-            _runtimeUpdates = new Llama.RuntimeUpdateScheduler(Llama.LlamaManager.Shared);
-            // The weekly pass is silent — but a successful install deserves a
-            // toast (it explains why the server takes a moment longer the
-            // next time it starts, and why the version footer changed).
-            _runtimeUpdates.RuntimeUpdated += build => _dispatcher.TryEnqueue(() =>
-                Notifications.Show("llama.cpp updated",
-                    $"The llama.cpp runtime was updated to b{build}. The new version is used the next time the server starts."));
-            _ = _runtimeUpdates.StartAsync(
-                () => Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync());
+            // Bring the server up in the background (see the ensure
+            // description above). Fire-and-forget: a failure must never take
+            // the app down, so it is logged and swallowed. The llama.cpp
+            // runtime is pinned to Llama.LlamaVersion — the version status
+            // lives on the Settings card.
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Llama.LlamaManager.Shared.EnsureLlamaOrDownloadAsync();
+                }
+                catch (Exception ex)
+                {
+                    Common.Log.Warn(ex, "startup server ensure failed");
+                }
+            });
 
             // Spotlight-style prompt overlay, summoned by a global Alt+Space
             // hotkey. Created lazily on first press and reused thereafter; the
@@ -512,12 +511,6 @@ namespace LlamaApp
         [System.Runtime.InteropServices.DllImport("user32.dll", ExactSpelling = true)]
         [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
         private static extern bool AllowSetForegroundWindow(int dwProcessId);
-
-        /// <summary>
-        /// The app-wide runtime update scheduler (created in OnLaunched) —
-        /// Settings uses it for the Check-for-updates card.
-        /// </summary>
-        internal Llama.RuntimeUpdateScheduler RuntimeUpdates => _runtimeUpdates!;
 
         /// <summary>
         /// The first .gguf among a file activation's files (an "Open With"

@@ -1094,28 +1094,24 @@ public sealed class LlamaManager
             switch (resolved.Kind)
             {
                 case ResolutionKind.Managed:
-                    BinaryPath = resolved.Path;
-                    CurrentOrigin = Origin.Managed;
-                    Version = resolved.Version;
-                    State = InstallState.Idle;
-                    return await StartServerCoreAsync(allowPresetRecovery: true, ownsEnsureGate: true, cancel);
-
                 case ResolutionKind.External:
                     BinaryPath = resolved.Path;
-                    CurrentOrigin = Origin.External;
+                    CurrentOrigin = resolved.Kind == ResolutionKind.Managed ? Origin.Managed : Origin.External;
                     Version = resolved.Version;
-                    // The engine floor (b11930 — the first build with
-                    // --models-memory-margin) is enforced on engines we did not
-                    // install: an older or unrecognizable external binary would
-                    // die at launch on the flag (and leave no diagnosable
-                    // failure behind), so install the managed build instead.
-                    // ResolveAsync already fell back to any managed install for
-                    // such an engine, so this is the no-managed-binary case.
-                    if (!ExternalEngineSupportsLaunchFlags(Version))
+                    // The pinned runtime floor (b12765) is enforced on every
+                    // binary the app launches, managed or not: below the pin —
+                    // or with an unrecognizable version — the server would die
+                    // on the app's launch flags (and leave no diagnosable
+                    // failure behind), so repair through the installer first.
+                    // ResolveAsync already fell back to a supported candidate
+                    // where one existed, so this is the nothing-supported case.
+                    // The pin is a floor, not a match: a binary newer than the
+                    // pin launches as-is and is never downgraded.
+                    if (!LlamaVersion.IsPinnedOrNewer(Version))
                     {
-                        Log.Warn($"external llama binary at '{resolved.Path}' does not support the " +
-                                 $"required --models-memory-margin flag (version '{Version ?? "<unreadable>"}'); " +
-                                 "installing the app-managed build instead");
+                        Log.Warn($"{(resolved.Kind == ResolutionKind.Managed ? "managed" : "external")} llama binary " +
+                                 $"at '{resolved.Path}' is below the pinned runtime {LlamaVersion.LLAMA_VERSION} " +
+                                 $"(version '{Version ?? "<unreadable>"}'); installing the pinned build instead");
                         if (await InstallAsync(cancel))
                             return await StartServerCoreAsync(allowPresetRecovery: true, ownsEnsureGate: true, cancel);
                         return false;
@@ -1196,10 +1192,7 @@ public sealed class LlamaManager
     /// Best-effort binary resolution and version read — populates
     /// <see cref="BinaryPath"/>, <see cref="CurrentOrigin"/> and
     /// <see cref="Version"/> without launching the server. Used for an
-    /// adopted (external) server's display fields and by the runtime-update
-    /// scheduler, which must know the origin/version before its startup
-    /// install window (it runs before <see cref="EnsureLlamaOrDownloadAsync"/>).
-    /// Never throws.
+    /// adopted (external) server's display fields. Never throws.
     /// </summary>
     public async Task ResolveAndReadVersionAsync(CancellationToken cancel = default)
     {
@@ -1227,8 +1220,8 @@ public sealed class LlamaManager
         {
             await DownloadAndRunInstallerAsync(cancel);
             // Exit code 0 = success (DownloadAndRunInstallerAsync throws
-            // otherwise): the managed build is now installed. Pick the active
-            // binary through the same rule as a normal resolve
+            // otherwise): the pinned build should now be installed. Pick the
+            // active binary through the same rule as a normal resolve
             // (PreferManagedBinary): a supported external PATH hit still wins
             // — the install must not displace the user's own engine — while an
             // older or unreadable external hit earlier on PATH is never
@@ -1239,6 +1232,16 @@ public sealed class LlamaManager
             // environment block).
             if (await SelectBinaryAsync(FindOnPath("llama.exe"), ExistingManagedBinary(), cancel) is not { } chosen)
                 throw new IOException("Install script succeeded but 'llama' was not found on PATH.");
+            // Success is only reportable when the binary the app would launch
+            // satisfies the pinned runtime: a script that silently delivered an
+            // older build — or a result whose version cannot be read — must not
+            // be counted as installed (the next ensure would immediately
+            // reinstall). A newer external engine remains valid: the pin is a
+            // floor, not a match.
+            if (!LlamaVersion.IsPinnedOrNewer(chosen.Version))
+                throw new IOException(
+                    $"Install script succeeded but the resolved 'llama' at '{chosen.Path}' is not " +
+                    $"{LlamaVersion.LLAMA_VERSION} or newer (version '{chosen.Version ?? "<unreadable>"}').");
             BinaryPath = chosen.Path;
             CurrentOrigin = IsManagedPath(BinaryPath) ? Origin.Managed : Origin.External;
             Version = chosen.Version;
@@ -4771,7 +4774,8 @@ public sealed class LlamaManager
     /// When both exist, a supported external engine wins (see
     /// <see cref="PreferManagedBinary"/>) — PATH order must not let the binary
     /// the app installed shadow the user's own engine. Only an external engine
-    /// below the b11930 floor, or one whose version cannot be read, falls back
+    /// below the pinned runtime (see <see cref="IsSupportedExternalEngine"/>),
+    /// or one whose version cannot be read, falls back
     /// to the managed install. The chosen binary's version is read here (the
     /// same <c>--version</c> spawn the choice needs) so callers never re-spawn
     /// it.
@@ -4818,42 +4822,35 @@ public sealed class LlamaManager
 
     /// <summary>
     /// Binary-selection rule, pure for tests: a PATH hit wins over the managed
-    /// install only when it supports the launch flags — a build of at least
-    /// <see cref="MinimumExternalEngineBuild"/> (see
-    /// <see cref="ExternalEngineSupportsLaunchFlags"/>) — because an older or
-    /// unreadable external engine would die at launch on
-    /// <c>--models-memory-margin</c>. For those the managed install wins
-    /// instead, and after an install an older external hit earlier on PATH is
-    /// never reselected. When only one candidate exists it wins whatever its
-    /// build: there is nothing to fall back to (the Ensure floor check still
-    /// refuses to launch an unsupported engine and installs the managed build
-    /// instead). <paramref name="pathHitVersion"/> is the PATH hit's
+    /// install only when it satisfies the pinned runtime contract — a build of
+    /// at least <see cref="LlamaVersion.LLAMA_VERSION"/> (see
+    /// <see cref="IsSupportedExternalEngine"/>) — because an older or
+    /// unreadable external engine would die at launch on the app's launch
+    /// flags. For those the managed install wins instead, and after an install
+    /// an older external hit earlier on PATH is never reselected. When only one
+    /// candidate exists it wins whatever its build: there is nothing to fall
+    /// back to (the Ensure pin check still refuses to launch an unsupported
+    /// engine and installs the pinned build instead). <paramref name="pathHitVersion"/> is the PATH hit's
     /// <c>--version</c> line; it only decides the outcome when both candidates
     /// exist.
     /// </summary>
     internal static string? PreferManagedBinary(string? pathHit, string? managedHit, string? pathHitVersion)
-        => pathHit is not null && ExternalEngineSupportsLaunchFlags(pathHitVersion)
+        => pathHit is not null && IsSupportedExternalEngine(pathHitVersion)
             ? pathHit
             : managedHit ?? pathHit;
 
     /// <summary>
-    /// The engine floor for engines the app did not install, pure for tests:
-    /// the launch always passes <c>--models-memory-margin</c> (see
-    /// <see cref="BuildServeArguments"/>) and older engines reject unknown
-    /// flags at startup. A build of at least <paramref name="minBuild"/>
-    /// (b11930, the first with the flag) is required; an unreadable version —
-    /// <see cref="RuntimeUpdateScheduler.ParseInstalledBuild"/> returns null —
-    /// is rejected too: it could be anything, including a build that dies on
-    /// the flag with no diagnosable failure. App-managed engines are exempt
-    /// (the app owns their update cadence).
+    /// The launch floor for engines the app did not install, pure for tests:
+    /// the app always passes its pinned flag set (see
+    /// <see cref="BuildServeArguments"/>) and only builds at or above the
+    /// pinned runtime <see cref="LlamaVersion.LLAMA_VERSION"/> accept it. Newer
+    /// user-managed engines pass too — the pin is a floor, never a downgrade.
+    /// An unreadable version — <see cref="LlamaVersion.ParseInstalledBuild"/>
+    /// returns null — is rejected: it could be anything, including a build
+    /// that dies on the flags with no diagnosable failure.
     /// </summary>
-    internal static bool ExternalEngineSupportsLaunchFlags(
-        string? versionLine, uint minBuild = MinimumExternalEngineBuild)
-        => RuntimeUpdateScheduler.ParseInstalledBuild(versionLine) is { } build && build >= minBuild;
-
-    /// <summary>Oldest engine build allowed for a non-managed binary — the
-    /// first llama.cpp build with <c>--models-memory-margin</c>.</summary>
-    internal const uint MinimumExternalEngineBuild = 11930;
+    internal static bool IsSupportedExternalEngine(string? versionLine)
+        => LlamaVersion.IsPinnedOrNewer(versionLine);
 
     /// <summary>
     /// <c>which llama.exe</c>: resolves the absolute path of
@@ -4984,7 +4981,7 @@ public sealed class LlamaManager
         var sha256 = InstallScriptIntegrity.Sha256Hex(scriptBytes);
         // Logged so a failed install can be correlated with exactly what ran.
         // The script itself never touches the disk — see EncodeCommand.
-        Log.Info($"install.ps1 downloaded from {InstallScriptUrl}: {scriptBytes.Length} bytes, sha256={sha256}");
+        Log.Info($"install.ps1 downloaded from {InstallScriptUrl}: {scriptBytes.Length} bytes, sha256={sha256}, LLAMA_VERSION={LlamaVersion.LLAMA_VERSION}");
 
         // Fileless execution: base64(UTF-16LE) of the validated script for
         // PowerShell's -EncodedCommand. Nothing is written to disk — the
@@ -5010,6 +5007,12 @@ public sealed class LlamaManager
             RedirectStandardError = true,
         };
 
+        // install.ps1 selects the release bucket to download from the
+        // LLAMA_VERSION environment variable — inject the pinned tag into the
+        // child's environment (never by editing the script bytes). Every
+        // install funnels through here, so every install delivers the pin.
+        psi.Environment["LLAMA_VERSION"] = LlamaVersion.LLAMA_VERSION;
+
         // -EncodedCommand runs the in-memory payload without a script
         // file. -ExecutionPolicy Bypass is kept for parity with the old
         // -File launch (and in case the script ever invokes nested
@@ -5022,7 +5025,7 @@ public sealed class LlamaManager
         psi.ArgumentList.Add("-EncodedCommand");
         psi.ArgumentList.Add(encodedScript);
 
-        Log.Info($"running install.ps1 from {InstallScriptUrl}");
+        Log.Info($"running install.ps1 from {InstallScriptUrl} (LLAMA_VERSION={LlamaVersion.LLAMA_VERSION})");
         using var proc = new Process();
         proc.StartInfo = psi;
         if (!proc.Start())

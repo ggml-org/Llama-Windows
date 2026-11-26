@@ -11,7 +11,7 @@ namespace LlamaApp.LlamaCpp.Tests;
 /// <c>--sleep-idle-seconds</c>, <c>--cache-type-k</c>, <c>--cache-type-v</c>,
 /// and <c>--models-preset</c> flags, plus the trailing custom-argument tokens,
 /// so changes don't accidentally reorder or drop flags. Also covers the pure
-/// external-engine floor (<c>ExternalEngineSupportsLaunchFlags</c>) and the
+/// pinned-runtime external-engine floor (<c>IsSupportedExternalEngine</c>) and the
 /// managed-vs-external binary selection (<c>PreferManagedBinary</c>) that gate
 /// the launch.
 /// </summary>
@@ -352,30 +352,35 @@ public sealed class LlamaManagerArgumentsTests
         Assert.Contains("chatter line 24", message);
     }
 
-    // ----- External engine floor (b11930) ----------------------------------
+    // ----- External engine pin floor (b12765) ------------------------------
 
     [Theory]
-    [InlineData("llama-server (llama) b11930 (abcdef)")]
-    [InlineData("version: 0.7.0-dev (build 11941, commit 19ff817fb)")]
-    [InlineData("llama-server (llama) b12000")]
-    [InlineData("version: 11930 (abcdef)")]
-    public void ExternalEngineSupportsLaunchFlags_AcceptsB11930AndNewer(string versionLine)
+    [InlineData("llama-server (llama) b12765 (abcdef)")]
+    [InlineData("version: 0.7.0-dev (build 12765, commit 19ff817fb)")]
+    [InlineData("llama-server (llama) b12766")]
+    [InlineData("llama-server (llama) b12800 (abcdef)")]
+    [InlineData("version: 12765 (abcdef)")]
+    public void IsSupportedExternalEngine_AcceptsThePinnedBuildAndNewer(string versionLine)
     {
-        // --models-memory-margin exists from b11930 on, so these engines can
-        // be launched as-is — no managed-install fallback.
-        Assert.True(LlamaManager.ExternalEngineSupportsLaunchFlags(versionLine));
+        // The pinned runtime contract: b12765 launches as-is, and so does any
+        // newer build — the pin is a floor, never a downgrade.
+        Assert.True(LlamaManager.IsSupportedExternalEngine(versionLine));
     }
 
     [Theory]
-    [InlineData("llama-server (llama) b11929 (abcdef)")]
+    [InlineData("llama-server (llama) b12764 (abcdef)")]
+    [InlineData("version: 0.7.0-dev (build 12764, commit 19ff817fb)")]
+    [InlineData("llama-server (llama) b11930 (abcdef)")]
     [InlineData("version: 6726 (abcdef)")]
     [InlineData("llama-server (llama) b9553 (build: 9553)")]
     [InlineData("version: 0.8.0")]
-    public void ExternalEngineSupportsLaunchFlags_RejectsOlderBuilds(string versionLine)
+    public void IsSupportedExternalEngine_RejectsBuildsBelowThePin(string versionLine)
     {
-        // A bare "version: 0.8.0" parses as build 0 (below the floor) — an
-        // ambiguous engine is treated like an old one, never launched blindly.
-        Assert.False(LlamaManager.ExternalEngineSupportsLaunchFlags(versionLine));
+        // One build below the pin is already rejected: this release requires
+        // the pinned runtime contract. A bare "version: 0.8.0" parses as
+        // build 0 (below the pin) — an ambiguous engine is treated like an old
+        // one, never launched blindly.
+        Assert.False(LlamaManager.IsSupportedExternalEngine(versionLine));
     }
 
     [Theory]
@@ -383,47 +388,41 @@ public sealed class LlamaManagerArgumentsTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("some unrecognizable banner")]
-    public void ExternalEngineSupportsLaunchFlags_RejectsUnreadableVersions(string? versionLine)
+    public void IsSupportedExternalEngine_RejectsUnreadableVersions(string? versionLine)
     {
-        // An unreadable version cannot prove the flag exists — rejected so the
-        // ensure pipeline installs the managed build instead of launching a
+        // An unreadable version cannot prove the pin is met — rejected so the
+        // ensure pipeline installs the pinned build instead of launching a
         // possibly-unsupported engine.
-        Assert.False(LlamaManager.ExternalEngineSupportsLaunchFlags(versionLine));
-    }
-
-    [Fact]
-    public void ExternalEngineSupportsLaunchFlags_UsesTheFloorBoundary()
-    {
-        Assert.Equal(11930u, LlamaManager.MinimumExternalEngineBuild);
+        Assert.False(LlamaManager.IsSupportedExternalEngine(versionLine));
     }
 
     // ----- Managed vs external binary preference ---------------------------
 
     // The version strings the selection rule classifies (see
-    // ExternalEngineSupportsLaunchFlags above): "b12000" is a supported
-    // external engine, "b9553" an unsupported one, null an unreadable one.
+    // IsSupportedExternalEngine above): "b12800" is a supported
+    // external engine, "b12764" an unsupported one, null an unreadable one.
 
     [Fact]
-    public void PreferManagedBinary_SupportedExternalWinsOverManaged()
+    public void PreferManagedBinary_NewerExternalWinsOverOlderManaged()
     {
-        // The regression this guards: a PATH hit at or above the b11930 floor
-        // is the user's own supported engine — it must win over the managed
-        // install regardless of PATH order or install recency.
+        // The regression this guards: a PATH hit above the pin — the user's
+        // own newer engine — must win over the older managed install
+        // regardless of PATH order or install recency.
         Assert.Equal(
             @"C:\external\llama.exe",
             LlamaManager.PreferManagedBinary(
-                @"C:\external\llama.exe", @"C:\managed\llama.exe", "llama-server (llama) b12000 (abcdef)"));
+                @"C:\external\llama.exe", @"C:\managed\llama.exe", "llama-server (llama) b12800 (abcdef)"));
     }
 
     [Fact]
     public void PreferManagedBinary_UnsupportedExternalFallsBackToManaged()
     {
-        // Below the floor the external engine would die at launch on
-        // --models-memory-margin — the managed install wins instead.
+        // Below the pin the external engine would die at launch on the app's
+        // flag set — the managed install wins instead.
         Assert.Equal(
             @"C:\managed\llama.exe",
             LlamaManager.PreferManagedBinary(
-                @"C:\external\llama.exe", @"C:\managed\llama.exe", "llama-server (llama) b9553 (abcdef)"));
+                @"C:\external\llama.exe", @"C:\managed\llama.exe", "llama-server (llama) b12764 (abcdef)"));
     }
 
     [Fact]
@@ -438,7 +437,7 @@ public sealed class LlamaManagerArgumentsTests
     }
 
     [Theory]
-    [InlineData("llama-server (llama) b9553 (abcdef)")]
+    [InlineData("llama-server (llama) b12764 (abcdef)")]
     [InlineData("some unrecognizable banner")]
     [InlineData(null)]
     public void PreferManagedBinary_OldExternalAfterInstall_IsNotReselected(string? versionLine)
@@ -456,11 +455,11 @@ public sealed class LlamaManagerArgumentsTests
     {
         // Managed missing, external present: the external engine is the only
         // candidate and wins whatever its build — there is nothing to fall
-        // back to (the Ensure floor check still refuses to launch it if it
+        // back to (the Ensure pin check still refuses to launch it if it
         // turns out unsupported).
         Assert.Equal(
             @"C:\external\llama.exe",
-            LlamaManager.PreferManagedBinary(@"C:\external\llama.exe", null, "llama-server (llama) b12000 (abcdef)"));
+            LlamaManager.PreferManagedBinary(@"C:\external\llama.exe", null, "llama-server (llama) b12764 (abcdef)"));
     }
 
     [Fact]

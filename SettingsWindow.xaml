@@ -979,9 +979,8 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- llama.cpp runtime updater: the weekly auto-update
-                                 (RuntimeUpdateScheduler) made visible — installed
-                                 version, last check, and a manual trigger. -->
+                            <!-- llama.cpp runtime status: the fixed build this
+                                 release requires and the one currently installed. -->
                             <Border Grid.Row="7"
                                     Grid.ColumnSpan="2"
                                     Padding="16,14"
@@ -1012,23 +1011,7 @@
                                                    FontWeight="SemiBold"
                                                    VerticalAlignment="Center" />
                                     </Grid>
-                                    <TextBlock x:Name="RuntimeUpdateDescriptionText"
-                                               FontSize="12"
-                                               Opacity="0.6"
-                                               TextWrapping="WrapWholeWords" />
-                                    <StackPanel Orientation="Horizontal"
-                                                Spacing="8">
-                                        <Button x:Name="CheckRuntimeUpdateButton"
-                                                Content="Check for Updates"
-                                                Click="CheckRuntimeUpdate_Click"
-                                                ToolTipService.ToolTip="Check GitHub for a newer llama.cpp release now" />
-                                        <ProgressRing x:Name="CheckRuntimeUpdateRing"
-                                                      Width="18" Height="18"
-                                                      IsActive="False"
-                                                      Visibility="Collapsed"
-                                                      VerticalAlignment="Center" />
-                                    </StackPanel>
-                                    <TextBlock x:Name="CheckRuntimeUpdateResultText"
+                                    <TextBlock x:Name="RuntimeDescriptionText"
                                                FontSize="12"
                                                Opacity="0.6"
                                                TextWrapping="WrapWholeWords" />

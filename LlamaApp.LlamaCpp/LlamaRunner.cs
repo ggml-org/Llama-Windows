@@ -23,7 +23,7 @@ public static class LlamaRunner
     /// recognizable build number.
     /// </summary>
     public static string? Tag =>
-        RuntimeUpdateScheduler.ParseInstalledBuild(VersionCache) is { } build ? $"b{build}" : null;
+        LlamaVersion.ParseInstalledBuild(VersionCache) is { } build ? $"b{build}" : null;
 
     /// <summary>
     /// Set by <see cref="LlamaManager"/> whenever it resolves (or fails to
