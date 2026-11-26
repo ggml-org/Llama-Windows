@@ -52,7 +52,7 @@ public sealed class LlamaVersionTests
     // ---- Semver build labels ----
 
     [Theory]
-    [InlineData("version: 0.7.0-dev (build 12650, commit 19ff817fb)", 12650u)]
+    [InlineData("version: 0.7.0-dev (build 12765, commit 19ff817fb)", 12765u)]
     [InlineData("version: 0.8.0 (build 20000, commit abcdef123)", 20000u)]
     // Without a build label the "version:" label wins the parse — a bare
     // semver yields its major component (0 here), never a guessed build.
@@ -62,11 +62,11 @@ public sealed class LlamaVersionTests
         Assert.Equal(expected, LlamaVersion.ParseInstalledBuild(line));
     }
 
-    // ---- IsPinnedOrNewer: the pinned runtime floor (b12650) ----
+    // ---- IsPinnedOrNewer: the pinned runtime floor (b12765) ----
 
     [Theory]
-    [InlineData("llama-server (llama) b12649 (abcdef)")]
-    [InlineData("version: 0.7.0-dev (build 12649, commit 19ff817fb)")]
+    [InlineData("llama-server (llama) b12764 (abcdef)")]
+    [InlineData("version: 0.7.0-dev (build 12764, commit 19ff817fb)")]
     [InlineData("version: 6726 (abcdef)")]
     public void IsPinnedOrNewer_RejectsBuildsBelowThePin(string versionLine)
     {
@@ -74,11 +74,11 @@ public sealed class LlamaVersionTests
     }
 
     [Theory]
-    [InlineData("llama-server (llama) b12650 (abcdef)")]
-    [InlineData("version: 0.7.0-dev (build 12650, commit 19ff817fb)")]
-    [InlineData("version: 12650 (abcdef)")]
-    [InlineData("llama-server (llama) b12651")]
-    [InlineData("llama-server (llama) b12700 (abcdef)")]
+    [InlineData("llama-server (llama) b12765 (abcdef)")]
+    [InlineData("version: 0.7.0-dev (build 12765, commit 19ff817fb)")]
+    [InlineData("version: 12765 (abcdef)")]
+    [InlineData("llama-server (llama) b12766")]
+    [InlineData("llama-server (llama) b12800 (abcdef)")]
     public void IsPinnedOrNewer_AcceptsThePinAndNewer(string versionLine)
     {
         // The pin is a floor, not a match: the pinned build and anything newer

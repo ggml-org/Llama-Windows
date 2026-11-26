@@ -1098,7 +1098,7 @@ public sealed class LlamaManager
                     BinaryPath = resolved.Path;
                     CurrentOrigin = resolved.Kind == ResolutionKind.Managed ? Origin.Managed : Origin.External;
                     Version = resolved.Version;
-                    // The pinned runtime floor (b12650) is enforced on every
+                    // The pinned runtime floor (b12765) is enforced on every
                     // binary the app launches, managed or not: below the pin —
                     // or with an unrecognizable version — the server would die
                     // on the app's launch flags (and leave no diagnosable

@@ -352,24 +352,24 @@ public sealed class LlamaManagerArgumentsTests
         Assert.Contains("chatter line 24", message);
     }
 
-    // ----- External engine pin floor (b12650) ------------------------------
+    // ----- External engine pin floor (b12765) ------------------------------
 
     [Theory]
-    [InlineData("llama-server (llama) b12650 (abcdef)")]
-    [InlineData("version: 0.7.0-dev (build 12650, commit 19ff817fb)")]
-    [InlineData("llama-server (llama) b12651")]
-    [InlineData("llama-server (llama) b12700 (abcdef)")]
-    [InlineData("version: 12650 (abcdef)")]
+    [InlineData("llama-server (llama) b12765 (abcdef)")]
+    [InlineData("version: 0.7.0-dev (build 12765, commit 19ff817fb)")]
+    [InlineData("llama-server (llama) b12766")]
+    [InlineData("llama-server (llama) b12800 (abcdef)")]
+    [InlineData("version: 12765 (abcdef)")]
     public void IsSupportedExternalEngine_AcceptsThePinnedBuildAndNewer(string versionLine)
     {
-        // The pinned runtime contract: b12650 launches as-is, and so does any
+        // The pinned runtime contract: b12765 launches as-is, and so does any
         // newer build — the pin is a floor, never a downgrade.
         Assert.True(LlamaManager.IsSupportedExternalEngine(versionLine));
     }
 
     [Theory]
-    [InlineData("llama-server (llama) b12649 (abcdef)")]
-    [InlineData("version: 0.7.0-dev (build 12649, commit 19ff817fb)")]
+    [InlineData("llama-server (llama) b12764 (abcdef)")]
+    [InlineData("version: 0.7.0-dev (build 12764, commit 19ff817fb)")]
     [InlineData("llama-server (llama) b11930 (abcdef)")]
     [InlineData("version: 6726 (abcdef)")]
     [InlineData("llama-server (llama) b9553 (build: 9553)")]
@@ -399,8 +399,8 @@ public sealed class LlamaManagerArgumentsTests
     // ----- Managed vs external binary preference ---------------------------
 
     // The version strings the selection rule classifies (see
-    // IsSupportedExternalEngine above): "b12700" is a supported
-    // external engine, "b12649" an unsupported one, null an unreadable one.
+    // IsSupportedExternalEngine above): "b12800" is a supported
+    // external engine, "b12764" an unsupported one, null an unreadable one.
 
     [Fact]
     public void PreferManagedBinary_NewerExternalWinsOverOlderManaged()
@@ -411,7 +411,7 @@ public sealed class LlamaManagerArgumentsTests
         Assert.Equal(
             @"C:\external\llama.exe",
             LlamaManager.PreferManagedBinary(
-                @"C:\external\llama.exe", @"C:\managed\llama.exe", "llama-server (llama) b12700 (abcdef)"));
+                @"C:\external\llama.exe", @"C:\managed\llama.exe", "llama-server (llama) b12800 (abcdef)"));
     }
 
     [Fact]
@@ -422,7 +422,7 @@ public sealed class LlamaManagerArgumentsTests
         Assert.Equal(
             @"C:\managed\llama.exe",
             LlamaManager.PreferManagedBinary(
-                @"C:\external\llama.exe", @"C:\managed\llama.exe", "llama-server (llama) b12649 (abcdef)"));
+                @"C:\external\llama.exe", @"C:\managed\llama.exe", "llama-server (llama) b12764 (abcdef)"));
     }
 
     [Fact]
@@ -437,7 +437,7 @@ public sealed class LlamaManagerArgumentsTests
     }
 
     [Theory]
-    [InlineData("llama-server (llama) b12649 (abcdef)")]
+    [InlineData("llama-server (llama) b12764 (abcdef)")]
     [InlineData("some unrecognizable banner")]
     [InlineData(null)]
     public void PreferManagedBinary_OldExternalAfterInstall_IsNotReselected(string? versionLine)
@@ -459,7 +459,7 @@ public sealed class LlamaManagerArgumentsTests
         // turns out unsupported).
         Assert.Equal(
             @"C:\external\llama.exe",
-            LlamaManager.PreferManagedBinary(@"C:\external\llama.exe", null, "llama-server (llama) b12649 (abcdef)"));
+            LlamaManager.PreferManagedBinary(@"C:\external\llama.exe", null, "llama-server (llama) b12764 (abcdef)"));
     }
 
     [Fact]

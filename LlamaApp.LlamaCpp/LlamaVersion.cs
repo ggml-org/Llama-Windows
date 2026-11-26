@@ -13,7 +13,7 @@ public static class LlamaVersion
 {
     /// <summary>The exact <c>LLAMA_VERSION</c> value install.ps1 selects from
     /// its install bucket. Const fields are implicitly static in C#.</summary>
-    public const string LLAMA_VERSION = "b12650";
+    public const string LLAMA_VERSION = "b12765";
 
     /// <summary>Numeric build floor derived once from <see cref="LLAMA_VERSION"/>.</summary>
     private static readonly uint PinnedBuild = ParseInstalledBuild(LLAMA_VERSION)

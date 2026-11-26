@@ -445,7 +445,7 @@ namespace LlamaApp
         /// </summary>
         private void UpdateRuntimeCard()
         {
-            // The build tag ("b12650"), like the footer -- not the CLI's raw
+            // The build tag ("b12765"), like the footer -- not the CLI's raw
             // --version line.
             var version = Llama.LlamaRunner.Tag;
             RuntimeDescriptionText.Text =
