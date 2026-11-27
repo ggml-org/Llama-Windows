@@ -84,13 +84,17 @@ jobs:
           # CsWinRT's generated WinRT projection emits trim warnings in its
           # generic ABI fallbacks (IL2081 in ABI.*/WinRT.*) plus IL2104
           # assembly rollups naming Microsoft.Windows.SDK.NET / WinRT.Runtime
-          # — platform interop code, not actionable from app code. Everything
-          # else must be clean: app-code reflection/dynamic shows up with its
-          # own IL2xxx code (and its IL2104 rollup would name the app
-          # assembly) and breaks the trimmed build at runtime.
+          # — platform interop code, not actionable from app code. Those
+          # assemblies are kept untrimmed (TrimmerRootAssembly in
+          # LlamaApp.csproj): these warnings do break them when trimmed.
+          # ComActivator's IL2026 comes from BuiltInComInteropSupport, which
+          # StartupHelper needs. Everything else must be clean: app-code
+          # reflection/dynamic shows up with its own IL2xxx code (and its
+          # IL2104 rollup would name the app assembly) and breaks the
+          # trimmed build at runtime.
           $trimWarnings = @($output | Where-Object {
               $_ -match 'warning IL\d+' -and
-              $_ -notmatch 'ABI\.(System|Windows)\.|WinRT\.|IL2104'
+              $_ -notmatch 'ABI\.(System|Windows)\.|WinRT\.|IL2104|ComActivator\.'
           })
           if ($trimWarnings.Count -gt 0) {
             $trimWarnings | ForEach-Object { Write-Host "::error::$_" }
