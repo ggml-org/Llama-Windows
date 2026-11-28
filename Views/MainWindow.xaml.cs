@@ -14,12 +14,7 @@ using WinRT.Interop;
 namespace LlamaApp.Views
 {
     /// <summary>
-    /// Main application shell, repurposed as a single-view system-tray flyout.
-    /// The window is never shown as a normal top-level window: it is styled
-    /// borderless with a Mica backdrop (native Windows 11 flyout look) and only
-    /// ever appears anchored to the tray icon via <see cref="ShowAsFlyout"/>,
-    /// auto-hiding when it loses activation. This mirrors the macOS menu-bar
-    /// app on Windows while hosting the three-section models panel.
+    /// The models panel, shown as a tray flyout by default or as a standard desktop window.
     /// </summary>
     public sealed partial class MainWindow : Window, IModelItemDetailsHost, IModelFamilyDetailsHost
     {
@@ -58,12 +53,12 @@ namespace LlamaApp.Views
         private const int SW_SHOW = 5;
         private const int SW_HIDE = 0;
 
-        private bool _configured;
+        private readonly bool _useDesktopWindows;
         private bool _activated;
         private bool _allowHideOnDeactivate;
         private long _lastDeactivateHideMs;
         private long _lastShownMs;
-        private IntPtr _hwnd;
+        private readonly IntPtr _hwnd;
 
         /// <summary>
         /// Set by the tray manager when the app is truly exiting so the
@@ -216,10 +211,20 @@ namespace LlamaApp.Views
         private static readonly Microsoft.UI.Xaml.Media.Brush RowRestBrush =
             new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
 
-        public MainWindow()
+        public MainWindow(bool useDesktopWindows)
         {
+            _useDesktopWindows = useDesktopWindows;
             InitializeComponent();
-            ConfigureAsFlyout();
+            _hwnd = WindowNative.GetWindowHandle(this);
+            if (_useDesktopWindows)
+            {
+                Title = "Llama – Models";
+                AppTitleBar.AttachTo(this);
+            }
+            else
+            {
+                ConfigureAsFlyout();
+            }
 
             // Brand logos: the bundled SVGs rasterize black (currentColor),
             // which vanishes on the dark theme's Mica — use the white ".light"
@@ -292,7 +297,7 @@ namespace LlamaApp.Views
         /// tray-only and launches at every login — deferring all of this keeps
         /// a no-show session at zero network/process fan-out. Every path that
         /// reveals the flyout (tray click/menu, Open With, share handoff,
-        /// toast activation) funnels through <see cref="ShowAsFlyout"/>.
+        /// toast activation) funnels through <see cref="Open"/>.
         /// </summary>
         private void EnsureStartupWork()
         {
@@ -1066,7 +1071,7 @@ namespace LlamaApp.Views
                 ("action", "cancelDownload"), ("id", ((IModel)item).ServerModelId));
             void UpdateProgressToast(double fraction, string status)
             {
-                if (IsFlyoutVisible)
+                if (IsInView)
                 {
                     if (toastShown)
                     {
@@ -2067,7 +2072,7 @@ namespace LlamaApp.Views
         /// </summary>
         private void NotifyWhenHidden(string title, string body)
         {
-            if (!IsFlyoutVisible)
+            if (!IsInView)
                 Notifications.Show(title, body);
         }
 
@@ -2077,7 +2082,7 @@ namespace LlamaApp.Views
         /// </summary>
         private void NotifyWhenHidden(string title, string body, params ToastAction[] actions)
         {
-            if (!IsFlyoutVisible)
+            if (!IsInView)
                 Notifications.Show(title, body, actions);
         }
 
@@ -3098,7 +3103,7 @@ namespace LlamaApp.Views
         /// behind it.
         private async void Logo_Click(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
-            HideFlyout();
+            if (!_useDesktopWindows) HideFlyout();
             try { await Windows.System.Launcher.LaunchUriAsync(new Uri("https://llama.app")); }
             catch { /* Ignore launch failures (e.g. no default browser set) */ }
         }
@@ -3113,30 +3118,41 @@ namespace LlamaApp.Views
         /// and hide on its own, but doing it explicitly avoids a flash).
         /// <paramref name="showAdvanced"/> deep-links to the Settings → Llama
         /// page (the preset-override warning's "Open settings" action).
+        /// An already-open Settings window is brought forward instead of
+        /// opening a second one.
         /// </summary>
         public void OpenSettings(bool showAdvanced = false)
         {
-            HideFlyout();
+            if (!_useDesktopWindows) HideFlyout();
 
-            var w = new SettingsWindow();
-            if (showAdvanced) w.ShowLlamaPage();
-            // The token may have changed — re-resolve the header avatar. Skip
-            // when the flyout was never shown (Settings is reachable from the
-            // tray menu): the header isn't visible, and the first show's
-            // EnsureStartupWork resolves the avatar with the latest token.
-            // The API-key requirement may have changed too — refresh the
-            // footer glyph (local-only, so no startup gate). So may the
-            // models.user.ini overrides: re-read the warning row and the open
-            // details view.
-            w.Closed += (_, _) =>
+            if (_settingsWindow is null)
             {
-                if (_startupWorkDone) _ = LoadAvatarAsync();
-                UpdateApiKeyIndicator();
-                UpdatePresetWarningRow();
-                if (_detailsViewModel is { } vm) _ = vm.RefreshOverridesAsync();
-            };
-            w.Activate();
+                _settingsWindow = new SettingsWindow();
+                // The token may have changed — re-resolve the header avatar. Skip
+                // when the flyout was never shown (Settings is reachable from the
+                // tray menu): the header isn't visible, and the first show's
+                // EnsureStartupWork resolves the avatar with the latest token.
+                // The API-key requirement may have changed too — refresh the
+                // footer glyph (local-only, so no startup gate). So may the
+                // models.user.ini overrides: re-read the warning row and the open
+                // details view.
+                _settingsWindow.Closed += (_, _) =>
+                {
+                    _settingsWindow = null;
+                    if (_startupWorkDone) _ = LoadAvatarAsync();
+                    UpdateApiKeyIndicator();
+                    UpdatePresetWarningRow();
+                    if (_detailsViewModel is { } vm) _ = vm.RefreshOverridesAsync();
+                };
+            }
+
+            if (showAdvanced) _settingsWindow.ShowLlamaPage();
+            DesktopWindow.Show(_settingsWindow); // restores it if minimized
         }
+
+        // The open Settings window, if any. Each window loads the settings when
+        // it opens, so a second copy's Save would overwrite the first's edits.
+        private SettingsWindow? _settingsWindow;
 
         // ---- HF avatar ----
 
@@ -3674,16 +3690,10 @@ namespace LlamaApp.Views
         // ---- Flyout behavior ----
 
         /// <summary>
-        /// Configures the WinUI window as a borderless, non-resizable flyout with
-        /// no taskbar/Alt-Tab entry. Realizing the HWND up front (via
-        /// <see cref="WindowNative.GetWindowHandle"/>) lets us position it before
-        /// the first activation, so it never flashes at a default location.
+        /// Configures the WinUI window as a borderless, non-resizable tray flyout.
         /// </summary>
         private void ConfigureAsFlyout()
         {
-            if (_configured) return;
-            _configured = true;
-
             var presenter = (OverlappedPresenter)AppWindow.Presenter;
             presenter.SetBorderAndTitleBar(false, false); // borderless, no title bar → rounded corners + shadow on Win11
             presenter.IsResizable = false;
@@ -3692,14 +3702,12 @@ namespace LlamaApp.Views
 
             AppWindow.IsShownInSwitchers = false;   // remove from Alt-Tab / taskbar switcher
 
-            // WS_EX_TOOLWINDOW keeps the window out of the taskbar entirely.
-            _hwnd = WindowNative.GetWindowHandle(this);
-
             // Initial size. PositionNear re-sizes with the target monitor's DPI
             // on every show, so the window's current DPI is good enough here.
             var dpi = GetDpiForWindow(_hwnd);
             AppWindow.Resize(FlyoutSizeForDpi(dpi, dpi));
 
+            // WS_EX_TOOLWINDOW keeps the window out of the taskbar entirely.
             var ex = GetWindowLongCompat(_hwnd, GWL_EXSTYLE);
             SetWindowLongCompat(_hwnd, GWL_EXSTYLE, (IntPtr)(ex.ToInt32() | WS_EX_TOOLWINDOW));
 
@@ -3730,14 +3738,18 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Shows the flyout anchored near <paramref name="anchor"/> (the tray-icon
-        /// click point, in physical screen coordinates). Pinned to the bottom-right
-        /// of the nearest monitor's work area — just above the taskbar, next to
-        /// the tray, where Windows 11 system-tray flyouts appear.
+        /// Opens the models window. In flyout mode, <paramref name="anchor"/>
+        /// selects the monitor for positioning it above the taskbar.
         /// </summary>
-        public void ShowAsFlyout(Point anchor)
+        public void Open(Point anchor)
         {
             EnsureStartupWork();
+            if (_useDesktopWindows)
+            {
+                DesktopWindow.Show(this);
+                return;
+            }
+
             PositionNear(anchor);
             _lastShownMs = Environment.TickCount64;
             _allowHideOnDeactivate = false; // suppress deactivations during the show sequence
@@ -3771,26 +3783,35 @@ namespace LlamaApp.Views
         }
 
         /// <summary>
-        /// Esc dismisses the flyout — the same convention as the chat overlay
-        /// (and as clicking away, which hides on deactivation). The accelerator
-        /// is window-level, so it fires wherever focus sits inside the flyout.
+        /// Esc steps back from an open details view to the models list. With
+        /// none open, it dismisses the flyout — the same convention as the chat
+        /// overlay (and as clicking away, which hides on deactivation) — while
+        /// a desktop window ignores it. The accelerator is window-level, so it
+        /// fires wherever focus sits inside the window.
         /// </summary>
         private void EscapeAccelerator_Invoked(
             Microsoft.UI.Xaml.Input.KeyboardAccelerator sender,
             Microsoft.UI.Xaml.Input.KeyboardAcceleratorInvokedEventArgs args)
         {
-            args.Handled = true;
-            // With a details view open, Esc steps back to the models list
-            // instead of dismissing the whole flyout.
             if (DetailsView.Visibility == Visibility.Visible ||
                 FamilyDetailsView.Visibility == Visibility.Visible)
                 HideDetails();
-            else
+            else if (!_useDesktopWindows)
                 HideFlyout();
+            else
+                return; // nothing to dismiss in a desktop window
+
+            args.Handled = true;
         }
 
-        /// <summary>Whether the flyout is currently visible on screen.</summary>
-        public bool IsFlyoutVisible => AppWindow.IsVisible;
+        /// <summary>
+        /// Whether the user can see the panel, so its own UI reports progress
+        /// and events and no toast is needed. The flyout is only on screen
+        /// while it has focus; a desktop window can sit minimized or behind
+        /// other windows, so it counts only while it is in the foreground.
+        /// </summary>
+        private bool IsInView =>
+            AppWindow.IsVisible && (!_useDesktopWindows || GetForegroundWindow() == _hwnd);
 
         /// <summary>
         /// True when the flyout was hidden by a deactivation (i.e. the user
@@ -3822,13 +3843,16 @@ namespace LlamaApp.Views
         {
             if (args.WindowActivationState == WindowActivationState.Deactivated)
             {
+                // A desktop window stays open when focus moves elsewhere.
+                if (_useDesktopWindows) return;
+
                 // Clicking anywhere outside the flyout deactivates it — dismiss,
                 // the same way Windows 11 system-tray flyouts behave. Two guards:
                 //   • _allowHideOnDeactivate suppresses a spurious deactivate
                 //     that can race ahead of the show sequence.
                 //   • The post-show grace swallows the focus-reclaim deactivation
                 //     that hits a reshow when foreground lock denies us foreground
-                //     (see ShowAsFlyout) — without it the reshow hides itself and
+                //     (see Open) — without it the reshow hides itself and
                 //     looks like it never reopened.
                 if (!_allowHideOnDeactivate ||
                     Environment.TickCount64 - _lastShownMs <= ShownDeactivationGraceMs) return;
@@ -3917,6 +3941,9 @@ namespace LlamaApp.Views
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
