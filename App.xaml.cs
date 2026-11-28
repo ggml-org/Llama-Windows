@@ -199,11 +199,15 @@ namespace LlamaApp
             Llama.UserModelOverrides.Shared.SeedTemplateIfNeeded();
             Llama.LlamaManager.Initialize(serverConfig.Port, serverConfig.Listen.Address, serverConfig.ApiKey);
 
+            // Read once for both windows: switching between the tray flyout +
+            // overlay and standard desktop windows takes effect on next launch.
+            var useDesktopWindows = Settings.Current.UseDesktopWindows;
+
             // The app is tray-only: the main window is created but never shown
             // on launch. It is revealed on demand as a flyout anchored to the
-            // system-tray icon (see TrayIconManager / MainWindow.ShowAsFlyout),
+            // system-tray icon (see TrayIconManager / MainWindow.Open),
             // mirroring the macOS menu-bar app on Windows 11.
-            _window = new MainWindow();
+            _window = new MainWindow(useDesktopWindows);
 
             // The footer's Quit button asks the tray manager to tear the app
             // down (dispose the icon, close the window, exit).
@@ -284,7 +288,7 @@ namespace LlamaApp
             // hotkey. Created lazily on first press and reused thereafter; the
             // hotkey is registered for the app's lifetime only, so it stops
             // working the moment Llama exits.
-            _overlay = new OverlayWindow();
+            _overlay = new OverlayWindow(useDesktopWindows);
             _hotkey = new GlobalHotkey();
             // Initialize the overlay's WebView2 NOW — at a calm point in
             // startup, awaited and fully observed — rather than at the first

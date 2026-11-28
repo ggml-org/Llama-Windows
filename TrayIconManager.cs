@@ -230,7 +230,7 @@ internal sealed class TrayIconManager : IDisposable
     private PopupMenu BuildContextMenu()
     {
         var menu = new PopupMenu();
-        menu.Items.Add(new PopupMenuItem("Open", (_, _) => Enqueue(() => _window.ShowAsFlyout(CursorPoint))));
+        menu.Items.Add(new PopupMenuItem("Open", (_, _) => Enqueue(() => _window.Open(CursorPoint))));
         menu.Items.Add(new PopupMenuItem("Chat", (_, _) => Enqueue(() => (App.Current as App)?.SummonChatOverlay())));
         menu.Items.Add(new PopupMenuItem("Settings", (_, _) => Enqueue(() => _window.OpenSettings())));
         menu.Items.Add(new PopupMenuSeparator());
@@ -259,7 +259,7 @@ internal sealed class TrayIconManager : IDisposable
     /// <summary>
     /// The most recent tray-icon click point, captured from the mouse event so
     /// the <c>Open</c> context-menu item (whose callback receives no position)
-    /// can still hand a reference point to <see cref="MainWindow.ShowAsFlyout"/>
+    /// can still hand a reference point to <see cref="MainWindow.Open"/>
     /// for monitor selection.
     /// </summary>
     private Point CursorPoint { get; set; }
@@ -282,7 +282,7 @@ internal sealed class TrayIconManager : IDisposable
                 // it closed instead of bouncing it back open.
                 if (_window.WasJustHiddenByDeactivate)
                     return;
-                _window.ShowAsFlyout(e.Point);
+                _window.Open(e.Point);
                 break;
 
             case MouseEvent.IconRightMouseUp:
@@ -314,7 +314,7 @@ internal sealed class TrayIconManager : IDisposable
     /// </summary>
     public void ShowFlyout()
     {
-        Enqueue(() => _window.ShowAsFlyout(CurrentCursorPoint()));
+        Enqueue(() => _window.Open(CurrentCursorPoint()));
     }
 
     private static Point CurrentCursorPoint()

@@ -5,6 +5,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:views="using:LlamaApp.Views"
     mc:Ignorable="d">
 
     <!--
@@ -36,27 +37,7 @@
             <RowDefinition Height="*" />    <!-- Body -->
         </Grid.RowDefinitions>
 
-        <!-- Custom titlebar: Mica extends behind it, with an app label on
-             the left and the system caption buttons (close) on the right.
-             Marked as the drag region via SetTitleBar() in the code-behind. -->
-        <Grid x:Name="AppTitleBar"
-              Grid.Row="0"
-              Height="40"
-              Padding="32,0,0,0">
-            <StackPanel Orientation="Horizontal"
-                        Spacing="8"
-                        VerticalAlignment="Center">
-                <Image Source="{ThemeResource BrandLogoSource}"
-                       Width="16" Height="16"
-                       Stretch="Uniform"
-                       VerticalAlignment="Center" />
-                <TextBlock Text="Settings"
-                           FontSize="12"
-                           FontWeight="SemiBold"
-                           Opacity="0.85"
-                           VerticalAlignment="Center" />
-            </StackPanel>
-        </Grid>
+        <views:WindowTitleBar x:Name="AppTitleBar" Grid.Row="0" Title="Settings" />
 
         <!-- Body: left nav + page content, then the footer action bar -->
         <Grid Grid.Row="1">
@@ -219,6 +200,48 @@
                                             <Run Text="anywhere to open the chat overlay for the loaded model. Press Esc to dismiss it." />
                                         </TextBlock>
                                     </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <!-- Desktop windows: chat and models as standard
+                                 taskbar windows instead of the overlay and the
+                                 tray flyout. App reads it once at launch. -->
+                            <Border CornerRadius="8"
+                                    Padding="16,14"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0"
+                                            Width="36" Height="36"
+                                            CornerRadius="{ThemeResource ControlCornerRadius}"
+                                            Background="{StaticResource BrandAccentBrush}"
+                                            VerticalAlignment="Top">
+                                        <FontIcon Glyph="&#xE7C4;"
+                                                  FontSize="16"
+                                                  Foreground="White"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1" Spacing="2">
+                                        <TextBlock Text="Desktop windows"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold" />
+                                        <TextBlock Text="Open chat and models as standard windows in the taskbar and Alt+Tab. Takes effect the next time Llama starts."
+                                                   FontSize="12"
+                                                   Opacity="0.6"
+                                                   TextWrapping="WrapWholeWords" />
+                                    </StackPanel>
+                                    <CheckBox x:Name="DesktopWindowsBox"
+                                              Grid.Column="2"
+                                              VerticalAlignment="Top"
+                                              MinWidth="0"
+                                              ToolTipService.ToolTip="Use standard windows for chat and models" />
                                 </Grid>
                             </Border>
 

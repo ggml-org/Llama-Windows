@@ -5,6 +5,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:Microsoft.UI.Xaml.Controls"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:local="using:LlamaApp.Views"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
@@ -36,18 +37,31 @@
          window that has no tooltip of its own. -->
     <UserControl KeyboardAcceleratorPlacementMode="Hidden">
         <UserControl.KeyboardAccelerators>
-            <KeyboardAccelerator Key="Escape" Invoked="EscapeAccelerator_Invoked" />
+            <KeyboardAccelerator x:Name="DismissAccelerator" Key="Escape" Invoked="EscapeAccelerator_Invoked" />
         </UserControl.KeyboardAccelerators>
 
-    <Grid Padding="18" RowSpacing="12">
+    <!-- Row 0 holds the title bar, shown only as a desktop window; the chat
+         below fills row 1. -->
+    <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" /> <!-- Header (title bar) -->
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <local:WindowTitleBar x:Name="AppTitleBar" Title="Chat" Visibility="Collapsed" />
+
+    <!-- Padding/RowSpacing frame the floating overlay; desktop mode zeroes
+         them (see the OverlayWindow constructor). -->
+    <Grid x:Name="ChatContent" Grid.Row="1" Padding="18" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" /> <!-- Header: brand + model chip -->
             <RowDefinition Height="*" />    <!-- WebView2 hosting the model WebUI -->
             <RowDefinition Height="Auto" /> <!-- Footer hint -->
         </Grid.RowDefinitions>
 
         <!-- ============ Header: brand + model chip ============ -->
-        <Grid Grid.Row="0" ColumnSpacing="10">
+        <!-- Overlay only: desktop mode collapses it (see the OverlayWindow
+             constructor for why). -->
+        <Grid x:Name="ChatHeader" Grid.Row="0" ColumnSpacing="10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
@@ -64,7 +78,8 @@
 
             <!-- Spacer -->
 
-            <!-- Model chip: status dot + model name (or "No model"). -->
+            <!-- Model chip: status dot + model name, "Loads on send" or
+                 "No model". Set in RefreshModelBadge(). -->
             <Border Grid.Column="2"
                     CornerRadius="12"
                     Padding="10,4"
@@ -73,7 +88,8 @@
                     BorderThickness="1"
                     VerticalAlignment="Center">
                 <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                    <!-- Status dot: green when a model is loaded, amber otherwise.
+                    <!-- Status dot: green when a model is loaded, grey when one
+                         will load on send, amber when there are no models.
                          Fill is flipped in RefreshModelBadge(). -->
                     <Ellipse x:Name="StatusDot"
                              Width="8" Height="8"
@@ -100,13 +116,14 @@
                             VerticalAlignment="Stretch" />
 
         <!-- ============ Footer: keyboard hint ============ -->
-        <TextBlock Grid.Row="2"
+        <TextBlock x:Name="DismissHint" Grid.Row="2"
                    HorizontalAlignment="Center"
                    FontSize="11"
                    Foreground="{ThemeResource TextFillColorTertiaryBrush}">
             <Run Text="Esc" FontWeight="SemiBold" />
             <Run Text=" to dismiss" />
         </TextBlock>
+    </Grid>
     </Grid>
     </UserControl>
 </Window>

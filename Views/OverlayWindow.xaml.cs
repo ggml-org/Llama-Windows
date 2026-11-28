@@ -17,16 +17,17 @@ namespace LlamaApp.Views;
 /// <c>Alt+Space</c> hotkey (see <see cref="GlobalHotkey"/>) while Llama is
 /// running.
 ///
-/// <para>The overlay is created lazily on first summon and reused thereafter:
-/// it hides rather than closes, mirroring the tray flyout's lifecycle, so
-/// re-summoning is instant. Esc and deactivation (clicking away) dismiss it.</para>
+/// <para>The same window and WebView are reused on each summon. By default,
+/// Esc and deactivation dismiss the overlay. Desktop mode is a standard
+/// window that keeps the chat open when focus moves elsewhere.</para>
 ///
 /// <para>The embedded WebUI drives its own prompt + streaming chat against the
 /// loaded model — the overlay just points a WebView2 at the right model URL
 /// (<c>http://{ConnectAddress}:{ServerPort}?model={LoadedModelId}</c>, the same URL
 /// <c>MainWindow</c> opens in the system browser) and lets it run. When no
 /// model is loaded yet the base WebUI (router mode) is shown, which still lists
-/// models; the header chip flips to amber + "No model".</para>
+/// models; the header chip shows "Loads on send" (or amber "No model" when the
+/// server lists none). Desktop mode drops the header: see the constructor.</para>
 /// </summary>
 public sealed partial class OverlayWindow : Window
 {
@@ -53,8 +54,8 @@ public sealed partial class OverlayWindow : Window
         Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread()
         ?? throw new InvalidOperationException("OverlayWindow must be created on the UI thread.");
 
-    private bool _configured;
-    private IntPtr _hwnd;
+    private readonly bool _useDesktopWindows;
+    private readonly IntPtr _hwnd;
 
     // URL the WebView2 is currently showing, so a re-summon re-navigates only
     // when the model id actually changed (preserves an in-flight chat). Null
@@ -72,11 +73,49 @@ public sealed partial class OverlayWindow : Window
     private long _hideGraceMs = ShownDeactivationGraceMs;
     private long _lastShownMs;
 
-    public OverlayWindow()
+    public OverlayWindow(bool useDesktopWindows)
     {
+        _useDesktopWindows = useDesktopWindows;
         InitializeComponent();
-        ConfigureAsOverlay();
-        Activated += OverlayWindow_Activated;
+        _hwnd = WindowNative.GetWindowHandle(this);
+        if (_useDesktopWindows)
+        {
+            Title = "Llama – Chat";
+            AppTitleBar.AttachTo(this);
+            DismissHint.Visibility = Visibility.Collapsed;
+            DismissAccelerator.IsEnabled = false;
+
+            // As a desktop window, drop the spotlight header and the padding
+            // around the chat, so the chat page fills the window under the
+            // title bar. Kept, they stacked three logos (title bar, header,
+            // chat page) and framed the page in a band of Mica. The header's
+            // model badge goes too: the chat page has its own model picker, and
+            // the badge could only disagree with it. The badge shows the first
+            // model in memory; the picker shows the model the next message will
+            // use. With several models resident, those can differ.
+            ChatHeader.Visibility = Visibility.Collapsed;
+            ChatContent.Padding = new Thickness(0);
+            ChatContent.RowSpacing = 0;
+
+            Closed += (_, args) =>
+            {
+                args.Handled = true;
+                Hide();
+            };
+        }
+        else
+        {
+            ConfigureAsOverlay();
+            Activated += OverlayWindow_Activated;
+
+            // Keep the badge current while the overlay is open. A model can
+            // finish loading, or be unloaded, mid-chat, and Summon only
+            // refreshes the badge when the overlay opens. LoadedModelId reads
+            // the snapshot this event publishes. The event fires on a
+            // background thread, so marshal to the UI thread. The overlay lives
+            // as long as the app, so the handler is never removed.
+            LlamaManager.Shared.ModelsChanged += (_, _) => _dispatcher.TryEnqueue(RefreshModelBadge);
+        }
         AttachWebUiAuthHeader();
     }
 
@@ -285,17 +324,12 @@ public sealed partial class OverlayWindow : Window
     /// <summary>Style as a borderless, taskbar-less spotlight popup centered on screen.</summary>
     private void ConfigureAsOverlay()
     {
-        if (_configured) return;
-        _configured = true;
-
         var presenter = (OverlappedPresenter)AppWindow.Presenter;
         presenter.SetBorderAndTitleBar(false, false);
         presenter.IsResizable = false;
         presenter.IsMaximizable = false;
         presenter.IsMinimizable = false;
         AppWindow.IsShownInSwitchers = false; // keep out of Alt-Tab / taskbar
-
-        _hwnd = WindowNative.GetWindowHandle(this);
 
         // WS_EX_TOOLWINDOW: no taskbar entry. WS_POPUP: drop the 1px frame so
         // the Mica surface is flush to the rounded corners (same trick the
@@ -315,7 +349,7 @@ public sealed partial class OverlayWindow : Window
         WindowCorners.ApplyRound8(this);
     }
 
-    /// <summary>Shows the overlay centered on the monitor nearest the cursor, ready for input.</summary>
+    /// <summary>Shows chat and focuses the composer. The overlay follows the cursor's monitor.</summary>
     /// <param name="hideGraceMs">How long after the summon a focus loss (deactivation)
     /// is ignored instead of hiding the overlay. The hotkey summon keeps the
     /// default; programmatic summons (a share/Open With handoff) pass a longer
@@ -331,6 +365,21 @@ public sealed partial class OverlayWindow : Window
         // set only InputBox.IsEnabled before Show; we restore that order and do
         // all content updates after the window is on screen.
         Common.Log.Info("overlay summon: begin");
+        if (_useDesktopWindows)
+            DesktopWindow.Show(this);
+        else
+            ShowOverlay(hideGraceMs);
+
+        TakeForegroundInput();
+        Common.Log.Info("overlay summon: window shown");
+        RefreshModelBadge();
+        NavigateToModel();
+        FocusComposerWhenReady();
+        Common.Log.Info("overlay summon: done");
+    }
+
+    private void ShowOverlay(long hideGraceMs)
+    {
         CenterOnScreen();
         _lastShownMs = Environment.TickCount64;
         _hideGraceMs = hideGraceMs;
@@ -349,16 +398,6 @@ public sealed partial class OverlayWindow : Window
 
         AppWindow.Show();
         ShowWindow(_hwnd, SW_SHOW);
-        TakeForegroundInput();
-        Common.Log.Info("overlay summon: window shown");
-
-        // Now that the window is on screen, refresh the chrome and navigate
-        // the WebView2 to the loaded model's WebUI.
-        RefreshModelBadge();
-        NavigateToModel();
-        FocusComposerWhenReady();
-
-        Common.Log.Info("overlay summon: done");
     }
 
     /// <summary>
@@ -604,12 +643,29 @@ public sealed partial class OverlayWindow : Window
 
     private void RefreshModelBadge()
     {
-        var id = LlamaManager.Shared.LoadedModelId;
-        var loaded = id is not null;
-        ModelBadge.Text = loaded ? id! : "No model";
-        StatusDot.Fill = loaded
-            ? new SolidColorBrush(Color.FromArgb(0xFF, 0x3F, 0xB9, 0x50))  // green
-            : new SolidColorBrush(Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23)); // amber
+        var manager = LlamaManager.Shared;
+        var id = manager.LoadedModelId;
+        if (id is not null)
+        {
+            ModelBadge.Text = id;
+            StatusDot.Fill = new SolidColorBrush(Color.FromArgb(0xFF, 0x3F, 0xB9, 0x50)); // green
+        }
+        else if (manager.LastModelsSnapshot.Count > 0)
+        {
+            // Nothing in memory yet. That's the normal state before the first
+            // message: the chat page's model picker loads its model on send.
+            // This case used to show an amber "No model", which looked like an
+            // error while the picker showed a model right below it.
+            ModelBadge.Text = "Loads on send";
+            StatusDot.Fill = new SolidColorBrush(Color.FromArgb(0xFF, 0x8B, 0x94, 0x9E)); // grey
+        }
+        else
+        {
+            // The server lists no models at all, so a message has nothing to
+            // load. This is the one case where amber is warranted.
+            ModelBadge.Text = "No model";
+            StatusDot.Fill = new SolidColorBrush(Color.FromArgb(0xFF, 0xF5, 0xA6, 0x23)); // amber
+        }
     }
 
     private void CenterOnScreen()

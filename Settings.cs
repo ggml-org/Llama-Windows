@@ -188,6 +188,9 @@ public sealed class Settings
     /// </summary>
     public bool LaunchAtStartup { get; set; } = false;
 
+    /// <summary>Use standard taskbar windows for chat and models on the next app launch.</summary>
+    public bool UseDesktopWindows { get; set; }
+
     /// <summary>
     /// Whether the one-time first-run hint ("Llama lives in the system
     /// tray; Alt+Space opens the chat overlay") has been shown. Persisted so

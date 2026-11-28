@@ -44,34 +44,26 @@ namespace LlamaApp
         public SettingsWindow()
         {
             InitializeComponent();
-            Title = "Settings";
+            Title = "Llama – Settings";
             Configure();
             SizeAndCenterOnScreen();
             LoadCurrent();
             UpdateRuntimeCard();
             _overrideStatusNormalBrush = OverrideStatusText.Foreground;
-
-            // Extend Mica/content into the titlebar area and register our
-            // AppTitleBar element as the drag region. The system caption
-            // buttons (close) stay on the right; this is what drops the
-            // default white titlebar that clashes with the Mica backdrop.
-            ExtendsContentIntoTitleBar = true;
-            SetTitleBar(AppTitleBar);
+            AppTitleBar.AttachTo(this);
         }
 
         private void Configure()
         {
+            // A fixed-size window with its own taskbar button, like other
+            // tray apps' settings: Llama's main window is usually hidden, so
+            // there is no window for Settings to belong to.
             var presenter = (OverlappedPresenter)AppWindow.Presenter;
             presenter.IsResizable = false;
             presenter.IsMaximizable = false;
-            presenter.IsMinimizable = false;
-            // Don't appear in Alt-Tab / taskbar switcher — it's a child dialog
-            // of the tray app, not a standalone top-level window.
-            AppWindow.IsShownInSwitchers = false;
 
             // Keep the border + titlebar (caption buttons) but let the Mica
-            // backdrop fill the titlebar area (ExtendsContentIntoTitleBar set
-            // in the ctor) — this is what drops the default white titlebar.
+            // backdrop fill the titlebar area (see WindowTitleBar.AttachTo).
             presenter.SetBorderAndTitleBar(hasBorder: true, hasTitleBar: true);
 
             // Pin the corner radius to the standard 8px "round" style rather
@@ -150,6 +142,7 @@ namespace LlamaApp
             // it via Task Manager > Startup outside this app, so read the real
             // state rather than the persisted preference.
             LaunchAtStartupBox.IsChecked = StartupHelper.IsRegistered();
+            DesktopWindowsBox.IsChecked = s.UseDesktopWindows;
             LoadInstallInfo();
             LoadOverrideCard();
         }
@@ -703,6 +696,7 @@ namespace LlamaApp
                 return;
             }
             s.CustomServeArguments = CustomArgsBox.Text.Trim();
+            s.UseDesktopWindows = DesktopWindowsBox.IsChecked == true;
 
             // Apply the startup preference to the OS (create/delete the .lnk)
             // and mirror it into settings.json as a hint for the checkbox on
